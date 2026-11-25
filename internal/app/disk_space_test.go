@@ -93,8 +93,7 @@ func TestRunCodexRejectsAgentDiskSpaceExhaustionBeforeValidationGap(t *testing.T
 		{
 			cmd: firstCmd,
 			res: execx.Result{
-				Stdout: "Failure: Cannot safely meet coverage target in current runtime.\nError details: `bun run test:unit:coverage` failed: `vitest: command not found`.",
-				Stderr: "ENOSPC: failed copying files from cache to destination for package vitest",
+				Stdout: "Failure: Cannot safely meet coverage target in current runtime.\nError details: `bun run test:unit:coverage` failed: `vitest: command not found`. Installing vitest failed with ENOSPC while copying files from cache.",
 			},
 		},
 	}}
@@ -127,6 +126,9 @@ func TestRunCodexClassifiesDiskFullOnNonzeroExit(t *testing.T) {
 	}{
 		{name: "terminal diagnostic", stderr: "ENOSPC: failed writing cache", err: underlying, wantDiskFull: true},
 		{name: "terminal failure report", stdout: "Failure: Validation failed.\nError details: copy failed: no space left on device", wantDiskFull: true},
+		{name: "terminal report overrides trailing stderr diagnostic", stdout: "Failure: Tests failed.\nError details: assertion failed.", stderr: "ENOSPC: failed writing cache", wantFailure: "Failure: Tests failed. Error details: assertion failed."},
+		{name: "terminal summary overrides trailing stderr diagnostic", stdout: "Failure: Tests failed.", stderr: "Error: write ENOSPC", wantFailure: "Failure: Tests failed."},
+		{name: "typed error overrides terminal report", stdout: "Failure: Tests failed.", err: syscall.ENOSPC, wantDiskFull: true},
 		{name: "narration before error details", stdout: "Failure: Validation failed.\nValidation: Local checks stopped before reaching the assertions.\n**Error details:** copy failed with ENOSPC", wantDiskFull: true},
 		{name: "compact stderr narration before error details", stderr: "Failure: Validation failed.\nLocal checks stopped before reaching the assertions.\nError details: copy failed with ENOSPC", wantDiskFull: true},
 		{name: "narration alone mentions disk full", stdout: "Failure: Tests failed.\nRecovered an earlier ENOSPC by moving the cache."},

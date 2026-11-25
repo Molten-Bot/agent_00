@@ -6832,9 +6832,7 @@ func agentTerminalDiskFull(res execx.Result, prompt, failure string) bool {
 		if details == "" && startsWithErrorDetails(res.Stderr) {
 			details = codexExtractStderrErrorDetail(res.Stderr, failure)
 		}
-		if workspace.DiskFullDiagnostic(details) {
-			return true
-		}
+		return workspace.DiskFullDiagnostic(details)
 	}
 	// A CLI can exit before emitting a structured report. Its final stderr
 	// line must be a storage diagnostic, not an arbitrary mention of ENOSPC.
