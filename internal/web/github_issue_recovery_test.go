@@ -455,6 +455,7 @@ func TestIssueRecoveryVerifiesPRDespiteFailure(t *testing.T) {
 		{"open draft allowed", "open", "null", "agent00-issue-17", "main", true},
 		{"merged", "closed", `"2026-01-01T00:00:00Z"`, "agent00-issue-17", "main", true},
 		{"closed unmerged", "closed", "null", "agent00-issue-17", "main", false},
+		{"closed after retarget", "closed", "null", "agent00-issue-17", "other", false},
 		{"wrong head", "open", "null", "other", "main", false},
 		{"wrong base", "open", "null", "agent00-issue-17", "other", false},
 	} {
@@ -464,6 +465,12 @@ func TestIssueRecoveryVerifiesPRDespiteFailure(t *testing.T) {
 			record := completeRecoveryRecord(t, s, "error", 1)
 			s.Broker.IngestLog("task status=error request_id=" + record.RequestID)
 			f.prs = recoveryPR(tc.state, tc.merged, tc.head, tc.base)
+			s.GitHubIssueRunner = githubIssueRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+				if tc.base != "main" && strings.Contains(strings.Join(cmd.Args, " "), "/pulls?base=main&") {
+					return execx.Result{Stdout: `[]`}, nil
+				}
+				return f.Run(ctx, cmd)
+			})
 			if err := s.ReconcileIssueWork(context.Background()); err != nil {
 				t.Fatal(err)
 			}
@@ -486,7 +493,7 @@ func TestIssueRecoveryVerifiesPRDespiteFailure(t *testing.T) {
 			} else if task.PRURL != "" || task.PRTitle != "" {
 				t.Fatalf("unverified PR published to task: (%q, %q)", task.PRURL, task.PRTitle)
 			}
-			if tc.name == "closed unmerged" {
+			if tc.state == "closed" && tc.merged == "null" {
 				response := retryIssue(t, s, record.ID, true)
 				if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "reopen the existing pull request") || len(f.submissions) != 1 {
 					t.Fatalf("closed PR retry: status=%d body=%s submissions=%d", response.Code, response.Body.String(), len(f.submissions))
@@ -498,6 +505,14 @@ func TestIssueRecoveryVerifiesPRDespiteFailure(t *testing.T) {
 				if blocked := latestRecoveryRecord(t, s); blocked.ID != record.ID || blocked.State != "blocked" ||
 					!blocked.NextAttemptAt.IsZero() || len(f.submissions) != 1 {
 					t.Fatalf("closed PR did not stop retries: state=%s next attempt=%v submissions=%d", blocked.State, blocked.NextAttemptAt, len(f.submissions))
+				}
+				if tc.base != "main" {
+					f.prs = recoveryPR("open", "null", tc.head, tc.base)
+					response := retryIssue(t, s, record.ID, true)
+					if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "retarget the existing pull request") ||
+						len(f.submissions) != 1 {
+						t.Fatalf("PR reopened on wrong base: status=%d body=%s submissions=%d", response.Code, response.Body.String(), len(f.submissions))
+					}
 				}
 			}
 		})
@@ -1088,6 +1103,14 @@ func TestIssueRecoveryBlocksReservedBranchConflictsAcrossRestart(t *testing.T) {
 						t.Fatalf("retry status=%d body=%s state=%s PR=%q submissions=%d", response.Code, response.Body.String(), current.State, current.PRURL, len(f.submissions))
 					}
 				}
+				f.prs = `[]`
+				git("branch", "-m", "renamed")
+				git("branch", branch)
+				assertBlocked("in the saved workspace")
+				if got := git("branch", "--show-current"); got != "renamed" {
+					t.Fatalf("recovery changed the checked-out branch to %q", got)
+				}
+				git("switch", branch)
 				f.prs = recoveryPR("closed", "null", branch, "main")
 				assertBlocked("reopen the existing pull request")
 				f.prs = recoveryPR("open", "null", branch, "main")
@@ -1108,7 +1131,9 @@ func TestIssueRecoveryBlocksReservedBranchConflictsAcrossRestart(t *testing.T) {
 				if err := os.Remove(pending); err != nil {
 					t.Fatal(err)
 				}
-				if response := retryIssue(t, s, got.ID, true); response.Code != http.StatusAccepted {
+				if response := retryIssue(t, s, got.ID, true); response.Code != http.StatusOK ||
+					!strings.Contains(response.Body.String(), `"prUrl":"https://github.com/acme/repo/pull/42"`) ||
+					strings.Contains(response.Body.String(), "request_id") {
 					t.Fatalf("retry after reopening PR: status=%d, body=%s", response.Code, response.Body.String())
 				}
 				if verified := latestRecoveryRecord(t, s); verified.ID != got.ID || verified.State != "fulfilled" ||
@@ -1127,6 +1152,40 @@ func TestIssueRecoveryBlocksReservedBranchConflictsAcrossRestart(t *testing.T) {
 				t.Fatalf("explicit retry: status=%d, body=%s, submissions=%d", response.Code, response.Body.String(), len(f.submissions))
 			}
 		})
+	}
+}
+
+func TestIssueRecoveryVerifiesReopenedPRBeforeCheckout(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(t.Context())
+	record := completeRecoveryRecord(t, s, "error", 0)
+	record.Incident = localruntime.IssueIncidentBranchRecovery
+	record.ExitCode = app.ExitClone
+	record.WorkspaceDir = t.TempDir()
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	branch := record.Run.GitHubIssue.Claim.Branch
+	f.prs = recoveryPR("closed", "null", branch, "main")
+	if response := retryIssue(t, s, record.ID, true); response.Code != http.StatusConflict ||
+		!strings.Contains(response.Body.String(), "reopen the existing pull request") {
+		t.Fatalf("closed PR: status=%d body=%s", response.Code, response.Body.String())
+	}
+	f.prs = recoveryPR("open", "null", branch, "main")
+	openPR := f.prs
+	f.prs = strings.Replace(openPR, "existing-commits", "different-commits", 1)
+	if response := retryIssue(t, s, record.ID, true); response.Code != http.StatusConflict ||
+		!strings.Contains(response.Body.String(), "reconcile the remote ref") {
+		t.Fatalf("PR head mismatch: status=%d body=%s", response.Code, response.Body.String())
+	}
+	f.prs = openPR
+	if response := retryIssue(t, s, record.ID, true); response.Code != http.StatusOK ||
+		!strings.Contains(response.Body.String(), `"prUrl":"https://github.com/acme/repo/pull/42"`) {
+		t.Fatalf("reopened PR: status=%d body=%s", response.Code, response.Body.String())
+	}
+	if got := latestRecoveryRecord(t, s); got.ID != record.ID || got.State != "fulfilled" || len(f.submissions) != 1 {
+		t.Fatalf("expected original attempt fulfilled: claim=%s state=%s submissions=%d", got.ID, got.State, len(f.submissions))
 	}
 }
 

@@ -247,8 +247,11 @@ func (s Server) claimAndSubmitIssueMode(ctx context.Context, run config.Config, 
 		if err != nil {
 			return "", err
 		}
-		id, _, err := s.recoverIssueClaimWithRun(ctx, issue.Repository, issue.Number, remote, submit, false, &run)
-		return id, err
+		result, _, err := s.recoverIssueClaimWithRun(ctx, issue.Repository, issue.Number, remote, submit, false, &run)
+		if result.PRURL != "" {
+			return "", fmt.Errorf("issue already fulfilled by its verified pull request")
+		}
+		return result.RequestID, err
 	}
 	records, err := s.IssueClaims.List()
 	if err != nil && s.IssueRecovery == nil {
@@ -732,12 +735,20 @@ func (s Server) handleIssueAutomationRetry(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	submit := s.issueRetrySubmitter()
-	requestID, status, err := s.recoverIssueClaim(r.Context(), repository, request.Number, remote, submit)
+	result, status, err := s.recoverIssueClaimWithRun(r.Context(), repository, request.Number, remote, submit, false, nil)
 	if err != nil {
 		writeJSONError(w, status, err)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "request_id": requestID})
+	writeJSON(w, status, struct {
+		OK bool `json:"ok"`
+		issueRetryResult
+	}{OK: true, issueRetryResult: result})
+}
+
+type issueRetryResult struct {
+	RequestID string `json:"request_id,omitempty"`
+	PRURL     string `json:"prUrl,omitempty"`
 }
 
 func (s Server) issueRetrySubmitter() func(context.Context, []byte) (string, error) {
@@ -748,50 +759,42 @@ func (s Server) issueRetrySubmitter() func(context.Context, []byte) (string, err
 }
 
 // The caller holds admission. Recovery checks local worker liveness.
-func (s Server) recoverIssueClaim(ctx context.Context, repository string, number int, remote issueAttemptMetadata, submit func(context.Context, []byte) (string, error)) (string, int, error) {
-	return s.recoverIssueClaimMode(ctx, repository, number, remote, submit, false)
-}
-
-func (s Server) recoverIssueClaimMode(ctx context.Context, repository string, number int, remote issueAttemptMetadata, submit func(context.Context, []byte) (string, error), automatic bool) (string, int, error) {
-	return s.recoverIssueClaimWithRun(ctx, repository, number, remote, submit, automatic, nil)
-}
-
-func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string, number int, remote issueAttemptMetadata, submit func(context.Context, []byte) (string, error), automatic bool, requestedRun *config.Config) (string, int, error) {
+func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string, number int, remote issueAttemptMetadata, submit func(context.Context, []byte) (string, error), automatic bool, requestedRun *config.Config) (issueRetryResult, int, error) {
 	settings, err := s.ReviewSettingsStatus(ctx)
 	if err != nil {
-		return "", 503, err
+		return issueRetryResult{}, 503, err
 	}
 	if !settings.GitHubIssuesEnabled {
-		return "", 409, fmt.Errorf("GitHub Issues is disabled")
+		return issueRetryResult{}, 409, fmt.Errorf("GitHub Issues is disabled")
 	}
 	if automatic {
 		var enabled bool
 		settings, enabled = settings.issueAutoStartForRepository(repository)
 		if !enabled {
-			return "", 409, fmt.Errorf("issue automation disabled")
+			return issueRetryResult{}, 409, fmt.Errorf("issue automation disabled")
 		}
 	}
 	for _, disabled := range settings.DisabledRepositories {
 		if issueRepositoryMatchesRun(disabled, repository) {
-			return "", 409, fmt.Errorf("repository is disabled")
+			return issueRetryResult{}, 409, fmt.Errorf("repository is disabled")
 		}
 	}
 	records, err := s.IssueClaims.List()
 	if err != nil && s.IssueRecovery == nil {
-		return "", 503, err
+		return issueRetryResult{}, 503, err
 	}
 	if s.IssueRecovery != nil {
 		lock, err := s.IssueClaims.TryLock(localruntime.IssueExecutionKey(&config.GitHubIssueConfig{Repository: repository, Number: number}))
 		if err != nil {
-			return "", 503, err
+			return issueRetryResult{}, 503, err
 		}
 		if lock == nil {
-			return "", 409, fmt.Errorf("stop the active worker and its subprocesses before retrying")
+			return issueRetryResult{}, 409, fmt.Errorf("stop the active worker and its subprocesses before retrying")
 		}
 		lock.Close()
 	}
 	if s.activeIssueTask(repository, number) {
-		return "", http.StatusConflict, fmt.Errorf("stop the active task before retrying")
+		return issueRetryResult{}, http.StatusConflict, fmt.Errorf("stop the active task before retrying")
 	}
 	var savedRun *config.Config
 	var previous localruntime.IssueClaimRecord
@@ -803,12 +806,12 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		if record.Version == 2 && record.InstanceID == s.instanceID() {
 			stopped, err := localruntime.IssueProcessesStopped(record)
 			if !stopped && (err == nil || automatic) {
-				return "", 409, fmt.Errorf("worker termination is not confirmed; inspect subprocesses before retrying")
+				return issueRetryResult{}, 409, fmt.Errorf("worker termination is not confirmed; inspect subprocesses before retrying")
 			}
 		}
 		if record.Version != 2 && record.InstanceID == s.instanceID() && record.RequestID != "" && s.Broker != nil {
 			if task, ok := s.Broker.Task(record.RequestID); ok && !isCompletedTaskStatus(task.Status) {
-				return "", 409, fmt.Errorf("stop the active task before retrying")
+				return issueRetryResult{}, 409, fmt.Errorf("stop the active task before retrying")
 			}
 		}
 		if issue.Claim.ID == remote.Claim.ID || remote.Claim.ID == "" {
@@ -827,11 +830,21 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		claimedIssue := &config.GitHubIssueConfig{Repository: repository, Number: number, Claim: &remote.Claim}
 		pr, err := s.findIssuePR(ctx, claimedIssue)
 		if err != nil {
-			return "", 502, err
+			return issueRetryResult{}, 502, err
 		}
-		if pr.Closed {
-			return "", http.StatusConflict, fmt.Errorf("%w: reopen the existing pull request for %q before using Recover / retry",
-				app.ErrIssueBranchRecovery, remote.Claim.Branch)
+		if pr.URL != "" {
+			action := ""
+			switch {
+			case pr.Closed && pr.BaseBranch != remote.Claim.BaseBranch:
+				action = fmt.Sprintf("reopen the existing pull request for %q and retarget it to %q", remote.Claim.Branch, remote.Claim.BaseBranch)
+			case pr.Closed:
+				action = fmt.Sprintf("reopen the existing pull request for %q", remote.Claim.Branch)
+			case pr.BaseBranch != remote.Claim.BaseBranch:
+				action = fmt.Sprintf("retarget the existing pull request for %q to %q", remote.Claim.Branch, remote.Claim.BaseBranch)
+			}
+			if action != "" {
+				return issueRetryResult{}, http.StatusConflict, fmt.Errorf("%w: %s before using Recover / retry", app.ErrIssueBranchRecovery, action)
+			}
 		}
 		if pr.URL != "" && (automatic || branchRecovery) {
 			if !automatic && branchRecovery && previous.Version == 2 &&
@@ -841,34 +854,32 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 					if errors.Is(err, app.ErrIssueBranchRecovery) {
 						status = http.StatusConflict
 					}
-					return "", status, err
+					return issueRetryResult{}, status, err
 				}
 				if err := s.recordVerifiedIssuePR(previous, pr); err != nil {
-					return "", 503, err
+					return issueRetryResult{}, 503, err
 				}
-				if previous.RequestID != "" {
-					return previous.RequestID, http.StatusAccepted, nil
-				}
+				return issueRetryResult{PRURL: pr.URL}, http.StatusOK, nil
 			}
-			return "", 409, fmt.Errorf("issue already has an open or merged PR")
+			return issueRetryResult{}, 409, fmt.Errorf("issue already has an open or merged PR")
 		}
 	}
 	issue, err := s.fetchGitHubIssue(ctx, repository, number)
 	if err != nil {
-		return "", 502, err
+		return issueRetryResult{}, 502, err
 	}
 	if !strings.EqualFold(issue.State, "open") {
-		return "", 409, fmt.Errorf("closed issues cannot be retried")
+		return issueRetryResult{}, 409, fmt.Errorf("closed issues cannot be retried")
 	}
 	target, err := s.issueClaimTarget(ctx, repository, number)
 	if err != nil {
-		return "", 502, err
+		return issueRetryResult{}, 502, err
 	}
 	if automatic && target.BlockedBy > 0 {
-		return "", 409, fmt.Errorf("issue is blocked by %d open issue(s)", target.BlockedBy)
+		return issueRetryResult{}, 409, fmt.Errorf("issue is blocked by %d open issue(s)", target.BlockedBy)
 	}
 	if (automatic || branchRecovery) && target.ClosingPRs > 0 {
-		return "", 409, fmt.Errorf("%w: reconcile the issue's existing pull requests before using Recover / retry", app.ErrIssueBranchRecovery)
+		return issueRetryResult{}, 409, fmt.Errorf("%w: reconcile the issue's existing pull requests before using Recover / retry", app.ErrIssueBranchRecovery)
 	}
 	branch := fmt.Sprintf("agent00-issue-%d", number)
 	linked := false
@@ -890,16 +901,19 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		// another attempt or offering to reuse the reserved branch.
 		exists, err := s.issueBranchExists(ctx, repository, branch)
 		if err != nil {
-			return "", 502, err
+			return issueRetryResult{}, 502, err
 		}
 		if !exists && (automatic || branchRecovery || previous.WorkspaceDir != "") {
-			return "", 409, missingReservedIssueRef(branch)
+			return issueRetryResult{}, 409, missingReservedIssueRef(branch)
 		}
 		if (automatic || branchRecovery) && target.Linked > 0 && (!linked || target.Linked != 1) {
-			return "", 409, fmt.Errorf("%w: reconcile the issue's linked branches with %q, then use Recover / retry",
+			return issueRetryResult{}, 409, fmt.Errorf("%w: reconcile the issue's linked branches with %q, then use Recover / retry",
 				app.ErrIssueBranchRecovery, branch)
 		}
 		reserve = !exists
+	}
+	if err := verifyIssueRetryCheckout(ctx, previous, branch); err != nil {
+		return issueRetryResult{}, http.StatusConflict, err
 	}
 	base := remote.Claim.BaseBranch
 	if base == "" && savedRun != nil {
@@ -929,7 +943,7 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		currentExclusion := issueExclusionLabel(settings)
 		ownsCurrentLabel := previous.LabelAdded && strings.EqualFold(previous.Run.GitHubIssue.Claim.ExclusionLabel, currentExclusion)
 		if !ownsCurrentLabel && githubIssueHasAnyLabel(issue, []string{currentExclusion}) {
-			return "", 409, fmt.Errorf("issue was excluded after its worker stopped")
+			return issueRetryResult{}, 409, fmt.Errorf("issue was excluded after its worker stopped")
 		}
 		exclusion = currentExclusion
 	}
@@ -941,12 +955,12 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 	run.BaseBranch = base
 	setGitHubIssuePrompt(&run, issue)
 	if err := githubassets.Validate(run.Assets); err != nil {
-		return "", 400, err
+		return issueRetryResult{}, 400, err
 	}
 	record := localruntime.IssueClaimRecord{ID: claim.ID, InstanceID: s.instanceID(), Phase: "reserving", Run: run}
 	if s.IssueRecovery != nil {
 		if record.InstanceID == "" {
-			return "", 503, fmt.Errorf("persistent instance identity is unavailable")
+			return issueRetryResult{}, 503, fmt.Errorf("persistent instance identity is unavailable")
 		}
 		record.Version = 2
 		record.State = "reserving"
@@ -961,7 +975,7 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		}
 	}
 	if err = s.IssueClaims.Save(record); err != nil {
-		return "", 503, err
+		return issueRetryResult{}, 503, err
 	}
 	var sha string
 	if record.Version == 2 {
@@ -971,17 +985,17 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		}
 		sha, err = s.issueBranchSHA(ctx, repository, ref)
 		if err != nil {
-			return "", 502, s.blockIssueClaim(record, err)
+			return issueRetryResult{}, 502, s.blockIssueClaim(record, err)
 		}
 		record.ReservationSHA = sha
 		if err := s.IssueClaims.Save(record); err != nil {
-			return "", 503, err
+			return issueRetryResult{}, 503, err
 		}
 		requestID, err := s.resumeIssueAdmission(ctx, record, submit)
 		if err != nil {
-			return "", 409, err
+			return issueRetryResult{}, 409, err
 		}
-		return requestID, http.StatusAccepted, nil
+		return issueRetryResult{RequestID: requestID}, http.StatusAccepted, nil
 	}
 	if reserve {
 		sha, err = s.issueBranchSHA(ctx, repository, base)
@@ -995,13 +1009,13 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		err = s.publishIssueAttempt(ctx, run.GitHubIssue, sha, record.InstanceID)
 	}
 	if err != nil {
-		return "", 409, s.blockIssueClaim(record, err)
+		return issueRetryResult{}, 409, s.blockIssueClaim(record, err)
 	}
 	requestID, err := s.finishIssueAdmission(ctx, record, submit)
 	if err != nil {
-		return "", http.StatusConflict, err
+		return issueRetryResult{}, http.StatusConflict, err
 	}
-	return requestID, http.StatusAccepted, nil
+	return issueRetryResult{RequestID: requestID}, http.StatusAccepted, nil
 }
 
 func issueRepositoryMatchesRun(value, repository string) bool {
