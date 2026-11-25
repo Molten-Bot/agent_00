@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Molten-Bot/agent_00/internal/app"
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/githubassets"
@@ -810,12 +811,23 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 			return s.SubmitTaskRerun(ctx, previous.RequestID, body, false)
 		}
 	}
-	if automatic && s.IssueRecovery != nil && remote.Claim.ID != "" {
+	branchRecovery := previous.Incident == localruntime.IssueIncidentBranchRecovery ||
+		strings.HasSuffix(previous.FailureDetail(), legacyIssueBranchRenameFailure)
+	if (automatic || branchRecovery) && s.IssueRecovery != nil && remote.Claim.ID != "" {
 		pr, err := s.verifiedIssuePR(ctx, &config.GitHubIssueConfig{Repository: repository, Number: number, Claim: &remote.Claim})
 		if err != nil {
 			return "", 502, err
 		}
 		if pr.URL != "" {
+			if !automatic && branchRecovery && previous.Version == 2 &&
+				previous.InstanceID == remote.InstanceID && previous.InstanceID == s.instanceID() {
+				if err := s.recordVerifiedIssuePR(previous, pr); err != nil {
+					return "", 503, err
+				}
+				if previous.RequestID != "" {
+					return previous.RequestID, http.StatusAccepted, nil
+				}
+			}
 			return "", 409, fmt.Errorf("issue already has an open or merged PR")
 		}
 	}
@@ -833,6 +845,9 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 	if automatic && target.BlockedBy > 0 {
 		return "", 409, fmt.Errorf("issue is blocked by %d open issue(s)", target.BlockedBy)
 	}
+	if (automatic || branchRecovery) && target.ClosingPRs > 0 {
+		return "", 409, fmt.Errorf("%w: reconcile the issue's existing pull requests before using Recover / retry", app.ErrIssueBranchRecovery)
+	}
 	branch := fmt.Sprintf("agent00-issue-%d", number)
 	linked := false
 	for _, name := range target.Branches {
@@ -848,16 +863,19 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		previous.ID == remote.Claim.ID && previous.InstanceID == remote.InstanceID &&
 		previous.InstanceID == s.instanceID() && !previous.BranchReserved)
 	reserve := target.Linked == 0 && target.ClosingPRs == 0 && savedRun != nil && incompleteReservation
-	if automatic {
-		if !reserve && (!linked || target.Linked != 1) {
-			return "", 409, fmt.Errorf("automatic recovery requires the reserved issue branch")
-		}
-	} else {
-		// One agent works each issue. Development links can be stale, missing,
-		// or include unrelated branches; inspect the actual ref before reusing it.
+	if !automatic || !reserve {
+		// Development links can be stale. Check the exact ref before creating
+		// another attempt or offering to reuse the reserved branch.
 		exists, err := s.issueBranchExists(ctx, repository, branch)
 		if err != nil {
 			return "", 502, err
+		}
+		if !exists && (automatic || branchRecovery || previous.WorkspaceDir != "") {
+			return "", 409, missingReservedIssueRef(branch)
+		}
+		if (automatic || branchRecovery) && target.Linked > 0 && (!linked || target.Linked != 1) {
+			return "", 409, fmt.Errorf("%w: reconcile the issue's linked branches with %q, then use Recover / retry",
+				app.ErrIssueBranchRecovery, branch)
 		}
 		reserve = !exists
 	}

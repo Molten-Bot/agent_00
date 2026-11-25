@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Molten-Bot/agent_00/internal/app"
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
@@ -198,6 +199,9 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		s.publishVerifiedIssuePR(record)
 		return nil
 	}
+	if record.State == "blocked" && record.Incident == localruntime.IssueIncidentBranchRecovery && !record.UnlockPending {
+		return nil
+	}
 	lock, err := s.IssueClaims.TryLock(localruntime.IssueExecutionKey(record.Run.GitHubIssue))
 	if err != nil {
 		return err
@@ -227,10 +231,20 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		blockStaleIssueClaim(&record)
 		return s.IssueClaims.Save(record)
 	}
+	if record.Outcome == "error" && record.Incident != localruntime.IssueIncidentBranchRecovery &&
+		strings.HasSuffix(record.FailureDetail(), legacyIssueBranchRenameFailure) {
+		record.RunError = record.FailureDetail()
+		record.Incident = localruntime.IssueIncidentBranchRecovery
+		record.NextAttemptAt = time.Time{}
+		if err := s.IssueClaims.Save(record); err != nil {
+			return err
+		}
+	}
 	// Reclassify stored rollout incidents because older classifiers accepted
 	// ambiguous provisioning reports. Preserve the evidence before recovery
 	// checks can replace the last error.
-	if record.Outcome == "error" && (issueDependencyRetryError(record.Incident) == "" || record.Incident == localruntime.IssueIncidentExternalRollout) {
+	if record.Outcome == "error" && record.Incident != localruntime.IssueIncidentBranchRecovery &&
+		(issueDependencyRetryError(record.Incident) == "" || record.Incident == localruntime.IssueIncidentExternalRollout) {
 		failure := record.FailureDetail()
 		reason := failurefollowup.NonRemediableFailureReason(errors.New(failure))
 		previousIncident := record.Incident
@@ -348,22 +362,21 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 			return s.deferIssueRecord(record, err)
 		}
 		if pr.URL != "" {
-			record.PRURL = pr.URL
-			record.PRTitle = strings.TrimSpace(pr.Title)
-			record.VerifiedAt = time.Now().UTC()
-			record.State = "fulfilled"
-			record.Error = ""
-			record.NextAttemptAt = time.Time{}
-			if err := s.IssueClaims.Save(record); err != nil {
-				return err
-			}
-			s.publishVerifiedIssuePR(record)
-			return nil
+			return s.recordVerifiedIssuePR(record, pr)
 		}
 	}
 	// A restored owner can finalize a stopped attempt. Dispatch still requires
 	// an explicit retry.
 	if staleOwner {
+		return s.IssueClaims.Save(record)
+	}
+	if record.Incident == localruntime.IssueIncidentBranchRecovery {
+		action := record.FailureDetail()
+		if strings.HasSuffix(action, legacyIssueBranchRenameFailure) {
+			action = fmt.Sprintf("%s: reconcile %q and its existing pull request, then use Recover / retry",
+				app.ErrIssueBranchRecovery, issue.Claim.Branch)
+		}
+		blockIssueBranchRecovery(&record, action)
 		return s.IssueClaims.Save(record)
 	}
 	if record.Outcome != "" && record.Incident == "" {
@@ -441,6 +454,15 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	lock.Close()
 	lock = nil
 	if record.Outcome == "" {
+		if record.BranchReserved {
+			exists, err := s.issueBranchExists(ctx, issue.Repository, issue.Claim.Branch)
+			if err != nil {
+				return s.deferIssueRecord(record, err)
+			}
+			if !exists {
+				return s.deferIssueRecord(record, missingReservedIssueRef(issue.Claim.Branch))
+			}
+		}
 		var fresh GitHubIssue
 		fresh, err = s.fetchGitHubIssue(ctx, issue.Repository, issue.Number)
 		if err != nil {
@@ -495,6 +517,20 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		}
 		return s.deferIssueRecord(record, err)
 	}
+	return nil
+}
+
+func (s Server) recordVerifiedIssuePR(record localruntime.IssueClaimRecord, pr verifiedIssuePullRequest) error {
+	record.PRURL = pr.URL
+	record.PRTitle = strings.TrimSpace(pr.Title)
+	record.VerifiedAt = time.Now().UTC()
+	record.State = "fulfilled"
+	record.Error = ""
+	record.NextAttemptAt = time.Time{}
+	if err := s.IssueClaims.Save(record); err != nil {
+		return err
+	}
+	s.publishVerifiedIssuePR(record)
 	return nil
 }
 
@@ -617,6 +653,10 @@ func (s Server) deferIssueRecord(record localruntime.IssueClaimRecord, cause err
 			blockStaleIssueClaim(current)
 			return nil
 		}
+		if errors.Is(cause, app.ErrIssueBranchRecovery) {
+			blockIssueBranchRecovery(current, cause.Error())
+			return nil
+		}
 		if !isStaleIssueClaim(*current) {
 			current.State = "retry_wait"
 			current.Error = cause.Error()
@@ -625,6 +665,20 @@ func (s Server) deferIssueRecord(record localruntime.IssueClaimRecord, cause err
 		return nil
 	})
 	return errors.Join(cause, err)
+}
+
+const legacyIssueBranchRenameFailure = "reserved issue branch cannot be renamed; explicit recovery is required"
+
+func missingReservedIssueRef(branch string) error {
+	return fmt.Errorf("%w: restore the remote ref %q to the intended issue commits, then use Recover / retry",
+		app.ErrIssueBranchRecovery, "refs/heads/"+branch)
+}
+
+func blockIssueBranchRecovery(record *localruntime.IssueClaimRecord, action string) {
+	record.State = "blocked"
+	record.Incident = localruntime.IssueIncidentBranchRecovery
+	record.Error = action
+	record.NextAttemptAt = time.Time{}
 }
 
 func isStaleIssueClaim(record localruntime.IssueClaimRecord) bool {

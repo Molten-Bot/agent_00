@@ -968,7 +968,7 @@ func TestIssueRecoveryBoundsFailuresBeforeAgentStarts(t *testing.T) {
 	s.pollGitHubIssueAutoStart(context.Background())
 	record := completeRecoveryRecord(t, s, "error", 0)
 	record.PriorRunFailures = 2
-	record.RunError = "workflow: reserved issue branch cannot be renamed; explicit recovery is required"
+	record.RunError = "workflow: write access check failed"
 	if err := s.IssueClaims.Save(record); err != nil {
 		t.Fatal(err)
 	}
@@ -987,6 +987,84 @@ func TestIssueRecoveryBoundsFailuresBeforeAgentStarts(t *testing.T) {
 	}
 	if next := latestRecoveryRecord(t, s); next.PriorRunFailures != 0 || len(f.submissions) != 2 {
 		t.Fatal("explicit recovery did not reset the workflow budget")
+	}
+}
+
+func TestIssueRecoveryBlocksReservedBranchConflictsAcrossRestart(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"legacy rename rejection", "checkout conflict", "missing remote ref"} {
+		t.Run(name, func(t *testing.T) {
+			s, f := recoveryServer(t)
+			s.pollGitHubIssueAutoStart(context.Background())
+			record := completeRecoveryRecord(t, s, "error", 0)
+			record.State = "retry_wait"
+			record.NextAttemptAt = time.Now().Add(-time.Minute)
+			switch name {
+			case "legacy rename rejection":
+				record.RunError = "workflow: reserved issue branch cannot be renamed; explicit recovery is required"
+				record.NextAttemptAt = time.Now().Add(time.Hour)
+			case "checkout conflict":
+				record.Incident = localruntime.IssueIncidentBranchRecovery
+				record.RunError = "git: reserved issue branch recovery required: preserve work at the current HEAD, then use Recover / retry"
+			case "missing remote ref":
+				// Development links can still report the old reserved branch.
+				s.GitHubIssueRunner = githubIssueRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+					if strings.Contains(strings.Join(cmd.Args, " "), "/git/matching-refs/heads/") {
+						return execx.Result{Stdout: `[{"ref":"refs/heads/agent00-issue-170"}]`}, nil
+					}
+					return f.Run(ctx, cmd)
+				})
+			}
+			if err := s.IssueClaims.Save(record); err != nil {
+				t.Fatal(err)
+			}
+			err := s.ReconcileIssueWork(context.Background())
+			if err != nil && !errors.Is(err, app.ErrIssueBranchRecovery) {
+				t.Fatal(err)
+			}
+			got := latestRecoveryRecord(t, s)
+			if got.ID != record.ID || got.State != "blocked" || got.Incident != localruntime.IssueIncidentBranchRecovery ||
+				got.UnlockPending || !got.NextAttemptAt.IsZero() || got.RunError != record.RunError ||
+				!strings.Contains(got.Error, "Recover / retry") || len(f.submissions) != 1 {
+				t.Fatalf("branch conflict was not blocked on the same attempt: %+v, submissions=%d", got, len(f.submissions))
+			}
+			restarted := NewServer("", NewBroker())
+			restarted.IssueClaims = &localruntime.IssueClaimStore{Root: s.IssueClaims.Root}
+			restarted.IssueRecovery = s.IssueRecovery
+			restarted.GitHubIssueRunner = s.GitHubIssueRunner
+			restarted.SubmitLocalPrompt = s.SubmitLocalPrompt
+			restarted.ReviewSettingsStatus = s.ReviewSettingsStatus
+			s = restarted
+			calls := f.calls
+			for range 3 {
+				if err := s.ReconcileIssueWork(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if f.calls != calls || len(f.submissions) != 1 {
+				t.Fatalf("blocked attempt polled or dispatched after restart: calls=%d, submissions=%d", f.calls-calls, len(f.submissions))
+			}
+			if name == "legacy rename rejection" {
+				f.prs = recoveryPR("open", "null", got.Run.GitHubIssue.Claim.Branch, "main")
+				if response := retryIssue(t, s, got.ID, true); response.Code != http.StatusAccepted {
+					t.Fatalf("retry after reopening PR: status=%d, body=%s", response.Code, response.Body.String())
+				}
+				if verified := latestRecoveryRecord(t, s); verified.ID != got.ID || verified.State != "fulfilled" ||
+					verified.PRURL == "" || len(f.submissions) != 1 {
+					t.Fatalf("reopened PR did not fulfill the same attempt: %+v, submissions=%d", verified, len(f.submissions))
+				}
+				return
+			}
+			if name == "missing remote ref" {
+				if response := retryIssue(t, s, got.ID, true); response.Code != http.StatusConflict {
+					t.Fatalf("retry while ref is missing: status=%d, body=%s", response.Code, response.Body.String())
+				}
+				s.GitHubIssueRunner = f
+			}
+			if response := retryIssue(t, s, got.ID, true); response.Code != http.StatusAccepted || len(f.submissions) != 2 {
+				t.Fatalf("explicit retry: status=%d, body=%s, submissions=%d", response.Code, response.Body.String(), len(f.submissions))
+			}
+		})
 	}
 }
 
