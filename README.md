@@ -210,7 +210,8 @@ runs that fail before starting the agent or while publishing a PR. Admission
 and infrastructure failures also back off and honor GitHub retry/reset headers.
 The local `/api/github/automation` endpoint exposes the run and recovery failure
 counts and next retry time for each claim. Auth and signing gates do not consume
-agent attempts. Exhausted attempts, explicit stops/pauses, and no-change results
+agent attempts. Workspace storage failures do not consume agent attempts or
+workflow retries. Exhausted attempts, explicit stops/pauses, and no-change results
 without a PR remain visible blockers requiring review or explicit retry.
 Verified PR delivery ends the failure streak. A manual recovery starts a new
 failure cycle and refreshes issue content.
@@ -266,8 +267,25 @@ Tasks without a history reserve 512 MiB. When available space cannot cover a
 task's estimate alongside other reservations on the same filesystem, the task
 stays queued until space becomes available. Force start overrides this admission
 check.
-Storage exhaustion requires an infrastructure repair and does not launch another
-coding task on the same exhausted filesystem.
+
+Issue workspaces live under `issue-workspaces/` beside the runtime config. With
+default Compose settings, they use the host disk behind
+`${AGENT_00_CONFIG_DIR:-./.agent00}:/workspace/config`. A nested mount takes
+precedence over that bind mount and over `HARNESS_WORKSPACE_DISK_BASE`. If an
+older deployment or Compose override mounts `/workspace/config/issue-workspaces`
+as tmpfs, stop task execution and copy retained workspaces to the host config
+directory before removing the override and recreating the container. Keep
+the same directory layout so saved claims can find their workspaces.
+
+The daemon logs issue workspace capacity and free bytes at startup and when
+queueing an issue. On Linux it rejects tmpfs and ramfs for issue workspaces.
+Tasks wait for enough free space on their filesystem. Force start can override
+the historical estimate but still requires at least 512 MiB free for issue
+workspaces. If a task hits disk exhaustion, it remains blocked with its
+workspace retained. Free disk space or expand the workspace filesystem, then
+select **Retry** in **Settings → GitHub Issues**. Preserve unresolved checkouts
+and journals when freeing space. If the claim journal is also full, keep the
+daemon running while freeing space so it can save the blocked outcome.
 
 Codex sandboxing needs nested user/mount namespaces supported by the container
 runtime. The image uses Codex's bundled bubblewrap helper. The startup warning

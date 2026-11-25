@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -51,7 +52,7 @@ func TestIssueOwnershipCheckPublishesOperatorStop(t *testing.T) {
 	if !ok || task.Status != "stopped" {
 		t.Fatalf("dashboard task found = %v, status = %q", ok, task.Status)
 	}
-	if err := work.finish(ctx, outcome.State, outcome.Result); err != nil {
+	if err := work.finish(ctx, outcome.State, outcome.Result, nil); err != nil {
 		t.Fatal(err)
 	}
 	stored, err := store.Load(record.ID)
@@ -85,7 +86,7 @@ func TestIssueExecutionIdempotenceAndTerminalReceipt(t *testing.T) {
 	if work2, duplicate, err := prepareIssueExecution(store, record.Run, localruntime.IssueRecoveryConfig{}); err != nil || work2 != nil || duplicate != record.RequestID {
 		t.Fatalf("duplicate=%v %s %v", work2, duplicate, err)
 	}
-	if err := work.finish(context.Background(), "error", app.Result{ExitCode: app.ExitGit, Err: errors.New("push failed")}); err != nil {
+	if err := work.finish(context.Background(), "error", app.Result{ExitCode: app.ExitGit, Err: errors.New("push failed")}, nil); err != nil {
 		t.Fatal(err)
 	}
 	got, err := store.Load(record.ID)
@@ -97,6 +98,35 @@ func TestIssueExecutionIdempotenceAndTerminalReceipt(t *testing.T) {
 	}
 	if work2, duplicate, err := prepareIssueExecution(store, record.Run, localruntime.IssueRecoveryConfig{}); err != nil || work2 != nil || duplicate != record.RequestID {
 		t.Fatal("completed attempt dispatched again")
+	}
+}
+
+func TestIssueExecutionDiskFullRestoresAgentBudget(t *testing.T) {
+	t.Parallel()
+	store, record := lifecycleRecord(t)
+	record.AgentAttempts = 1
+	if err := store.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	work, _, err := prepareIssueExecution(store, record.Run, localruntime.IssueRecoveryConfig{})
+	if err != nil || work == nil {
+		t.Fatalf("prepare issue execution = %v, %v", work, err)
+	}
+	h := app.Harness{}
+	ctx, done := work.configure(context.Background(), &h)
+	defer done()
+	h.OnStep("agent")
+	running, err := store.Load(record.ID)
+	if err != nil || running.AgentAttempts != 2 {
+		t.Fatalf("running agent attempts = %d, error = %v", running.AgentAttempts, err)
+	}
+	if err := work.finish(ctx, "error", app.Result{ExitCode: app.ExitCodex, Err: syscall.ENOSPC}, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Load(record.ID)
+	if err != nil || got.AgentAttempts != 1 || got.Incident != localruntime.IssueIncidentWorkspaceStorage ||
+		got.Outcome != "error" || got.WorkspaceDir != work.record.WorkspaceDir || !got.UnlockPending {
+		t.Fatalf("disk exhaustion outcome = %+v, error = %v", got, err)
 	}
 }
 

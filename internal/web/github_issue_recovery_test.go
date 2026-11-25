@@ -1265,7 +1265,7 @@ func TestIssueRecoveryRechecksStoredRolloutIncident(t *testing.T) {
 			record := completeRecoveryRecord(t, s, "error", 1)
 			record.State = "blocked"
 			record.Incident = localruntime.IssueIncidentExternalRollout
-			record.Error = issueDependencyRetryError(record.Incident)
+			record.Error = issueExplicitRetryError(record.Incident)
 			if tc.legacyErrorFieldOnly {
 				record.Error = tc.evidence
 			} else {
@@ -1296,7 +1296,7 @@ func TestIssueRecoveryRechecksStoredRolloutIncident(t *testing.T) {
 				if pass == 0 && tc.logsRestored {
 					got := latestRecoveryRecord(t, s)
 					if got.State != "blocked" || got.Incident != record.Incident ||
-						got.Error != issueDependencyRetryError(record.Incident) || got.RunError != tc.evidence || calls != 0 {
+						got.Error != issueExplicitRetryError(record.Incident) || got.RunError != tc.evidence || calls != 0 {
 						t.Fatalf("legacy failure not preserved while stdout is unavailable: state=%q incident=%q error=%q run error=%q repair calls=%d",
 							got.State, got.Incident, got.Error, got.RunError, calls)
 					}
@@ -1491,13 +1491,15 @@ func TestIssueRecoveryKeepsPausedAndUncertainWorkersBlocked(t *testing.T) {
 	}
 }
 
-func TestIssueRecoveryDoesNotRepairDiskExhaustionAfterStatusChanges(t *testing.T) {
+func TestIssueRecoveryBlocksLegacyDiskExhaustionUntilExplicitRetry(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)
 	s.pollGitHubIssueAutoStart(context.Background())
-	record := completeRecoveryRecord(t, s, "error", 3)
-	record.RunError = "git: write failed: no space left on device"
-	record.Error = "agent retry budget exhausted; explicit retry required"
+	record := completeRecoveryRecord(t, s, "error", 1)
+	record.RunError = "codex: workspace storage ran out of space while the agent was running"
+	record.Error = "workflow retry budget exhausted; explicit retry required"
+	record.NextAttemptAt = time.Now().Add(time.Hour)
+	record.WorkspaceDir = filepath.Join(t.TempDir(), "retained")
 	if err := s.IssueClaims.Save(record); err != nil {
 		t.Fatal(err)
 	}
@@ -1511,8 +1513,24 @@ func TestIssueRecoveryDoesNotRepairDiskExhaustionAfterStatusChanges(t *testing.T
 		}
 	}
 	got := latestRecoveryRecord(t, s)
-	if got.State != "blocked" || got.FailureDetail() != record.RunError || len(f.submissions) != 1 {
+	if got.State != "blocked" || got.Incident != localruntime.IssueIncidentWorkspaceStorage ||
+		!strings.Contains(got.Error, "select Retry") || !got.NextAttemptAt.IsZero() || got.UnlockPending ||
+		got.FailureDetail() != record.RunError || issueRunFailures(got) != 0 || len(f.submissions) != 1 {
 		t.Fatalf("state=%s failure=%q submissions=%d", got.State, got.FailureDetail(), len(f.submissions))
+	}
+	status := httptest.NewRecorder()
+	s.handleIssueAutomationStatus(status, httptest.NewRequest(http.MethodGet, "/api/github/automation", nil))
+	for _, field := range []string{`"phase":"blocked"`, `"incident":"workspace_storage"`, `"runFailures":0`} {
+		if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), field) {
+			t.Fatalf("queue status missing %s: %d %s", field, status.Code, status.Body.String())
+		}
+	}
+	if response := retryIssue(t, s, got.ID, true); response.Code != http.StatusAccepted {
+		t.Fatalf("explicit retry = %d %s", response.Code, response.Body.String())
+	}
+	next := latestRecoveryRecord(t, s)
+	if len(f.submissions) != 2 || next.WorkspaceDir != got.WorkspaceDir || next.AgentAttempts != 0 {
+		t.Fatalf("retry did not retain the workspace and reset the cycle: %+v", next)
 	}
 }
 

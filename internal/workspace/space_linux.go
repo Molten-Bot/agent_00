@@ -4,12 +4,39 @@ package workspace
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 // statfsFunc is overridden in tests to simulate low-disk-space conditions
 // without requiring a real filesystem with little free space.
 var statfsFunc = syscall.Statfs
+
+// CheckPersistentStorage detects memory-backed mounts, including mounts that
+// shadow a persistent parent or are reached through a symlink.
+func CheckPersistentStorage(path string) error {
+	probe := filepath.Clean(path)
+	var stat syscall.Statfs_t
+	for {
+		err := statfsFunc(probe, &stat)
+		if err == nil {
+			break
+		}
+		parent := filepath.Dir(probe)
+		if !os.IsNotExist(err) || parent == probe {
+			return fmt.Errorf("inspect workspace storage %s: %w", path, err)
+		}
+		probe = parent
+	}
+	if kind := uint32(stat.Type); kind == unix.TMPFS_MAGIC || kind == unix.RAMFS_MAGIC {
+		return fmt.Errorf("%w: %s is on a memory-backed filesystem (free_bytes=%d total_bytes=%d); mount persistent disk storage there",
+			ErrUnsuitableStorage, path, stat.Bavail*uint64(stat.Bsize), stat.Blocks*uint64(stat.Bsize))
+	}
+	return nil
+}
 
 // Reserve room for a checkout and its initial tooling. This check is deliberately
 // uncached: a long-running daemon can fill a previously executable tmpfs.

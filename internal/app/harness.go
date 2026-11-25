@@ -57,8 +57,8 @@ import (
 // never inspects.
 var readOnlyReviewDisallowedTools = []string{"Edit", "Write", "NotebookEdit", "Bash", "Agent", "Skill", "Workflow", "ReportFindings"}
 
-// ErrWorkspaceDiskFull identifies local storage exhaustion reported by Git.
-var ErrWorkspaceDiskFull = errors.New("workspace storage exhausted")
+// ErrWorkspaceDiskFull identifies local storage exhaustion reported by a subprocess.
+var ErrWorkspaceDiskFull = workspace.ErrDiskFull
 
 const (
 	ExitSuccess   = 0
@@ -5584,40 +5584,13 @@ func (h Harness) runCommandUnchecked(ctx context.Context, phase string, cmd exec
 // fail with their own quota/rate-limit wording that would otherwise be
 // mislabeled as local disk exhaustion.
 func diskSpaceExhaustionError(cmd execx.Command, res execx.Result, err error) error {
-	if cmd.Name != "git" {
-		return nil
-	}
-	detail := strings.ToLower(res.Stdout + "\n" + res.Stderr)
-	signatures := []string{
-		"no space left on device",
-		"out of diskspace",
-		"disk quota exceeded",
-		"enospc",
-	}
-	matched := false
-	for _, sig := range signatures {
-		if strings.Contains(detail, sig) {
-			matched = true
-			break
-		}
-	}
-	if !matched {
+	if cmd.Name != "git" || (!workspace.IsDiskFull(err) && !workspace.DiskFullDiagnostic(res.Stdout+"\n"+res.Stderr)) {
 		return nil
 	}
 	return fmt.Errorf(
 		"workspace storage ran out of space running %s %s in %s; configure HARNESS_WORKSPACE_DISK_BASE on a disk-backed filesystem or free up space: %w",
 		cmd.Name, strings.Join(cmd.Args, " "), cmd.Dir, errors.Join(ErrWorkspaceDiskFull, err),
 	)
-}
-
-func agentWorkspaceStorageExhausted(res execx.Result) bool {
-	detail := strings.ToLower(res.Stdout + "\n" + res.Stderr)
-	return stringsx.ContainsAny(detail, []string{
-		"no space left on device",
-		"out of diskspace",
-		"disk quota exceeded",
-		"enospc",
-	})
 }
 
 func (h Harness) runPRChecksWatch(ctx context.Context, repoDir, prURL string) (execx.Result, error) {
@@ -5863,7 +5836,7 @@ func isNonFastForwardPush(res execx.Result, err error) bool {
 }
 
 func shouldRetryClone(err error, res execx.Result) bool {
-	if err == nil {
+	if err == nil || workspace.IsDiskFull(err) {
 		return false
 	}
 	if isRepoNotFoundCloneError(err, res) {
@@ -6763,11 +6736,13 @@ func (h Harness) runCodexWithHeartbeat(
 				stateErr := agentruntime.MarkCodexAuthenticationRequired(home)
 				return run.res, errors.Join(agentruntime.ErrCodexAuthRequired, stateErr)
 			}
-			if failed, detail := codexReportedFailure(run.res); failed {
+			failed, detail := codexReportedFailure(run.res)
+			if workspace.IsDiskFull(run.err) || ((failed || run.err != nil) &&
+				workspace.DiskFullDiagnostic(strings.ReplaceAll(run.res.Stdout+"\n"+run.res.Stderr, prompt, ""))) {
+				return run.res, fmt.Errorf("%s: workspace storage ran out of space while the agent was running; configure HARNESS_WORKSPACE_DISK_BASE on a disk-backed filesystem or free up space: %w", agentStage, errors.Join(ErrWorkspaceDiskFull, run.err))
+			}
+			if failed {
 				detail, fullDetail := codexFailureDetailWithErrorDetails(run.res, detail)
-				if agentWorkspaceStorageExhausted(run.res) {
-					return run.res, fmt.Errorf("%s reported failure: workspace storage ran out of space while the agent was running; configure HARNESS_WORKSPACE_DISK_BASE on a disk-backed filesystem or free up space: %s", agentStage, detail)
-				}
 				if isImplementationTargetFailure(detail) {
 					return run.res, fmt.Errorf("%s reported failure: %s", agentStage, detail)
 				}

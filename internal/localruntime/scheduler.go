@@ -63,6 +63,8 @@ type TaskDiskRequest struct {
 	Workspace     workspace.Manager
 	ExistingDir   string
 	RequiredBytes func() uint64
+	// CheckPersistentStorage validates the backing filesystem for retained work.
+	CheckPersistentStorage func(string) error
 	// CleanupOnCompletion identifies workspaces removed before reservation release.
 	CleanupOnCompletion bool
 	// RetryRoot is the root whose allocation failed. Try it after other roots.

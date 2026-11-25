@@ -106,8 +106,23 @@ func TestRunCodexRejectsAgentDiskSpaceExhaustionBeforeValidationGap(t *testing.T
 	if !strings.Contains(err.Error(), "workspace storage ran out of space") {
 		t.Fatalf("runCodex() error = %q, want workspace storage diagnosis", err)
 	}
+	if !errors.Is(err, workspace.ErrDiskFull) {
+		t.Fatalf("runCodex() error = %v, want typed disk exhaustion", err)
+	}
 	if !strings.Contains(err.Error(), "HARNESS_WORKSPACE_DISK_BASE") {
 		t.Fatalf("runCodex() error = %q, want storage remediation hint", err)
+	}
+}
+
+func TestRunCodexClassifiesDiskFullOnNonzeroExit(t *testing.T) {
+	t.Parallel()
+	underlying := errors.New("exit status 1")
+	for _, stderr := range []string{"ENOSPC: failed writing cache", "task prompt: investigate ENOSPC\nERROR: unrelated failure"} {
+		h := New(diskFullRunner{err: underlying, res: execx.Result{Stderr: stderr}})
+		_, err := h.runCodexWithHeartbeat(context.Background(), agentruntime.Default(), t.TempDir(), "investigate ENOSPC", codexRunOptions{}, agentInvocationLogMetadata{})
+		if !errors.Is(err, underlying) || errors.Is(err, workspace.ErrDiskFull) != strings.HasPrefix(stderr, "ENOSPC") {
+			t.Fatalf("stderr %q produced error %v", stderr, err)
+		}
 	}
 }
 

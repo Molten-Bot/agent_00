@@ -11,6 +11,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/app"
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
+	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
 
 type issueExecutionContextKey struct{}
@@ -116,7 +117,7 @@ func persistIssueControl(store *localruntime.IssueClaimStore, requestID, control
 	return nil
 }
 
-func (e *issueExecution) finish(ctx context.Context, state string, result app.Result) error {
+func (e *issueExecution) finish(ctx context.Context, state string, result app.Result, waitForStorage func() bool) error {
 	defer e.lock.Close()
 	if state == "" {
 		state = "interrupted"
@@ -127,11 +128,12 @@ func (e *issueExecution) finish(ctx context.Context, state string, result app.Re
 	if ctx.Err() != nil && state != "stopped" && state != "completed" && state != "no_changes" {
 		state = "interrupted"
 	}
-	return e.store.Update(e.record.ID, func(record *localruntime.IssueClaimRecord) error {
+	stoppedAt := time.Now().UTC()
+	update := func(record *localruntime.IssueClaimRecord) error {
 		record.Outcome = state
 		record.ExitCode = result.ExitCode
 		record.State = "verifying"
-		record.StoppedAt = time.Now().UTC()
+		record.StoppedAt = stoppedAt
 		record.UnlockPending = record.LabelAdded
 		if result.WorkspaceDir != "" {
 			record.WorkspaceDir = result.WorkspaceDir
@@ -151,8 +153,23 @@ func (e *issueExecution) finish(ctx context.Context, state string, result app.Re
 		if state == "interrupted" && errors.Is(context.Cause(ctx), context.Canceled) {
 			record.Incident = "service_shutdown"
 		}
+		if (state == "error" || state == "interrupted") &&
+			(workspace.IsDiskFull(result.Err) || errors.Is(result.Err, workspace.ErrUnsuitableStorage)) {
+			record.Incident = localruntime.IssueIncidentWorkspaceStorage
+			record.State = "blocked"
+			record.NextAttemptAt = time.Time{}
+			// This execution can charge at most one agent attempt. Restore the
+			// prior count even if a previous write committed before Sync failed.
+			record.AgentAttempts = e.record.AgentAttempts
+		}
 		return nil
-	})
+	}
+	for {
+		err := e.store.Update(e.record.ID, update)
+		if !workspace.IsDiskFull(err) || waitForStorage == nil || !waitForStorage() {
+			return err
+		}
+	}
 }
 
 func (e *issueExecution) configure(ctx context.Context, h *app.Harness) (context.Context, func()) {
