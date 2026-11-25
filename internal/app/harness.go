@@ -7605,7 +7605,7 @@ func ExternalPrerequisiteFailureFromStdout(failure string, readStdout func(stage
 	if legacy != failure && failurefollowup.RedactFailureDetail(legacy) != failure {
 		return "", false
 	}
-	reason := failurefollowup.ExternalPrerequisiteFailureReason(summary, details)
+	reason = failurefollowup.ExternalPrerequisiteFailureReason(summary, details)
 	if reason == "" && failurefollowup.IsHumanActionFailure(summary, details) {
 		reason = failurefollowup.HumanActionRequiredReason
 	}
