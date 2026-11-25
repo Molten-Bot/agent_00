@@ -11,15 +11,21 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/Molten-Bot/agent_00/internal/githubutil"
 )
 
 type GitHub struct {
-	Client  *http.Client
-	BaseURL string
-	Token   string
+	Client   *http.Client
+	BaseURL  string
+	Token    string
+	Cooldown *githubutil.Cooldown
 }
 
-func (g GitHub) get(ctx context.Context, path string, dst any) error {
+func (g GitHub) get(ctx context.Context, operation, path string, dst any) error {
+	if until := g.Cooldown.RetryAt(); !until.IsZero() {
+		return fmt.Errorf("%s verification pending: %w", operation, &githubutil.RateLimitError{RetryAt: until, Cause: ErrSetup})
+	}
 	base := strings.TrimRight(g.BaseURL, "/")
 	if base == "" {
 		base = "https://api.github.com"
@@ -42,7 +48,16 @@ func (g GitHub) get(ctx context.Context, path string, dst any) error {
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		return fmt.Errorf("%w: GitHub returned HTTP %d", ErrSetup, res.StatusCode)
+		failure := fmt.Errorf("%w: GitHub returned HTTP %d", ErrSetup, res.StatusCode)
+		if res.StatusCode == http.StatusForbidden || res.StatusCode == http.StatusTooManyRequests {
+			var body struct{ Message string }
+			_ = json.NewDecoder(io.LimitReader(res.Body, 8192)).Decode(&body)
+			classified := g.Cooldown.ClassifyFailure(res.StatusCode, res.Header, strings.ToLower(body.Message), failure)
+			if classified != failure {
+				return fmt.Errorf("%s verification pending: %w", operation, classified)
+			}
+		}
+		return failure
 	}
 	if err := json.NewDecoder(io.LimitReader(res.Body, 2<<20)).Decode(dst); err != nil {
 		return fmt.Errorf("%w: invalid GitHub response", ErrSetup)
@@ -56,7 +71,7 @@ func (g GitHub) Identity(ctx context.Context, cfg Config) (Config, error) {
 		Name  string `json:"name"`
 		ID    int64  `json:"id"`
 	}
-	if err := g.get(ctx, "/user", &user); err != nil {
+	if err := g.get(ctx, "GitHub identity", "/user", &user); err != nil {
 		return cfg, err
 	}
 	if user.Login == "" || user.ID <= 0 || strings.ContainsAny(user.Login, " \t\r\n/@") {
@@ -79,7 +94,7 @@ func (g GitHub) Registered(ctx context.Context, cfg Config) (bool, error) {
 		var keys []struct {
 			Key string `json:"key"`
 		}
-		if err := g.get(ctx, fmt.Sprintf("/users/%s/ssh_signing_keys?per_page=100&page=%d", url.PathEscape(cfg.Account), page), &keys); err != nil {
+		if err := g.get(ctx, "GitHub signing key registration", fmt.Sprintf("/users/%s/ssh_signing_keys?per_page=100&page=%d", url.PathEscape(cfg.Account), page), &keys); err != nil {
 			return false, err
 		}
 		for _, item := range keys {

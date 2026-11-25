@@ -131,11 +131,17 @@ func (c *Cooldown) Run(ctx context.Context, runner execx.Runner, cmd execx.Comma
 	if message == "" {
 		message = strings.ToLower(err.Error())
 	}
+	return result, c.ClassifyFailure(status, headers, message, err)
+}
+
+// ClassifyFailure records the retry deadline for a throttled response. Only cause
+// is retained, so HTTP callers can classify private bodies without exposing them.
+func (c *Cooldown) ClassifyFailure(status int, headers http.Header, message string, cause error) error {
 	limited := status == 429 || (status == 403 && (headers.Get("Retry-After") != "" || headers.Get("X-RateLimit-Remaining") == "0")) ||
 		strings.Contains(message, "rate limit exceeded") || strings.Contains(message, "rate limit already exceeded") ||
 		strings.Contains(message, "secondary rate limit") || strings.Contains(message, "http 429")
 	if !limited {
-		return result, err
+		return cause
 	}
 
 	if c == nil {
@@ -164,7 +170,7 @@ func (c *Cooldown) Run(ctx context.Context, runner execx.Runner, cmd execx.Comma
 	if !now.Before(c.until) {
 		c.until = now.Add(c.delay)
 	}
-	return result, &RateLimitError{Cause: err, RetryAt: c.until}
+	return &RateLimitError{Cause: cause, RetryAt: c.until}
 }
 
 func (c *Cooldown) extend(deadline time.Time) {

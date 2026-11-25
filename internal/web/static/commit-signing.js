@@ -42,6 +42,7 @@
     element('fingerprint').textContent = settings.fingerprint ? `Fingerprint: ${settings.fingerprint}` : '';
     const labels = {
       not_configured: 'No signing key configured.',
+      pending: 'Signing verification is waiting for the GitHub rate limit to reset.',
       unchecked: 'Registration has not been checked in this session.',
       not_registered: 'Add this public key to GitHub as a Signing Key before enabling.',
       unavailable: 'GitHub registration could not be checked. Try Check registration again.',

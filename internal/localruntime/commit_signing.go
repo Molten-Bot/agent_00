@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/githubutil"
 	"github.com/Molten-Bot/agent_00/internal/gitsigning"
 	"github.com/Molten-Bot/agent_00/internal/jsonx"
 )
@@ -84,14 +85,15 @@ const signingRecheckInterval = 30 * time.Second
 // two concurrent rechecks that interleave can write their verdicts out of
 // order and leave the gate open against the failing one.
 type signingRecheckGate struct {
-	token   chan struct{}
-	checked time.Time
+	token    chan struct{}
+	checked  time.Time
+	cooldown githubutil.Cooldown
 }
 
 var signingRecheckGates sync.Map
 
 func (s SigningSettings) recheckGate() *signingRecheckGate {
-	newGate := &signingRecheckGate{token: make(chan struct{}, 1)}
+	newGate := &signingRecheckGate{cooldown: githubutil.Cooldown{Now: s.Now}, token: make(chan struct{}, 1)}
 	newGate.token <- struct{}{}
 	gate, _ := signingRecheckGates.LoadOrStore(s.path(), newGate)
 	return gate.(*signingRecheckGate)
@@ -188,10 +190,12 @@ func (s SigningSettings) runner() execx.Runner {
 	return execx.OSRunner{}
 }
 func (s SigningSettings) github() gitsigning.GitHub {
+	var client gitsigning.GitHub
 	if s.GitHub != nil {
-		return s.GitHub()
+		client = s.GitHub()
 	}
-	return gitsigning.GitHub{}
+	client.Cooldown = &s.recheckGate().cooldown
+	return client
 }
 
 func (s SigningSettings) config() (gitsigning.Config, error) {
@@ -264,7 +268,12 @@ func (s SigningSettings) SubmissionRequirement(ctx context.Context) error {
 	// submission waited may have cleared or replaced it, and reporting the
 	// state this call started with would answer against a stale verdict.
 	held := s.bootHold()
-	if held != nil && s.now().Sub(gate.checked) < signingRecheckInterval {
+	var limited *githubutil.RateLimitError
+	if errors.As(held, &limited) {
+		if s.now().Before(limited.RetryAt) {
+			return held
+		}
+	} else if held != nil && s.now().Sub(gate.checked) < signingRecheckInterval {
 		return held
 	}
 	gate.checked = s.now()
@@ -314,6 +323,10 @@ func (s SigningSettings) ApplySetupRequirement(state CommitSigningState) CommitS
 	// behind saving a key. An unreadable or malformed runtime configuration is
 	// not something that form can fix, so report it as a message only rather
 	// than pointing at a remedy that cannot work.
+	var limited *githubutil.RateLimitError
+	if errors.As(requirement, &limited) {
+		state.Registration = "pending"
+	}
 	if errors.Is(requirement, ErrSigningSetupRequired) {
 		state.SetupRequired = true
 	}

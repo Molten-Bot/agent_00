@@ -35,8 +35,8 @@ func TestSigningSettingsPathAndGitHubDefaults(t *testing.T) {
 		t.Fatalf("path() = %q, want default %q", got, want)
 	}
 
-	if got := s.github(); got != (gitsigning.GitHub{}) {
-		t.Fatalf("github() = %+v, want zero value when GitHub is nil", got)
+	if got := s.github(); got != (gitsigning.GitHub{Cooldown: &s.recheckGate().cooldown}) {
+		t.Fatalf("github() = %+v, want default client with shared cooldown", got)
 	}
 }
 
