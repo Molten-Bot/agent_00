@@ -17,6 +17,7 @@ import (
 type GitHub struct {
 	Runner   execx.Runner
 	Cooldown *githubutil.Cooldown
+	Logf     func(string, ...any)
 }
 
 // pullRequestSnapshotError preserves the complete issue snapshot when a pull
@@ -46,23 +47,57 @@ func (n *ScanNeeds) include(w Definition) {
 	n.PullRequests = n.PullRequests || strings.HasPrefix(w.Trigger.Event, "pr.")
 	n.Reviews = n.Reviews || w.Trigger.Event == "pr.changes_requested"
 	n.Checks = n.Checks || w.Trigger.Event == "pr.checks_failed"
-	n.Viewer = n.Viewer || w.Trigger.Value == "@me"
+	n.Viewer = n.Viewer || (w.Trigger.Value == "@me" && contains([]string{"issue.assigned", "pr.assigned", "pr.review_requested"}, w.Trigger.Event))
 	for _, rule := range w.Filters.Rules {
 		n.LinkedIssues = n.LinkedIssues || rule.Field == "linkedIssue"
 		n.Viewer = n.Viewer || (rule.Value == "@me" && contains([]string{"author", "assignee", "reviewer"}, rule.Field))
 	}
 }
 
+// Each scan owns its counter. Pagination can make several HTTP requests in one gh invocation.
+type scanRunner struct {
+	execx.Runner
+	calls int
+}
+
+func (r *scanRunner) Run(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+	r.calls++
+	return r.Runner.Run(ctx, cmd)
+}
+
 func (g GitHub) Fetch(ctx context.Context, repo string, needs ScanNeeds) ([]Item, error) {
+	if g.Logf != nil {
+		start := time.Now()
+		runner := &scanRunner{Runner: g.Runner}
+		g.Runner = runner
+		defer func() {
+			g.Logf("workflow event=scan gh_calls=%d duration_ms=%d", runner.calls, time.Since(start).Milliseconds())
+		}()
+	}
 	if !repoPattern.MatchString(repo) {
 		return nil, fmt.Errorf("invalid repository")
 	}
 	if err := g.Cooldown.CheckDiscovery(); err != nil {
 		return nil, err
 	}
+	var viewer string
+	if needs.Viewer {
+		raw, err := g.command(ctx, "api", "user", "--jq", ".login", "--cache", "10m")
+		if err != nil {
+			return nil, err
+		}
+		viewer = strings.TrimSpace(raw)
+	}
 	resource := "issues"
 	if !needs.Issues {
 		resource = "pulls"
+	}
+	return g.fetchCollection(ctx, repo, resource, viewer, needs)
+}
+
+func (g GitHub) fetchCollection(ctx context.Context, repo, resource, viewer string, needs ScanNeeds) ([]Item, error) {
+	if err := g.Cooldown.CheckDiscovery(); err != nil {
+		return nil, err
 	}
 	raw, err := g.command(ctx, "api", "--paginate", "repos/"+repo+"/"+resource+"?state=open&per_page=100")
 	if err != nil {
@@ -89,22 +124,20 @@ func (g GitHub) Fetch(ctx context.Context, repo string, needs ScanNeeds) ([]Item
 	if err := g.Cooldown.CheckDiscovery(); err != nil {
 		return nil, err
 	}
-	var viewer string
-	if needs.Viewer {
-		viewer, err = g.command(ctx, "api", "user", "--jq", ".login", "--cache", "10m")
-		if err != nil {
-			return nil, err
-		}
-		viewer = strings.TrimSpace(viewer)
-	}
 	items := []Item{}
 	var pullRequestErr error
+	batchPRs := false
+	basicPRs := !needs.Reviews && !needs.Checks && !needs.LinkedIssues
 	for _, page := range pages {
 		for _, v := range page {
 			isPR := v.PullRequest != nil || resource == "pulls"
 			// The pulls collection already contains the head, labels, assignees,
 			// and requested reviewers required by basic PR triggers.
-			listedPR := resource == "pulls" && v.Head.Ref != "" && v.Head.SHA != "" && !needs.Reviews && !needs.Checks && !needs.LinkedIssues
+			listedPR := resource == "pulls" && v.Head.Ref != "" && v.Head.SHA != "" && basicPRs
+			if resource == "issues" && isPR && needs.PullRequests && basicPRs {
+				batchPRs = true
+				continue
+			}
 			if isPR && !listedPR {
 				if !needs.PullRequests || pullRequestErr != nil {
 					continue
@@ -151,6 +184,13 @@ func (g GitHub) Fetch(ctx context.Context, repo string, needs ScanNeeds) ([]Item
 			i.Viewer = viewer
 			items = append(items, i)
 		}
+	}
+	if batchPRs {
+		prs, err := g.fetchCollection(ctx, repo, "pulls", viewer, needs)
+		if err != nil {
+			return items, &pullRequestSnapshotError{err: err}
+		}
+		items = append(items, prs...)
 	}
 	if pullRequestErr != nil {
 		items = slices.DeleteFunc(items, func(i Item) bool { return i.Kind == "pr" })
