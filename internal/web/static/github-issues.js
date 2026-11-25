@@ -841,9 +841,19 @@
     }
   }
 
+  const panel = document.getElementById("github-issues-panel");
+  let pendingIssueList = false;
+  function loadVisibleIssueList() {
+    if (pendingIssueList && !document.hidden && panel.getClientRects().length) {
+      pendingIssueList = false;
+      void loadIssues();
+    }
+  }
+
   let initializationSequence = 0;
   async function initialize() {
     const sequence = ++initializationSequence;
+    pendingIssueList = false;
     const previousRepository = repoSelect.value;
     let stage = "settings";
     try {
@@ -862,7 +872,8 @@
       disabled.hidden = true;
       browser.hidden = false;
       stage = "repositories";
-      const response = await requestJSON("/api/github/repos", { cache: "no-store" });
+      const cached = window.RepositoryVisibility?.repositories();
+      const response = cached ? { repos: cached } : await requestJSON("/api/github/repos", { cache: "no-store" });
       if (sequence !== initializationSequence) return;
       const available = Array.isArray(response.repos) ? response.repos : [];
       repositories = window.RepositoryVisibility?.repositories() ?? window.RepositoryVisibility?.filter(available) ?? available;
@@ -892,7 +903,8 @@
       if (preferred) {
         repoSelect.value = preferred.full_name;
         try { localStorage.setItem(repositoryStorageKey, preferred.full_name); } catch (_error) { /* Ignore unavailable storage. */ }
-        void loadIssues();
+        pendingIssueList = true;
+        loadVisibleIssueList();
       } else {
         renderIssueList([]);
         renderEmptyDetail("Choose a repository", "Select a repository above to browse its open issues.");
@@ -948,11 +960,14 @@
       if (note) note.textContent = taskLinkModeDescription(selectedIssue);
     }
   });
-  window.addEventListener("repository-visibility-changed", () => { void initialize(); });
   let initialization = null;
   window.initGitHubIssuesPanel = function initGitHubIssuesPanel() {
     if (!initialization) initialization = initialize();
+    loadVisibleIssueList();
     return initialization;
   };
+  window.addEventListener("repository-visibility-changed", () => { initialization = initialize(); });
+  new IntersectionObserver(loadVisibleIssueList).observe(panel);
+  document.addEventListener("visibilitychange", loadVisibleIssueList);
   void window.initGitHubIssuesPanel();
 })();

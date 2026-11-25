@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/config"
+	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/library"
 	"github.com/Molten-Bot/agent_00/internal/workflow"
 )
@@ -79,7 +81,7 @@ func TestWorkflowAPIStoreAndPreview(t *testing.T) {
 	srv := NewServer("", NewBroker())
 	store := &workflow.Store{Path: filepath.Join(t.TempDir(), "workflows.json")}
 	calls := 0
-	srv.Workflows = &workflow.Engine{Store: store, Allowed: func(repo string) bool { return repo != "acme/disabled" }, Fetch: func(context.Context, string) ([]workflow.Item, error) {
+	srv.Workflows = &workflow.Engine{Store: store, Allowed: func(repo string) bool { return repo != "acme/disabled" }, Fetch: func(context.Context, string, workflow.ScanNeeds) ([]workflow.Item, error) {
 		calls++
 		return []workflow.Item{{Number: 1, Kind: "issue", Repository: "acme/repo", Open: true}}, nil
 	}}
@@ -209,5 +211,39 @@ func TestWorkflowLibraryEnableValidationAndUnavailableScheduler(t *testing.T) {
 		if rec.Code != http.StatusNotImplemented {
 			t.Fatal(method, rec.Code)
 		}
+	}
+}
+
+func TestThrottledWorkflowClaimRecoversOriginalEvent(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	w := workflow.Definition{ID: "issues", Name: "Implement", Repository: "acme/repo", Enabled: true, Trigger: workflow.Trigger{Event: "issue.opened"}, Filters: workflow.Filters{Mode: "all"}, Task: workflow.Task{Kind: "implement", Instructions: "Implement issue", IssueLinkMode: "reference"}, Merge: workflow.Merge{Method: "squash"}}
+	store := &workflow.Store{Path: filepath.Join(t.TempDir(), "workflows.json")}
+	if err := store.Initialize(workflow.Document{Version: workflow.Version, Workflows: []workflow.Definition{w}}); err != nil {
+		t.Fatal(err)
+	}
+	s.Workflows = &workflow.Engine{Store: store, Enabled: func() bool { return true }, Allowed: func(string) bool { return true }}
+	run := issueRunConfig(GitHubRepo{FullName: w.Repository}, f.issue, config.GitHubIssueLinkReference)
+	run.Workflow = &config.WorkflowRunConfig{ID: w.ID, EventID: "activation", Name: w.Name, Instructions: w.Task.Instructions}
+	now := time.Now()
+	s.GitHubCooldown.Now = func() time.Time { return now }
+	s.GitHubIssueRunner = githubIssueRunnerFunc(func(context.Context, execx.Command) (execx.Result, error) {
+		return execx.Result{Stderr: "gh: API rate limit exceeded"}, errors.New("exit status 1")
+	})
+	if _, err := s.SubmitWorkflowRun(t.Context(), run, f.submit); !errors.Is(err, workflow.ErrIssueAdmissionPending) {
+		t.Fatal(err)
+	}
+	record := latestRecoveryRecord(t, s)
+	if record.State != "retry_wait" || len(f.submissions) != 0 {
+		t.Fatal(record.State, len(f.submissions))
+	}
+	expireIssueRetry(t, s, record.ID)
+	now = now.Add(time.Minute)
+	s.GitHubIssueRunner = f
+	if err := s.ReconcileIssueWork(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.submissions) != 1 || f.submissions[0].Workflow.EventID != "activation" {
+		t.Fatal("lost activation or wrong submission count")
 	}
 }

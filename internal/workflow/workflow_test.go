@@ -101,7 +101,7 @@ func testEngine(t *testing.T, w ...Definition) (*Engine, *[]Item, *int) {
 	}
 	items := []Item{}
 	submitted := 0
-	e := &Engine{Store: store, StatePath: filepath.Join(root, "state.json"), Enabled: func() bool { return true }, Allowed: func(string) bool { return true }, Fetch: func(context.Context, string) ([]Item, error) { return items, nil }, Submit: func(context.Context, Run) (string, error) { submitted++; return "task", nil }, Status: func(string) Outcome { return Outcome{Status: "running"} }}
+	e := &Engine{Store: store, StatePath: filepath.Join(root, "state.json"), Enabled: func() bool { return true }, Allowed: func(string) bool { return true }, Fetch: func(context.Context, string, ScanNeeds) ([]Item, error) { return items, nil }, Submit: func(context.Context, Run) (string, error) { submitted++; return "task", nil }, Status: func(string) Outcome { return Outcome{Status: "running"} }}
 	return e, &items, &submitted
 }
 func tick(t *testing.T, e *Engine) {
@@ -293,7 +293,7 @@ func TestGitHubPollingAndHeadBoundMerge(t *testing.T) {
 		}
 		return execx.Result{}, nil
 	})}
-	items, err := g.Fetch(context.Background(), "acme/repo")
+	items, err := g.Fetch(context.Background(), "acme/repo", ScanNeeds{Issues: true, PullRequests: true, Viewer: true, Reviews: true, LinkedIssues: true, Checks: true})
 	if err != nil || len(items) != 2 || items[0].IssueType != "Bug" || items[0].Viewer != "agent" || !items[1].ChecksPassed {
 		t.Fatal(items, err)
 	}

@@ -107,7 +107,7 @@ func configureWorkflows(ctx context.Context, cfg localruntime.InitConfig, runner
 	}
 	// Existing configured schedules remain defaults. The builder is additive;
 	// opening it must not migrate ownership or pause configured automation.
-	gh := workflow.GitHub{Runner: runner}
+	gh := workflow.GitHub{Runner: runner, Cooldown: server.GitHubCooldown}
 	engine := &workflow.Engine{Store: store, StatePath: filepath.Join(root, "workflow-state.json"), Fetch: gh.Fetch, InspectPR: gh.Inspect, Merge: gh.Merge, Logf: logf}
 	engine.Enabled = func() bool {
 		s, err := localruntime.LoadRuntimeConfigUISettings(cfg.RuntimeConfigPath)

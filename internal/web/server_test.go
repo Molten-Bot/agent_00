@@ -1619,7 +1619,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `const response = await fetch(refresh ? "/api/github/repos?refresh=1&include_disabled=1" : "/api/github/repos?include_disabled=1", { cache: "no-store" });`) ||
 		!strings.Contains(markup, `state.githubRepos = Array.isArray(body.repos) ? body.repos : [];`) ||
 		!strings.Contains(markup, `renderRepoHistoryOptions();`) ||
-		!strings.Contains(markup, `loadGitHubReposForChat({ force: true, refresh: true, keepExisting: true })`) ||
+		!strings.Contains(markup, `loadGitHubReposForChat({ force: true, keepExisting: true })`) ||
 		!strings.Contains(markup, `loadGitHubReposForChat({ force: true, refresh: true });`) ||
 		!strings.Contains(markup, `const allRepos = Array.isArray(state.githubRepos) ? state.githubRepos : [];`) ||
 		!strings.Contains(markup, `const CHAT_REPOS_MAX_PER_PAGE = 15;`) ||

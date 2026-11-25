@@ -150,7 +150,9 @@ func TestFailedPollDoesNotResetObservations(t *testing.T) {
 		t.Fatal(err)
 	}
 	fetch := e.Fetch
-	e.Fetch = func(context.Context, string) ([]Item, error) { return nil, errors.New("temporary GitHub failure") }
+	e.Fetch = func(context.Context, string, ScanNeeds) ([]Item, error) {
+		return nil, errors.New("temporary GitHub failure")
+	}
 	if err = e.Tick(context.Background()); err == nil {
 		t.Fatal("missing poll error")
 	}

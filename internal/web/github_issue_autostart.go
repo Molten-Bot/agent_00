@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -23,60 +21,7 @@ func (s Server) runIssueGH(ctx context.Context, cmd execx.Command) (execx.Result
 	}
 	ctx, cancel := context.WithTimeout(ctx, githubIssueCommandTimeout)
 	defer cancel()
-	if s.IssueRecovery != nil && len(cmd.Args) > 0 && cmd.Args[0] == "api" {
-		cmd.Args = append([]string{"api", "--include"}, cmd.Args[1:]...)
-	}
-	result, err := s.GitHubIssueRunner.Run(ctx, cmd)
-	if s.IssueRecovery != nil {
-		result.Stdout, err = issueAPIResponse(result.Stdout, err)
-	}
-	return result, err
-}
-
-type issueRateLimitError struct {
-	error
-	RetryAt time.Time
-}
-
-func (e *issueRateLimitError) Unwrap() error { return e.error }
-
-func issueAPIResponse(raw string, cause error) (string, error) {
-	lines := strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n")
-	var body []string
-	headers := false
-	retryAt := time.Time{}
-	for _, line := range lines {
-		if strings.HasPrefix(line, "HTTP/") {
-			headers = true
-			continue
-		}
-		if headers {
-			if line == "" {
-				headers = false
-				continue
-			}
-			key, value, _ := strings.Cut(line, ":")
-			value = strings.TrimSpace(value)
-			if strings.EqualFold(key, "Retry-After") {
-				if seconds, err := strconv.Atoi(value); err == nil {
-					retryAt = time.Now().Add(time.Duration(seconds) * time.Second)
-				} else if date, err := http.ParseTime(value); err == nil {
-					retryAt = date
-				}
-			}
-			if strings.EqualFold(key, "X-RateLimit-Reset") && cause != nil {
-				if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && time.Unix(seconds, 0).After(retryAt) {
-					retryAt = time.Unix(seconds, 0)
-				}
-			}
-			continue
-		}
-		body = append(body, line)
-	}
-	if cause != nil && !retryAt.IsZero() {
-		cause = &issueRateLimitError{cause, retryAt}
-	}
-	return strings.Join(body, "\n"), cause
+	return s.GitHubCooldown.Run(ctx, s.GitHubIssueRunner, cmd, s.IssueRecovery != nil)
 }
 
 func (settings ReviewSettingsState) issueAutoStartEnabled() bool {
@@ -171,9 +116,8 @@ func (s Server) pollGitHubIssueAutoStart(ctx context.Context) {
 	if !status.Enabled {
 		return
 	}
-	status.Account, err = s.issueGitHubLogin(ctx)
-	if err != nil {
-		status.Error = err.Error()
+	if err := s.GitHubCooldown.CheckDiscovery(); err != nil {
+		status.addError(err)
 		return
 	}
 	tracked, listErr := s.IssueClaims.List()
@@ -183,25 +127,10 @@ func (s Server) pollGitHubIssueAutoStart(ctx context.Context) {
 			return
 		}
 	}
-	// Refresh the shared repository cache periodically, including repositories
-	// newly accessible to this account. Failed refreshes remain visible.
-	s.issueAutomation.mu.Lock()
-	refresh := s.issueAutomation.reposRefreshed.IsZero() || time.Since(s.issueAutomation.reposRefreshed) >= 5*time.Minute
-	s.issueAutomation.mu.Unlock()
-	var repos []GitHubRepo
-	if refresh {
-		repos, err = s.refreshGitHubRepos(ctx)
-	} else {
-		repos, err = s.resolveGitHubRepos(ctx)
-	}
+	repos, err := s.resolveGitHubRepos(ctx)
 	if err != nil {
 		status.Error = "resolve repositories: " + err.Error()
 		return
-	}
-	if refresh {
-		s.issueAutomation.mu.Lock()
-		s.issueAutomation.reposRefreshed = time.Now()
-		s.issueAutomation.mu.Unlock()
 	}
 	repos = filterDisabledGitHubRepos(repos, settings.DisabledRepositories)
 	// Filter before advancing the cursor so unselected repositories consume
@@ -218,6 +147,14 @@ func (s Server) pollGitHubIssueAutoStart(ctx context.Context) {
 			}
 		}
 	}
+	if len(scanRepos) == 0 {
+		return
+	}
+	status.Account, err = s.issueGitHubLogin(ctx)
+	if err != nil {
+		status.Error = err.Error()
+		return
+	}
 	repos = scanRepos
 	start, repoCount := 0, len(repos)
 	if s.IssueRecovery != nil && repoCount > 0 {
@@ -233,6 +170,10 @@ func (s Server) pollGitHubIssueAutoStart(ctx context.Context) {
 		}
 	}
 	for index, repo := range repos {
+		if err := s.GitHubCooldown.CheckDiscovery(); err != nil {
+			status.addError(err)
+			return
+		}
 		if ctx.Err() != nil {
 			status.Error = ctx.Err().Error()
 			return
@@ -347,7 +288,7 @@ func (s Server) pollGitHubIssueAutoStart(ctx context.Context) {
 }
 
 func (s Server) issueGitHubLogin(ctx context.Context) (string, error) {
-	result, err := s.runIssueGH(ctx, execx.Command{Name: "gh", Args: []string{"api", "user"}})
+	result, err := s.runIssueGH(ctx, execx.Command{Name: "gh", Args: []string{"api", "--cache", "10m", "user"}})
 	if err != nil {
 		return "", fmt.Errorf("resolve GitHub account: %w", err)
 	}
