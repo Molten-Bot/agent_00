@@ -29,6 +29,15 @@ async function selectRepository(page, repository) {
  if (await button.getAttribute('aria-pressed') !== 'true') await button.click();
  await page.getByRole('group',{name:'Repositories',exact:true}).getByRole('button',{name:repository,exact:true}).click();
 }
+async function visibleNodeCenter(page,node) {
+ const bounds=await node.boundingBox();
+ const canvas=await page.locator('.react-flow').boundingBox();
+ const viewport=await page.evaluate(()=>({width:innerWidth,height:innerHeight}));
+ const left=Math.max(bounds.x,canvas.x,0),right=Math.min(bounds.x+bounds.width,canvas.x+canvas.width,viewport.width);
+ const top=Math.max(bounds.y,canvas.y,0),bottom=Math.min(bounds.y+bounds.height,canvas.y+canvas.height,viewport.height);
+ assert.ok(right-left>20&&bottom-top>20,'node and canvas overlap inside the viewport');
+ return {x:(left+right)/2,y:(top+bottom)/2};
+}
 test('Agent task updates its SVG when the active harness changes',async t=>{
  let finishAuth;
  const auth=new Promise(resolve=>{finishAuth=resolve});
@@ -338,10 +347,9 @@ test('switching workflows by keyboard during a drag leaves the new workflow unto
  const position=el=>el.style.transform;
  const secondPosition=await node.evaluate(position);
  await page.getByRole('button',{name:/First workflow/}).click();
- await node.hover();
+ await page.locator('.react-flow__controls-fitview').click();
  const firstPosition=await node.evaluate(position);
- const start=await node.boundingBox();
- const x=start.x+start.width/2, y=start.y+start.height/2;
+ const {x,y}=await visibleNodeCenter(page,node);
  await page.mouse.move(x,y);
  await page.mouse.down();
  await page.mouse.move(x+100,y,{steps:8});
@@ -376,9 +384,8 @@ test('workflow save and activation controls cannot interrupt a node drag', async
  const node=page.locator('.react-flow__node[data-id="task"]');
  for (const toggle of [enable,pause]) {
   await page.getByRole('button',{name:'Dismiss message'}).click();
-  await node.hover();
-  const start=await node.boundingBox();
-  const x=start.x+start.width/2, y=start.y+start.height/2;
+  await page.locator('.react-flow__controls-fitview').click();
+  const {x,y}=await visibleNodeCenter(page,node);
   await page.mouse.move(x,y);
   await page.mouse.down();
   await page.mouse.move(x+70,y,{steps:8});
