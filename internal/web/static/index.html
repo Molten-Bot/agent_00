@@ -3448,6 +3448,7 @@
           configuredAgentLabel: state.ui.configuredAgentLabel,
         }, state.agentAuth);
       }
+      window.mountWorkflowEditor?.(taskAgentLogoURL());
     }
 
     function setAgentAuthVerifyPending(pending) {
@@ -9049,7 +9050,7 @@
         });
       }
       return workflowEditorLoad.then(() => {
-        window.mountWorkflowEditor();
+        window.mountWorkflowEditor(taskAgentLogoURL());
         window.dispatchEvent(new CustomEvent("workflow-display", { detail: "workflow" }));
       }).catch(error => {
         document.getElementById("workflow-editor-root").textContent = error.message;
