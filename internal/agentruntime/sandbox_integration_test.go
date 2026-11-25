@@ -178,13 +178,19 @@ func TestCodexReadOnlyReviewCanReadDiskWorkspace(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "marker"), []byte("prepared checkout"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("review shell reached the GitHub stand-in: %s", r.Method)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer server.Close()
 	rt, err := Resolve(HarnessCodex, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	cmd, err := rt.BuildCommand(repo, "Review", RunOptions{
 		WorkspaceDir: root, DisallowedTools: []string{"Edit", "Write"},
-		Env: []string{"PATH=" + os.Getenv("PATH"), "HOME=" + root, "CODEX_HOME=" + home},
+		Env: []string{"PATH=" + os.Getenv("PATH"), "HOME=" + root, "CODEX_HOME=" + home,
+			"PROBE_URL=" + server.URL, "GH_TOKEN=review-test-token"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -205,6 +211,11 @@ func TestCodexReadOnlyReviewCanReadDiskWorkspace(t *testing.T) {
  test "$(cat marker)" = "prepared checkout"
  if (printf changed > marker) 2>/dev/null; then exit 1; fi
  if (printf created > new-file) 2>/dev/null; then exit 1; fi
+ test -n "$GH_TOKEN"
+ command -v curl >/dev/null
+ if curl --silent --noproxy '*' --max-time 3 --request POST --header "Authorization: Bearer $GH_TOKEN" "$PROBE_URL"; then
+     exit 1
+ fi
  `)
 	cmd.Stdin = ""
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

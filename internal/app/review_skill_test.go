@@ -18,6 +18,10 @@ func TestReviewSkillPromptAndRuntimePaths(t *testing.T) {
 	for _, want := range []string{
 		"The bundled review skill is mandatory",
 		"Do not edit files, commit, push",
+		"The harness alone publishes the review",
+		"Do not post reviews, comments, or progress updates",
+		"Return only one JSON object in your final response",
+		"GitHub publication, connectivity for publication, and tool permissions for publication have no bearing",
 		`{"status":"findings"`,
 		"never copy a list of choices",
 		"Review the pull request.",

@@ -590,7 +590,9 @@ func TestBuildCommandClaudeDisallowedTools(t *testing.T) {
 		"--", "claude",
 		"--print", "--output-format", "text", "--prompt-suggestions", "false",
 		"--no-session-persistence", "--dangerously-skip-permissions",
-		"--disallowedTools", "Edit", "Write", "NotebookEdit", "--",
+		"--safe-mode", "--tools", "Read,Glob,Grep",
+		"--settings", `{"disableAllHooks":true,"disableClaudeAiConnectors":true}`,
+		"--disallowedTools", "mcp__*", "Edit", "Write", "NotebookEdit", "--",
 	}
 	if cmd.Name != "codex" || cmd.Dir != "/tmp/repo" || !reflect.DeepEqual(cmd.Args, wantArgs) {
 		t.Fatalf("unexpected claude command: %+v", cmd)

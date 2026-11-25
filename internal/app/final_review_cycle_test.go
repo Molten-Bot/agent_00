@@ -16,86 +16,8 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
-	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/workflow"
 )
-
-func TestPostReviewSummaryFromRelativeServeConfig(t *testing.T) {
-	t.Chdir(t.TempDir())
-	configPath := filepath.Join(".agent00", "issue-queue", "config.json")
-	stateDir := filepath.Dir(configPath)
-	if err := os.MkdirAll(stateDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(configPath, []byte(`{"version":"v1"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := localruntime.LoadRuntimeConfig(configPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	runDir := filepath.Join(filepath.Dir(cfg.RuntimeConfigPath), "issue-workspaces", "test-run")
-	repoDir := filepath.Join(runDir, "repo")
-	if err := os.MkdirAll(repoDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	bodyPath := finalReviewSummaryBodyPath(runDir, 42, 1)
-	const summary = "No material issues found."
-	if err := os.WriteFile(bodyPath, []byte(summary), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	for _, tc := range []struct {
-		name       string
-		targetRepo string
-		commands   []string
-		attempts   int
-	}{
-		{"native review", "acme/repo", []string{"review"}, 1},
-		{"API fallback", "acme/repo", []string{"review", "api"}, 1},
-		{"PR comment fallback", "", []string{"review", "comment"}, 1},
-		{"retry", "acme/repo", []string{"review", "api", "review"}, 2},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			calls := 0
-			h := New(sessionRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
-				if cmd.Name != "gh" || cmd.Dir != repoDir || calls >= len(tc.commands) {
-					t.Fatalf("unexpected command in %q: %s %v", cmd.Dir, cmd.Name, cmd.Args)
-				}
-				operation := cmd.Args[0]
-				var path string
-				if i := slices.Index(cmd.Args, "--body-file"); i >= 0 {
-					operation, path = cmd.Args[1], cmd.Args[i+1]
-				} else {
-					path = strings.TrimPrefix(cmd.Args[len(cmd.Args)-1], "body=@")
-				}
-				if operation != tc.commands[calls] {
-					t.Fatalf("command %d = %v, want %s", calls+1, cmd.Args, tc.commands[calls])
-				}
-				if !filepath.IsAbs(path) {
-					path = filepath.Join(cmd.Dir, path)
-				}
-				if body, err := os.ReadFile(path); err != nil || string(body) != summary {
-					t.Fatalf("gh could not read summary from %q: body = %q, err = %v", cmd.Dir, body, err)
-				}
-				calls++
-				if calls < len(tc.commands) {
-					return execx.Result{}, errors.New("simulated GitHub failure")
-				}
-				return execx.Result{}, nil
-			}))
-			for attempt := 1; attempt <= tc.attempts; attempt++ {
-				err := h.postReviewSummary(context.Background(), repoDir, "42", tc.targetRepo, 42, bodyPath, "", false)
-				if wantErr := attempt < tc.attempts; (err != nil) != wantErr {
-					t.Fatalf("postReviewSummary() attempt %d = %v, want error = %t", attempt, err, wantErr)
-				}
-			}
-			if calls != len(tc.commands) {
-				t.Fatalf("gh calls = %d, want %d", calls, len(tc.commands))
-			}
-		})
-	}
-}
 
 type cleanReviewCycleRunner struct {
 	t                *testing.T
@@ -178,10 +100,6 @@ func (r *cleanReviewCycleRunner) Run(_ context.Context, cmd execx.Command) (exec
 			}
 			return execx.Result{Stdout: `{"number":7,"title":"Change","url":"https://github.com/acme/repo/pull/7","state":"OPEN","mergeable":"MERGEABLE","baseRefName":"main","headRefName":"feature","headRefOid":"head-sha","author":{"login":"dev"}}`}, nil
 		}
-		if len(cmd.Args) >= 2 && cmd.Args[0] == "pr" && cmd.Args[1] == "review" {
-			r.comments++
-			return execx.Result{}, nil
-		}
 		if len(cmd.Args) >= 2 && cmd.Args[0] == "pr" && cmd.Args[1] == "checks" {
 			r.checks++
 			return execx.Result{Stdout: "tests\tpass\n"}, nil
@@ -219,7 +137,7 @@ func TestRunFinalReviewCycleStopsAfterCleanPass(t *testing.T) {
 
 	exitCode, stage, err := h.runFinalReviewCycle(
 		context.Background(),
-		config.Config{Prompt: "Implement the requested behavior."},
+		config.Config{Prompt: "Implement the requested behavior. Post progress to the PR."},
 		repo,
 		agentruntime.Default(),
 		repoDir,
@@ -237,7 +155,7 @@ func TestRunFinalReviewCycleStopsAfterCleanPass(t *testing.T) {
 		t.Fatalf("review/comment counts = %d/%d, want 1/1", runner.reviews, runner.comments)
 	}
 	for i, prompt := range runner.prompts {
-		if !strings.Contains(prompt, "The bundled review skill is mandatory") || !strings.Contains(prompt, fmt.Sprintf("Post-task review pass %d/3", i+1)) {
+		if !strings.Contains(prompt, "The harness alone publishes the review") || !strings.Contains(prompt, fmt.Sprintf("Post-task review pass %d/3", i+1)) {
 			t.Fatalf("review prompt %d did not include skill and pass context", i+1)
 		}
 	}
@@ -347,9 +265,12 @@ func TestRunFinalReviewCycleDisallowsMutatingToolsOnClaude(t *testing.T) {
 	if idx == -1 {
 		t.Fatalf("args %v did not include --disallowedTools", args)
 	}
-	wantTools := []string{"Edit", "Write", "NotebookEdit", "Bash", "Agent", "Skill", "Workflow", "ReportFindings"}
-	if got := args[idx+1 : idx+1+len(wantTools)]; !reflect.DeepEqual(got, wantTools) {
+	wantTools := []string{"mcp__*", "Edit", "Write", "NotebookEdit", "Bash", "Agent", "Skill", "Workflow", "ReportFindings"}
+	if got := args[idx+1 : len(args)-1]; !slices.Equal(got, wantTools) {
 		t.Fatalf("disallowed tools = %v, want %v", got, wantTools)
+	}
+	if tools, ok := flagValue(args, "--tools"); !ok || tools != "Read,Glob,Grep" || !slices.Contains(args, "--safe-mode") {
+		t.Fatalf("Claude review tools were not limited to local inspection: %v", args)
 	}
 }
 
@@ -401,6 +322,16 @@ func TestRunFinalReviewCycleUsesReadOnlySandboxOnCodex(t *testing.T) {
 	}
 	if idx == -1 || idx+1 >= len(args) {
 		t.Fatalf("args %v did not select the review permission profile", args)
+	}
+	if !slices.ContainsFunc(args, func(arg string) bool {
+		return strings.HasPrefix(arg, "permissions.agent00_review=") && strings.HasSuffix(arg, "network={enabled=false}}")
+	}) || !slices.Contains(args, "mcp_servers={}") {
+		t.Fatalf("review retained shell networking or configured MCP servers: %v", args)
+	}
+	for _, feature := range []string{"apps", "plugins", "hooks", "browser_use", "computer_use"} {
+		if !containsSequence(args, []string{"--disable", feature}) {
+			t.Fatalf("review invocation did not disable %s: %v", feature, args)
+		}
 	}
 	for _, arg := range args {
 		if arg == "--add-dir" || strings.Contains(arg, "sandbox_workspace_write") {
@@ -489,10 +420,6 @@ func (r *finalFindingReviewCycleRunner) Run(_ context.Context, cmd execx.Command
 	case "gh":
 		if len(cmd.Args) >= 2 && cmd.Args[0] == "pr" && cmd.Args[1] == "view" {
 			return execx.Result{Stdout: `{"number":7,"title":"Change","url":"https://github.com/acme/repo/pull/7","state":"OPEN","mergeable":"MERGEABLE","baseRefName":"main","headRefName":"feature","headRefOid":"head-sha","author":{"login":"dev"}}`}, nil
-		}
-		if len(cmd.Args) >= 2 && cmd.Args[0] == "pr" && cmd.Args[1] == "review" {
-			r.comments++
-			return execx.Result{}, nil
 		}
 		if len(cmd.Args) >= 2 && cmd.Args[0] == "pr" && cmd.Args[1] == "list" {
 			return execx.Result{Stdout: `[{"url":"https://github.com/acme/repo/pull/7"}]`}, nil

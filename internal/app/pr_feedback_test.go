@@ -175,7 +175,7 @@ func TestRunManualCodeReviewUsesOriginalPR(t *testing.T) {
 			runDir := testRunDir(guid)
 			repoDir := filepath.Join(runDir, "repo")
 			targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-			metadata := `{"number":77,"url":"https://github.com/acme/repo/pull/77","state":"OPEN","baseRefName":"main","headRefName":"feature/api"}`
+			metadata := `{"number":77,"url":"https://github.com/acme/repo/pull/77","state":"OPEN","baseRefName":"main","headRefName":"feature/api","headRefOid":"abc123"}`
 			prompt := cfg.Prompt + "\n\n" + expectedPreparedReviewContext(cfg.RepoURL, metadata, expectedReviewDiscussion("[]", "[]", "[]"), "api.go | 1 +", "+validation")
 			fake := &fakeRunner{t: t, exps: []expectedRun{
 				{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -189,18 +189,28 @@ func TestRunManualCodeReviewUsesOriginalPR(t *testing.T) {
 				{cmd: prReviewIssueCommentsCommand(repoDir, 77), res: execx.Result{Stdout: "[]"}},
 				{cmd: prReviewReviewCommentsCommand(repoDir, 77), res: execx.Result{Stdout: "[]"}},
 				{cmd: prReviewReviewsCommand(repoDir, 77), res: execx.Result{Stdout: "[]"}},
-				{cmd: reviewDiffStatCommand(repoDir, remoteTrackingRef("main"), pullRequestTrackingRef(77)), res: execx.Result{Stdout: "api.go | 1 +"}},
-				{cmd: reviewDiffPatchCommand(repoDir, remoteTrackingRef("main"), pullRequestTrackingRef(77)), res: execx.Result{Stdout: "+validation"}},
-				{cmd: codexCommandWithOptions(targetDir, withAgentsPrompt(prompt, filepath.Join(runDir, "AGENTS.md")), codexRunOptions{DisallowedTools: readOnlyReviewDisallowedTools})},
-				{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## " + cfg.BaseBranch + "\n"}},
-				{cmd: prReviewSummaryCommand(repoDir, "77", "acme/repo", reviewSummaryBodyPath(runDir, 77))},
+				{cmd: reviewDiffStatCommand(repoDir, remoteTrackingRef("main"), "abc123"), res: execx.Result{Stdout: "api.go | 1 +"}},
+				{cmd: reviewDiffPatchCommand(repoDir, remoteTrackingRef("main"), "abc123"), res: execx.Result{Stdout: "+validation"}},
+				{cmd: gitCommand(repoDir, "switch", "--detach", "abc123")},
+				{cmd: codexCommandWithOptions(targetDir, withAgentsPrompt(prompt, filepath.Join(runDir, "AGENTS.md")), codexRunOptions{DisallowedTools: readOnlyReviewDisallowedTools}), res: execx.Result{Stdout: cleanReviewOutput}},
+				{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## HEAD (no branch)\n"}},
+				{cmd: headCommitSHACommand(repoDir), res: execx.Result{Stdout: "abc123\n"}},
 			}}
-			h := New(fake)
+			api := &reviewAPIStub{t: t, head: "abc123"}
+			h := New(sessionRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+				if res, ok, err := api.handle(cmd); ok {
+					return res, err
+				}
+				return fake.Run(ctx, cmd)
+			}))
 			h.Workspace = testWorkspaceManager(guid)
 			h.TargetDirOK = func(string) bool { return true }
 			res := h.Run(context.Background(), cfg)
 			if res.Err != nil || !res.NoChanges || res.PRURL != prURL || res.Branch != "feature/api" {
 				t.Fatalf("Run() = %+v, want read-only review on original PR", res)
+			}
+			if api.posts != 1 {
+				t.Fatalf("native reviews = %d, want 1", api.posts)
 			}
 			if len(fake.exps) != 0 {
 				t.Fatalf("unconsumed expectations: %+v", fake.exps)
