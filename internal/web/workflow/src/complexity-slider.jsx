@@ -7,17 +7,17 @@ const levels = [
   { value: "advanced", label: "Advanced", Icon: Sparkles },
 ];
 
-export function ComplexitySlider({ value, defaultComplexity, onChange }) {
+export function ComplexitySlider({ value, defaultComplexity, onChange, label = "Complexity", inheritedLabel = "Use settings default" }) {
   const id = useId();
   const inherited = levels.find((level) => level.value === defaultComplexity) ?? levels[1];
   const stops = [
-    { value: undefined, label: `Use settings default (${inherited.label})`, Icon: inherited.Icon },
+    { value: undefined, label: `${inheritedLabel} (${inherited.label})`, Icon: inherited.Icon },
     ...levels,
   ];
   const index = Math.max(0, stops.findIndex((stop) => stop.value === value));
   return (
     <div className="wf-field complexity-slider">
-      <label htmlFor={id}>Complexity</label>
+      <label htmlFor={id}>{label}</label>
       <input id={id} type="range" min="0" max={stops.length - 1} step="1"
         value={index} title={stops[index].label} aria-valuetext={stops[index].label}
         onChange={(event) => onChange(stops[Number(event.target.value)].value)} />

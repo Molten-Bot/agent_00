@@ -10166,7 +10166,7 @@ func TestFinalReviewFixPromptRequiresMeasuredQualityTargets(t *testing.T) {
 func TestFinalReviewPromptExcludesBranchHistoryRepairs(t *testing.T) {
 	t.Parallel()
 
-	prompt := finalReviewPrompt("Implement the requested behavior.", "Prepared review context.", 1, 3)
+	prompt := finalReviewPrompt("Implement the requested behavior.", "", "Prepared review context.", 1, 3)
 	for _, want := range []string{
 		"The harness exclusively owns branch selection, base synchronization, merges, rebases, cherry-picks, commits, pushes",
 		"Never report ancestry, branch freshness, commit topology",

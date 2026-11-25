@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
+	"github.com/Molten-Bot/agent_00/internal/config"
 )
 
 const Version = 2
@@ -24,17 +25,18 @@ type Document struct {
 	Migration                string       `json:"migration,omitempty"`
 }
 type Definition struct {
-	ID             string              `json:"id"`
-	Name           string              `json:"name"`
-	Repository     string              `json:"repository"`
-	Enabled        bool                `json:"enabled"`
-	IncludeBacklog bool                `json:"includeBacklog"`
-	Trigger        Trigger             `json:"trigger"`
-	Filters        Filters             `json:"filters"`
-	Task           Task                `json:"task"`
-	ReviewCycles   int                 `json:"reviewCycles"`
-	Merge          Merge               `json:"merge"`
-	Positions      map[string]Position `json:"positions,omitempty"`
+	ID             string                   `json:"id"`
+	Name           string                   `json:"name"`
+	Repository     string                   `json:"repository"`
+	Enabled        bool                     `json:"enabled"`
+	IncludeBacklog bool                     `json:"includeBacklog"`
+	Trigger        Trigger                  `json:"trigger"`
+	Filters        Filters                  `json:"filters"`
+	Task           Task                     `json:"task"`
+	ReviewCycles   int                      `json:"reviewCycles"`
+	ReviewAgent    config.ReviewAgentConfig `json:"reviewAgent,omitzero"`
+	Merge          Merge                    `json:"merge"`
+	Positions      map[string]Position      `json:"positions,omitempty"`
 }
 type Position struct {
 	X float64 `json:"x"`
@@ -172,6 +174,9 @@ func (w Definition) Validate() error {
 	}
 	if w.ReviewCycles < 0 || w.ReviewCycles > 10 {
 		return fmt.Errorf("review cycles must be between 0 and 10")
+	}
+	if err := w.ReviewAgent.Validate(); err != nil {
+		return err
 	}
 	if !contains([]string{"reference", "close"}, w.Task.IssueLinkMode) {
 		return fmt.Errorf("issue link mode must be reference or close")

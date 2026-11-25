@@ -279,10 +279,10 @@ test('in-app workflows keep defaults opt-in and compose review and merge steps',
  assert.equal(await page.locator('.wf-node').count(),3);
  assert.equal(await page.locator('[data-id="trigger"] .lucide-square-pen').count(),1);
  await page.getByLabel('Review step',{exact:true}).check();
- assert.equal(await page.locator('.wf-node').count(),4);
+ assert.equal(await page.locator('.wf-node').count(),5);
  await page.getByRole('slider',{name:'Review passes',exact:true}).fill('2');
  await page.getByLabel('Merge step',{exact:true}).check();
- assert.equal(await page.locator('.wf-node').count(),5);
+ assert.equal(await page.locator('.wf-node').count(),6);
  await waitForSaved(page);
  const w=getDocument().workflows[0];
  assert.equal(w.trigger.event,'app.prompt');assert.equal(w.enabled,false);assert.equal(w.reviewCycles,2);assert.equal(w.merge.enabled,true);
@@ -297,29 +297,30 @@ test('in-app workflows keep defaults opt-in and compose review and merge steps',
  assert.equal(await page.locator('[data-id="trigger"] .lucide-file-json').count(),1);
 });
 
-test('the agent and review are connected by a bidirectional line with a live cycle count', async t => {
- const {page}=await openEditor(t);
+test('review cycles loop through an independently configurable review agent', async t => {
+ const {page,getDocument}=await openEditor(t);
  await selectRepository(page,'acme/repo');
  await page.getByRole('button',{name:'Prompt submission',exact:true}).click();
  const reviewStep=page.getByLabel('Review step',{exact:true});
- const edge=page.getByTestId('rf__edge-task-review');
+ const edge=page.getByTestId('rf__edge-review-reviewAgent');
  const label=page.locator('.wf-review-cycle-label');
  assert.equal(await edge.count(),0);
  await reviewStep.check();
  await label.getByText('1',{exact:true}).waitFor();
  assert.equal(await label.locator('svg.lucide-refresh-ccw-dot').count(),1);
- assert.equal(await edge.getAttribute('aria-label'),'Agent task and review, up to 1 cycle');
- const path=edge.locator('.react-flow__edge-path');
- const marker=await path.getAttribute('marker-start');
+ assert.equal(await edge.getAttribute('aria-label'),'Review cycles and review agent, up to 1 cycle');
+ const paths=edge.locator('.react-flow__edge-path');
+ assert.equal(await paths.count(),2);
+ const marker=await paths.first().getAttribute('marker-end');
  assert.match(marker,/arrowclosed/);
- assert.equal(await path.getAttribute('marker-end'),marker);
- assert.equal(await page.locator('.react-flow__arrowhead').getAttribute('orient'),'auto-start-reverse');
+ assert.equal(await paths.last().getAttribute('marker-end'),marker);
+ assert.match(await paths.last().getAttribute('d'),/ Q /);
 
  await page.getByRole('button',{name:'4 passes',exact:true}).click();
  await label.getByText('4',{exact:true}).waitFor();
  await page.getByRole('button',{name:'Arrange workflow horizontally',exact:true}).click();
  await page.waitForFunction(()=>{
-  const edge=document.querySelector('[data-testid="rf__edge-task-review"]');
+  const edge=document.querySelector('[data-testid="rf__edge-review-reviewAgent"]');
   const path=edge?.querySelector('.react-flow__edge-path');
   const background=document.querySelector('.wf-review-cycle-label');
   if (!path || !background) return false;
@@ -328,12 +329,39 @@ test('the agent and review are connected by a bidirectional line with a live cyc
   const end=path.getPointAtLength(length);
   const middle=path.getPointAtLength(length/2).matrixTransform(path.getScreenCTM());
   const box=background.getBoundingClientRect();
-  return Math.abs(start.x-end.x)>Math.abs(start.y-end.y)
+  return Math.abs(start.y-end.y)>Math.abs(start.x-end.x)
     && Math.abs(box.x+box.width/2-middle.x)<2 && Math.abs(box.y+box.height/2-middle.y)<2;
  });
+ const agent=page.locator('[data-id="reviewAgent"]');
+ await agent.click();
+ const prompt=page.getByLabel('Review prompt (optional)',{exact:true});
+ const complexity=page.getByLabel('Review complexity',{exact:true});
+ await prompt.fill('Check error handling and recovery.');
+ await complexity.focus();
+ await complexity.press('End');
+ assert.equal(await page.getByLabel('Base branch (optional)',{exact:true}).count(),0);
+ assert.equal(await page.getByLabel('Target directory (optional)',{exact:true}).count(),0);
+ await waitForSaved(page);
+ assert.deepEqual(getDocument().workflows[0].reviewAgent,{instructions:'Check error handling and recovery.',complexity:'advanced'});
+ await page.reload();
+ await selectRepository(page,'acme/repo');
+ await page.locator('.wf-step').first().click();
+ await agent.click();
+ assert.equal(await prompt.inputValue(),'Check error handling and recovery.');
+ assert.equal(await complexity.getAttribute('aria-valuetext'),'Advanced');
+ await page.locator('.react-flow__controls-fitview').click();
+ await page.waitForFunction(()=>{
+  const canvas=document.querySelector('.react-flow').getBoundingClientRect();
+  return [...document.querySelectorAll('.react-flow__node')].every(node=>{
+   const box=node.getBoundingClientRect();
+   return box.left>=canvas.left&&box.right<=canvas.right&&box.top>=canvas.top&&box.bottom<=canvas.bottom;
+  });
+ });
+ await page.screenshot({path:join(tmpdir(),'agent00-workflow-review-agent.png'),fullPage:true});
  await reviewStep.uncheck();
  await edge.waitFor({state:'detached'});
  await label.waitFor({state:'detached'});
+ await agent.waitFor({state:'detached'});
 });
 
 test('review pass slider supports presets, keyboard, dragging and existing saved values', async t => {
@@ -379,7 +407,7 @@ test('dragging a workflow node keeps nodes and edges visible', async t => {
 
  const node=page.locator('.react-flow__node[data-id="task"]');
  const source=node.locator('.react-flow__handle.source');
- await page.waitForFunction(()=>document.querySelectorAll('.react-flow__edge-path').length===4);
+ await page.waitForFunction(()=>document.querySelectorAll('.react-flow__edge-path').length===6);
  await node.hover();
  const initialTransform=await node.evaluate(el=>el.style.transform);
  const start=await node.boundingBox();
@@ -403,7 +431,7 @@ test('dragging a workflow node keeps nodes and edges visible', async t => {
   return window.dragFrames;
  });
  assert.ok(frames.length>1);
- assert.ok(frames.every(frame=>frame.edges===4&&!frame.hidden), 'nodes and edges stay visible while dragging');
+ assert.ok(frames.every(frame=>frame.edges===6&&!frame.hidden), 'nodes and edges stay visible while dragging');
  assert.equal(await source.getAttribute('data-handlepos'),'bottom');
  const dragged=await node.boundingBox();
  assert.notEqual(await node.evaluate(el=>el.style.transform),initialTransform);
@@ -588,7 +616,9 @@ test('layout changes stay local until a workflow settings edit', async t => {
  const horizontalPositions=structuredClone(getDocument().workflows[0].positions);
  const steps=['repository','trigger','filters','task','review','merge'];
  const values=steps.map(step=>horizontalPositions[step]);
- assert.equal(Object.keys(horizontalPositions).length,6);assert.equal(new Set(values.map(p=>p.y)).size,1);
+ assert.equal(Object.keys(horizontalPositions).length,7);assert.equal(new Set(values.map(p=>p.y)).size,1);
+ assert.equal(horizontalPositions.reviewAgent.x,horizontalPositions.review.x);
+ assert.ok(horizontalPositions.reviewAgent.y>horizontalPositions.review.y+100);
  for(let i=1;i<values.length;i++)assert.ok(values[i].x>values[i-1].x+230);
  assert.equal(await page.locator('[data-id="task"] .react-flow__handle-left').count(),1);
  assert.equal(await page.locator('[data-id="task"] .react-flow__handle-right').count(),1);
@@ -598,7 +628,10 @@ test('layout changes stay local until a workflow settings edit', async t => {
  await vertical.click();
  await page.getByLabel('Workflow name').fill('Vertical workflow');
  await waitForSaved(page);
- const verticalPositions=steps.map(step=>getDocument().workflows[0].positions[step]);
+ const positions=getDocument().workflows[0].positions;
+ const verticalPositions=steps.map(step=>positions[step]);
+ assert.equal(positions.reviewAgent.y,positions.review.y);
+ assert.ok(positions.reviewAgent.x>positions.review.x+230);
  assert.equal(new Set(verticalPositions.map(p=>p.x)).size,1);
  for(let i=1;i<verticalPositions.length;i++)assert.ok(verticalPositions[i].y>verticalPositions[i-1].y+100);
  assert.equal(await page.locator('[data-id="task"] .react-flow__handle-top').count(),1);

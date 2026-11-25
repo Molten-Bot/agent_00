@@ -602,15 +602,8 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	}
 	if cfg.Complexity != "" {
 		// A resumed publication can finish without an agent. Resolve on the
-		// first invocation and reuse the choice for review and remediation.
-		h.resolveTaskModel = sync.OnceValues(func() (agentruntime.ModelSelection, error) {
-			selection, err := runtime.ResolveModel(ctx, h.Runner, codexDir, codexOpts, cfg.Complexity)
-			if err != nil {
-				return selection, fmt.Errorf("resolve %s task complexity: %w", cfg.Complexity, err)
-			}
-			h.logf("stage=%s status=ok action=resolve_model complexity=%s model=%q cli_version=%q resolution=%s reasoning_effort=%q", agentStage, cfg.Complexity, selection.Model, selection.Version, selection.Source, selection.Effort)
-			return selection, nil
-		})
+		// first invocation and reuse the choice for follow-up agents by default.
+		h.resolveTaskModel = h.lazyTaskModel(ctx, runtime, codexDir, codexOpts, cfg.Complexity, agentStage, "resolve_model")
 	}
 	codexBasePrompt = withBackpressurePrompt(codexBasePrompt, h.collectBackpressureRequirements(repos, cfg.TargetSubdir))
 	codexTargetLabel := codexTargetLabel(cfg.TargetSubdir, len(repos) > 1)
@@ -4240,6 +4233,11 @@ func (h Harness) runFinalReviewCycle(
 	if repo == nil || h.FinalReviewPasses <= 0 || strings.TrimSpace(repo.PRURL) == "" {
 		return ExitSuccess, "", nil
 	}
+	var reviewAgent config.ReviewAgentConfig
+	if cfg.Workflow != nil {
+		reviewAgent = cfg.Workflow.ReviewAgent
+	}
+	reviewHarness := h
 
 	// Allow one extra pass beyond FinalReviewPasses so a fix applied on the
 	// final configured pass is always confirmed clean by a follow-up review
@@ -4285,7 +4283,7 @@ func (h Harness) runFinalReviewCycle(
 			h.logFinalReviewStoppedForMergedPR(*repo, pass, passLabelTotal)
 			return ExitSuccess, "", nil
 		}
-		reviewPrompt := finalReviewPrompt(cfg.Prompt, reviewContext.Prompt, pass, passLabelTotal)
+		reviewPrompt := finalReviewPrompt(cfg.Prompt, reviewAgent.Instructions, reviewContext.Prompt, pass, passLabelTotal)
 		reviewPrompt, err = withReviewSkillPrompt(reviewPrompt)
 		if err != nil {
 			return ExitConfig, "review", err
@@ -4300,8 +4298,11 @@ func (h Harness) runFinalReviewCycle(
 				reviewOpts.Env = environWithoutKeys(reviewOpts.Env, "GH_TOKEN", "GITHUB_TOKEN")
 			}
 		}
+		if pass == 1 && reviewAgent.Complexity != "" {
+			reviewHarness.resolveTaskModel = h.lazyTaskModel(ctx, runtime, repo.Dir, reviewOpts, reviewAgent.Complexity, "review", "resolve_review_model")
+		}
 		invocation := newAgentInvocationLogMetadata(runtime, "review", pass, repo.RelDir, repo.RelDir, repo.RelDir)
-		reviewRes, err := h.runCodexCapture(
+		reviewRes, err := reviewHarness.runCodexCapture(
 			ctx,
 			runtime,
 			repo.Dir,
@@ -4537,12 +4538,17 @@ func finalReviewMode(passes int) string {
 	}
 }
 
-func finalReviewPrompt(originalPrompt, preparedContext string, pass, total int) string {
+func finalReviewPrompt(originalPrompt, reviewInstructions, preparedContext string, pass, total int) string {
+	instructions := ""
+	if reviewInstructions = strings.TrimSpace(reviewInstructions); reviewInstructions != "" {
+		instructions = "Review agent instructions:\n" + reviewInstructions + "\n\n"
+	}
 	return strings.TrimSpace(fmt.Sprintf(
-		"%s\n\nPost-task review pass %d/%d. Review the current pull request independently. Follow the bundled review skill as the controlling review standard and return its structured outcome.\n\nScope note: this cycle reviews file-content changes on the existing pull request branch. The harness exclusively owns branch selection, base synchronization, merges, rebases, cherry-picks, commits, pushes, PR creation/target, and commit-message/co-author mechanics. Never report ancestry, branch freshness, commit topology, or any other issue whose only repair requires changing Git metadata or history. Omit such issues instead of asking the repair agent to perform them. Focus findings on code correctness, tests, and task completeness that can be fixed by editing working-tree files. If a structured finding nevertheless requires a branch or history change, set `requiresBranchHistoryChange` to true so the harness will not send it to a file-repair pass.\n\nOriginal task prompt:\n%s\n\n%s",
+		"%s\n\nPost-task review pass %d/%d. Review the current pull request independently. Follow the bundled review skill as the controlling review standard and return its structured outcome.\n\nScope note: this cycle reviews file-content changes on the existing pull request branch. The harness exclusively owns branch selection, base synchronization, merges, rebases, cherry-picks, commits, pushes, PR creation/target, and commit-message/co-author mechanics. Never report ancestry, branch freshness, commit topology, or any other issue whose only repair requires changing Git metadata or history. Omit such issues instead of asking the repair agent to perform them. Focus findings on code correctness, tests, and task completeness that can be fixed by editing working-tree files. If a structured finding nevertheless requires a branch or history change, set `requiresBranchHistoryChange` to true so the harness will not send it to a file-repair pass.\n\n%sOriginal task prompt:\n%s\n\n%s",
 		codeReviewLibraryPrompt(),
 		pass,
 		total,
+		instructions,
 		indentedPromptBlock(originalPrompt, "(not available)"),
 		strings.TrimSpace(preparedContext),
 	))
@@ -6721,6 +6727,17 @@ func promptPathForCodex(targetDir, path string) string {
 		rel = "./" + rel
 	}
 	return rel
+}
+
+func (h Harness) lazyTaskModel(ctx context.Context, runtime agentruntime.Runtime, dir string, opts codexRunOptions, complexity, stage, action string) func() (agentruntime.ModelSelection, error) {
+	return sync.OnceValues(func() (agentruntime.ModelSelection, error) {
+		selection, err := runtime.ResolveModel(ctx, h.Runner, dir, opts, complexity)
+		if err != nil {
+			return selection, fmt.Errorf("resolve %s task complexity: %w", complexity, err)
+		}
+		h.logf("stage=%s status=ok action=%s complexity=%s model=%q cli_version=%q resolution=%s reasoning_effort=%q", stage, action, complexity, selection.Model, selection.Version, selection.Source, selection.Effort)
+		return selection, nil
+	})
 }
 
 func (h Harness) runCodexWithHeartbeat(

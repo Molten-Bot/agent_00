@@ -56,12 +56,13 @@ const colors = {
   filters: "#e5ae58",
   task: "#a18aff",
   review: "#66b5eb",
+  reviewAgent: "#a18aff",
   merge: "#de8fbd",
 };
 const AgentLogoContext = createContext("");
 function StepNode({ id, data, selected, sourcePosition, targetPosition }) {
   const updateNodeInternals = useUpdateNodeInternals();
-  useEffect(() => { updateNodeInternals(id); }, [id, sourcePosition, targetPosition, data.last, updateNodeInternals]);
+  useEffect(() => { updateNodeInternals(id); }, [id, sourcePosition, targetPosition, data.reviewAgentSide, updateNodeInternals]);
   const agentLogoURL = useContext(AgentLogoContext);
   const Icon = icons[data.icon] || icons[data.kind];
   return (
@@ -69,8 +70,8 @@ function StepNode({ id, data, selected, sourcePosition, targetPosition }) {
       className={`wf-node ${selected ? "wf-node-selected" : ""}`}
       style={{ "--step-color": colors[data.kind] }}
     >
-      {data.kind !== "repository" && (
-        <Handle type="target" position={targetPosition || Position.Top} />
+      {targetPosition && (
+        <Handle type="target" position={targetPosition} />
       )}
       <div className="wf-node-top">
         <span className="wf-icon">
@@ -83,8 +84,11 @@ function StepNode({ id, data, selected, sourcePosition, targetPosition }) {
       </div>
       <strong>{data.label}</strong>
       <p>{data.detail}</p>
-      {!data.last && (
-        <Handle type="source" position={sourcePosition || Position.Bottom} />
+      {sourcePosition && (
+        <Handle type="source" position={sourcePosition} />
+      )}
+      {data.reviewAgentSide && (
+        <Handle id="reviewAgent" type="source" position={data.reviewAgentSide} />
       )}
     </div>
   );
@@ -92,9 +96,15 @@ function StepNode({ id, data, selected, sourcePosition, targetPosition }) {
 const nodeTypes = { workflow: StepNode };
 function ReviewCycleEdge(props) {
   const [path, x, y] = getSmoothStepPath(props);
+  const { sourceX, sourceY, targetX, targetY, sourcePosition } = props;
+  const horizontal = sourcePosition === Position.Left || sourcePosition === Position.Right;
+  const returnX = (sourceX + targetX) / 2 + (horizontal ? 0 : 48);
+  const returnY = (sourceY + targetY) / 2 + (horizontal ? 48 : 0);
+  const returnPath = `M ${targetX},${targetY} Q ${returnX},${returnY} ${sourceX},${sourceY}`;
   return (
     <>
-      <BaseEdge path={path} markerStart={props.markerStart} markerEnd={props.markerEnd} />
+      <BaseEdge path={path} markerEnd={props.markerEnd} />
+      <BaseEdge path={returnPath} markerEnd={props.markerEnd} interactionWidth={0} />
       <EdgeLabelRenderer>
         <span className="wf-review-cycle-label" aria-hidden="true"
           style={{ transform: `translate(${x}px, ${y}px) translate(-50%, -50%)` }}>
@@ -621,6 +631,17 @@ function Editor({ defaultComplexity }) {
   );
   const updateTask = (field, value) =>
     edit({ task: { ...current.task, [field]: value } });
+  const updateReviewAgent = (field, value) => {
+    const reviewAgent = { ...current.reviewAgent, [field]: value };
+    if (!value) delete reviewAgent[field];
+    edit({ reviewAgent: Object.keys(reviewAgent).length ? reviewAgent : undefined });
+  };
+  function updateReviewCycles(reviewCycles) {
+    edit({ reviewCycles });
+    if (reviewCycles && !current.reviewCycles) {
+      requestAnimationFrame(() => requestAnimationFrame(() => fitView.current?.({ padding: 32 })));
+    }
+  }
   const updateMerge = (field, value) =>
     edit({ merge: { ...current.merge, [field]: value } });
   const ruleFields = current?.trigger.event.startsWith("issue.")
@@ -797,11 +818,11 @@ function Editor({ defaultComplexity }) {
         <aside className="wf-inspector" aria-label="Step settings">
           {current && <div className="wf-composition">
             <span className="wf-section-label">COMPOSE STEPS</span>
-            {current.task.kind !== "review" && <Toggle label="Review step" value={current.reviewCycles > 0} onChange={(enabled) => { edit({reviewCycles: enabled ? 1 : 0}); setSelection(enabled ? "review" : "task"); }} />}
+            {current.task.kind !== "review" && <Toggle label="Review step" value={current.reviewCycles > 0} onChange={(enabled) => { updateReviewCycles(enabled ? 1 : 0); setSelection(enabled ? "review" : "task"); }} />}
             <Toggle label="Merge step" value={current.merge.enabled} onChange={(enabled) => { updateMerge("enabled", enabled); setSelection(enabled ? "merge" : "task"); }} />
           </div>}
 
-          <div className="wf-section-label">{selection.toUpperCase()}</div>
+          <div className="wf-section-label">{selection === "reviewAgent" ? "REVIEW AGENT" : selection.toUpperCase()}</div>
           {!current ? (
             <>
               <h2>Build an automation</h2>
@@ -1182,7 +1203,28 @@ function Editor({ defaultComplexity }) {
               {selection === "review" && (
                 <>
                   <h2>Bounded review cycles</h2>
-                  <ReviewPasses value={current.reviewCycles} onChange={(reviewCycles) => edit({ reviewCycles })} />
+                  <ReviewPasses value={current.reviewCycles} onChange={updateReviewCycles} />
+                </>
+              )}
+              {selection === "reviewAgent" && (
+                <>
+                  <h2>Review agent</h2>
+                  <ComplexitySlider
+                    label="Review complexity"
+                    inheritedLabel="Use agent task complexity"
+                    value={current.reviewAgent?.complexity}
+                    defaultComplexity={current.task.complexity || defaultComplexity}
+                    onChange={(value) => updateReviewAgent("complexity", value)}
+                  />
+                  <Field label="Review prompt (optional)">
+                    <textarea
+                      aria-label="Review prompt (optional)"
+                      rows={6}
+                      value={current.reviewAgent?.instructions || ""}
+                      onChange={(e) => updateReviewAgent("instructions", e.target.value)}
+                      placeholder="Check for regressions, missing tests, and unintended changes"
+                    />
+                  </Field>
                 </>
               )}
               {selection === "merge" && (

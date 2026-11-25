@@ -19,6 +19,7 @@ func inputWorkflowServer(t *testing.T, source string) (Server, workflow.Definiti
 	t.Helper()
 	root := t.TempDir()
 	w := workflow.Definition{ID: "input", Name: "Input", Enabled: true, Repository: "acme/repo", Trigger: workflow.Trigger{Event: "app." + source}, Filters: workflow.Filters{Mode: "all"}, Task: workflow.Task{Kind: "implement", Complexity: "easy", Instructions: "Run focused tests", IssueLinkMode: "reference"}, ReviewCycles: 2, Merge: workflow.Merge{Method: "squash", RequireApproval: true}}
+	w.ReviewAgent = config.ReviewAgentConfig{Complexity: "advanced", Instructions: "Check for regressions"}
 	store := &workflow.Store{Path: filepath.Join(root, "workflows.json")}
 	if err := store.Initialize(workflow.Document{Version: workflow.Version, Workflows: []workflow.Definition{w}}); err != nil {
 		t.Fatal(err)
@@ -35,7 +36,7 @@ func TestInputWorkflowsKeepPayloadAndJournalCompletion(t *testing.T) {
 	t.Parallel()
 	for _, source := range []string{"prompt", "json", "chat"} {
 		t.Run(source, func(t *testing.T) {
-			s, _ := inputWorkflowServer(t, source)
+			s, w := inputWorkflowServer(t, source)
 			body := []byte("{\n\"repoUrl\":\"https://github.com/acme/repo.git\",\"prompt\":\"Fix the endpoint\",\"baseBranch\":\"feature\",\"targetSubdir\":\"src\",\"responseMode\":\"off\"}")
 			var got config.Config
 			id, err := s.submitInputWorkflow(t.Context(), body, source, func(_ context.Context, data []byte) (string, error) {
@@ -49,6 +50,9 @@ func TestInputWorkflowsKeepPayloadAndJournalCompletion(t *testing.T) {
 			}
 			if got.Complexity != "easy" || got.Workflow == nil || got.Workflow.ReviewCycles != 2 || !strings.Contains(got.Prompt, "Fix the endpoint") || !strings.Contains(got.Prompt, "Run focused tests") || got.BaseBranch != "feature" || got.TargetSubdir != "src" || got.ResponseMode != "off" {
 				t.Fatalf("lost submission or policy: %+v", got)
+			}
+			if got.Workflow.ReviewAgent != w.ReviewAgent || strings.Contains(got.Prompt, w.ReviewAgent.Instructions) {
+				t.Fatalf("review instructions must be captured separately from the submitted prompt: %+v", got.Workflow)
 			}
 			if err := s.Workflows.Tick(t.Context()); err != nil {
 				t.Fatal(err)
