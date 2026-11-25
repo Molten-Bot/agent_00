@@ -333,12 +333,21 @@ type finalFindingReviewCycleRunner struct {
 	drafted      int
 	fixPrompt    string
 	emptyNetDiff bool
+	modelProbes  int
+	agentCalls   []execx.Command
 }
 
 func (r *finalFindingReviewCycleRunner) Run(_ context.Context, cmd execx.Command) (execx.Result, error) {
 	r.t.Helper()
 	switch cmd.Name {
+	case "claude":
+		if reflect.DeepEqual(cmd.Args, []string{"--version"}) {
+			r.modelProbes++
+			return execx.Result{Stdout: "claude 1.2.3"}, nil
+		}
+		fallthrough
 	case "codex":
+		r.agentCalls = append(r.agentCalls, cmd)
 		if strings.Contains(cmd.Stdin, "Automated review repair pass") {
 			r.fixes++
 			r.fixPrompt = cmd.Stdin
@@ -551,11 +560,18 @@ func TestRunFinalReviewCycleReportsRemainingFindingsAfterFinalConfirmation(t *te
 	}
 }
 
-func TestRunFinalReviewCycleContinuesAfterFixUntilClean(t *testing.T) {
+func TestRunFinalReviewCycleContinuesAfterFixWithIndependentReviewAgent(t *testing.T) {
 	runner := &finalFindingReviewCycleRunner{t: t, findingsPass: 1}
 	h := New(runner)
 	h.FinalReviewPasses = 3
 	h.PRChecksWatchTimeout = -1
+	h.resolveTaskModel = func() (agentruntime.ModelSelection, error) {
+		return agentruntime.ModelSelection{Model: "sonnet"}, nil
+	}
+	runtime, err := agentruntime.Resolve(agentruntime.HarnessClaude, "")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	repoDir := filepath.Join(t.TempDir(), "repo")
 	if err := os.MkdirAll(repoDir, 0o755); err != nil {
@@ -574,15 +590,31 @@ func TestRunFinalReviewCycleContinuesAfterFixUntilClean(t *testing.T) {
 		PushRemote:         publishRemoteOrigin,
 	}
 
+	const reviewInstructions = "Check error handling and recovery."
+	cfg := config.Config{Prompt: "Implement the requested behavior.", Workflow: &config.WorkflowRunConfig{
+		ReviewAgent: config.ReviewAgentConfig{Instructions: reviewInstructions, Complexity: "advanced"},
+	}}
 	exitCode, stage, err := h.runFinalReviewCycle(
-		context.Background(), config.Config{Prompt: "Implement the requested behavior."}, repo,
-		agentruntime.Default(), repoDir, codexRunOptions{}, "", "", "repo", "codex", false,
+		t.Context(), cfg, repo, runtime, repoDir, codexRunOptions{}, "", "", "repo", "claude", false,
 	)
 	if err != nil || exitCode != ExitSuccess || stage != "" {
 		t.Fatalf("runFinalReviewCycle() = (%d, %q, %v), want success", exitCode, stage, err)
 	}
 	if runner.reviews != 2 || runner.fixes != 1 || runner.comments != 2 || runner.checks != 1 {
 		t.Fatalf("reviews/fixes/comments/checks = %d/%d/%d/%d, want 2/1/2/1", runner.reviews, runner.fixes, runner.comments, runner.checks)
+	}
+	if runner.modelProbes != 1 {
+		t.Fatalf("review model probes = %d, want 1", runner.modelProbes)
+	}
+	for i, wantModel := range []string{"opus", "sonnet", "opus"} {
+		call := runner.agentCalls[i]
+		modelIndex := slices.Index(call.Args, "--model")
+		if modelIndex < 0 || call.Args[modelIndex+1] != wantModel {
+			t.Fatalf("agent call %d did not use model %q: %v", i+1, wantModel, call.Args)
+		}
+		if hasInstructions := strings.Contains(call.Stdin, reviewInstructions); hasInstructions != (i != 1) {
+			t.Fatalf("agent call %d received review instructions = %t", i+1, hasInstructions)
+		}
 	}
 }
 

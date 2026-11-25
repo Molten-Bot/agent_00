@@ -193,17 +193,30 @@ func promptImageFromDataURI(value string) (PromptImage, error) {
 	}, nil
 }
 
-// ReviewConfig captures structured pull-request review context for review tasks.
 // WorkflowRunConfig records the policy used for an automated run.
 type WorkflowRunConfig struct {
-	Instructions string `json:"instructions,omitempty"`
-	ID           string `json:"id"`
-	EventID      string `json:"eventId"`
-	Name         string `json:"name"`
-	ReviewCycles int    `json:"reviewCycles"`
-	PolicyHash   string `json:"policyHash,omitempty"`
+	Instructions string            `json:"instructions,omitempty"`
+	ID           string            `json:"id"`
+	EventID      string            `json:"eventId"`
+	Name         string            `json:"name"`
+	ReviewCycles int               `json:"reviewCycles"`
+	ReviewAgent  ReviewAgentConfig `json:"reviewAgent,omitzero"`
+	PolicyHash   string            `json:"policyHash,omitempty"`
 }
 
+type ReviewAgentConfig struct {
+	Instructions string `json:"instructions,omitempty"`
+	Complexity   string `json:"complexity,omitempty"`
+}
+
+func (c ReviewAgentConfig) Validate() error {
+	if c.Complexity != "" && !agentruntime.ValidComplexity(c.Complexity) {
+		return fmt.Errorf("review agent complexity must be easy, standard, or advanced")
+	}
+	return nil
+}
+
+// ReviewConfig captures structured pull-request review context for review tasks.
 type ReviewConfig struct {
 	PRNumber                 int    `json:"prNumber,omitempty"`
 	PRURL                    string `json:"prUrl,omitempty"`
@@ -407,8 +420,13 @@ func (c Config) Validate() error {
 	if c.Complexity != "" && !agentruntime.ValidComplexity(c.Complexity) {
 		return fmt.Errorf("complexity must be easy, standard, or advanced")
 	}
-	if c.Workflow != nil && (c.Workflow.ID == "" || c.Workflow.EventID == "" || c.Workflow.ReviewCycles < 0 || c.Workflow.ReviewCycles > 10) {
-		return fmt.Errorf("invalid workflow run snapshot")
+	if c.Workflow != nil {
+		if c.Workflow.ID == "" || c.Workflow.EventID == "" || c.Workflow.ReviewCycles < 0 || c.Workflow.ReviewCycles > 10 {
+			return fmt.Errorf("invalid workflow run snapshot")
+		}
+		if err := c.Workflow.ReviewAgent.Validate(); err != nil {
+			return err
+		}
 	}
 	if strings.TrimSpace(c.Version) == "" {
 		return fmt.Errorf("version is required")

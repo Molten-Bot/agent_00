@@ -71,7 +71,7 @@ func workflowRunConfigWithLibrary(r workflow.Run, resolve workflowLibraryResolve
 	if w.Task.Reviewers != nil {
 		c.Reviewers = append([]string(nil), (*w.Task.Reviewers)...)
 	}
-	c.Workflow = &config.WorkflowRunConfig{Instructions: resolvedPrompt, ID: w.ID, EventID: r.ID, Name: w.Name, ReviewCycles: w.ReviewCycles, PolicyHash: w.ExecutionPolicyHash()}
+	c.Workflow = &config.WorkflowRunConfig{Instructions: resolvedPrompt, ID: w.ID, EventID: r.ID, Name: w.Name, ReviewCycles: w.ReviewCycles, ReviewAgent: w.ReviewAgent, PolicyHash: w.ExecutionPolicyHash()}
 	if i.Kind == "issue" {
 		c.PRTitle = i.Title
 		c.GitHubIssue = &config.GitHubIssueConfig{Repository: w.Repository, Number: i.Number, Title: i.Title, URL: i.URL, LinkMode: w.Task.IssueLinkMode}
