@@ -7,7 +7,8 @@ const baseURL=process.env.HARNESS_TEST_URL||'http://127.0.0.1:7777';
 let browser;
 before(async()=>{browser=await chromium.launch({headless:true,args:['--no-sandbox']})});
 after(async()=>{await browser?.close()});
-async function openEditor(t,viewport={width:1280,height:900},initialSettings={workflow_enabled:true},getAgentAuth=()=>({required:false,ready:true,state:'ready'}),mockStorage=true){
+const defaultRepos={ok:true,repos:[{full_name:'acme/repo'},{full_name:'acme/other'},{full_name:'person/project',owner_type:'User'}]};
+async function openEditor(t,viewport={width:1280,height:900},initialSettings={workflow_enabled:true},getAgentAuth=()=>({required:false,ready:true,state:'ready'}),mockStorage=true,getRepos=()=>defaultRepos){
  let settings=initialSettings;
  const page=await browser.newPage({viewport});const errors=[];page.on('pageerror',e=>errors.push(e.message));t.after(async()=>{await page.close();assert.deepEqual(errors,[])});
  let doc={version:2,revision:0,workflows:[]};
@@ -18,7 +19,7 @@ async function openEditor(t,viewport={width:1280,height:900},initialSettings={wo
  if(url.pathname==='/api/workflows/preview')return route.fulfill({json:[{item:{number:12,title:'Example issue'},matches:true,reason:'Trigger and filters match'}]});
  if(url.pathname==='/api/library')return route.fulfill({json:{tasks:[{name:'audit',displayName:'Audit repository',prompt:'Audit the repository.'}]}});
  if(url.pathname==='/api/workflows/schedules')return route.fulfill({json:[]});
- if(url.pathname==='/api/github/repos')return route.fulfill({json:{repos:[{full_name:'acme/repo'},{full_name:'acme/other'},{full_name:'person/project',owner_type:'User'}]}});
+ if(url.pathname==='/api/github/repos')return route.fulfill({status:200,json:getRepos(url)});
  if(url.pathname==='/api/status')return route.fulfill({json:{tasks:[],events:[],repositories:[],stats:{},resources:{}}});
  if(url.pathname==='/api/agent-auth')return route.fulfill({json:{ok:true,auth:await getAgentAuth()}});
  if(url.pathname==='/api/review-settings'){if(route.request().method()==='POST')settings=route.request().postDataJSON();return route.fulfill({json:{ok:true,settings}})};
@@ -607,6 +608,54 @@ test('layout changes stay local until a workflow settings edit', async t => {
  await page.screenshot({path:join(tmpdir(),'agent00-workflow-layout.png'),fullPage:true});
 });
 
+test('Workflow shows sanitized discovery failures, preserves stale choices, and retries', async t => {
+ const limited={ok:false,error:'GitHub API rate limited; retry at 2026-12-01T12:30:00Z (private upstream details)',repos:[]};
+ let discovery=limited;
+ const {page}=await openEditor(t,undefined,undefined,undefined,true,url=>url.searchParams.has('include_disabled') ? defaultRepos : discovery);
+ const picker=page.locator('.wf-repository-picker');
+ const alert=picker.getByRole('alert');
+ const empty=picker.getByText('No repositories available. Check repository access in Settings.');
+ const retry=picker.getByRole('button',{name:'Retry repositories',exact:true});
+ await alert.waitFor();
+ assert.match(await alert.textContent(),/Retry after 2026-12-01 12:30:00 UTC/);
+ assert.doesNotMatch(await alert.textContent(),/private upstream details/);
+ assert.equal(await empty.count(),0);
+
+ // A Settings visibility update supplies a previously discovered list while the failure persists.
+ await page.waitForFunction(()=>window.RepositoryVisibility.repositories()?.length===3);
+ await page.evaluate(()=>window.dispatchEvent(new Event('repository-visibility-changed')));
+ const knownOwner=picker.getByRole('button',{name:/acme/});
+ await knownOwner.waitFor();
+ assert.match(await alert.textContent(),/list may be stale/);
+ assert.equal(await retry.isEnabled(),true);
+
+ discovery={ok:true,repos:[{full_name:'example/recovered'}]};
+ await retry.click();
+ const recovered=picker.getByRole('button',{name:'example/recovered',exact:true,pressed:true});
+ await recovered.waitFor();
+ assert.equal(await alert.count(),0);
+ assert.equal(await knownOwner.count(),0);
+
+ discovery={ok:false,error:'gh: API rate limit exceeded for user (private upstream details)',repos:[]};
+ await page.evaluate(()=>{
+  window.RepositoryVisibility.repositories=()=>null;
+  window.dispatchEvent(new Event('repository-visibility-changed'));
+ });
+ await alert.waitFor();
+ assert.match(await alert.textContent(),/Retry after the rate limit resets.*list may be stale/);
+ assert.doesNotMatch(await alert.textContent(),/private upstream details/);
+ assert.equal(await recovered.isVisible(),true);
+ assert.equal(await empty.count(),0);
+});
+
+test('Workflow shows the empty state after successful empty discovery', async t => {
+ const {page}=await openEditor(t,undefined,undefined,undefined,true,()=>({ok:true,repos:[]}));
+ const picker=page.locator('.wf-repository-picker');
+ await picker.getByText('No repositories available. Check repository access in Settings.').waitFor();
+ assert.equal(await picker.getByRole('alert').count(),0);
+ assert.equal(await picker.getByRole('button',{name:'Retry repositories'}).count(),0);
+});
+
 test('repository visibility is shared across Workflow, Studio, Chat, and Issues after Settings changes', async t => {
  const {page}=await openEditor(t,undefined,{workflow_enabled:true,chat_enabled:true,github_issues_enabled:true,disabled_repositories:['https://github.com/acme/other','person/project']});
  const picker=page.locator('.wf-repository-picker');
@@ -621,6 +670,8 @@ test('repository visibility is shared across Workflow, Studio, Chat, and Issues 
  await page.locator('#review-settings-close').click();
  await page.locator('#settings-gate').waitFor({state:'hidden'});
  await owners.waitFor({state:'detached'});
+ await picker.getByText('No repositories available. Check repository access in Settings.').waitFor();
+ assert.equal(await picker.getByRole('alert').count(),0);
  assert.equal(await page.locator('#builder-repo-select option[value*="acme/"]').count(),0);
  assert.equal(await page.locator('#library-repo-select option[value*="acme/"]').count(),0);
  await page.waitForFunction(()=>document.querySelectorAll('#github-issues-repo option[value="acme/repo"]').length===0);

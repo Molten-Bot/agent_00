@@ -120,6 +120,16 @@ const jsonOptions = (method, value) => ({
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify(value),
 });
+function repositoryDiscoveryError(error) {
+  const message = error.message;
+  if (error.status === 429 || /rate limit|too many requests|\b(?:HTTP |status=)429\b/i.test(message)) {
+    const retryAt = message.match(/\bretry at (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\b/i)?.[1];
+    return retryAt && Number.isFinite(Date.parse(retryAt))
+      ? `GitHub rate limited repository discovery. Retry after ${retryAt.replace("T", " ").replace("Z", " UTC")}.`
+      : "GitHub rate limited repository discovery. Retry after the rate limit resets.";
+  }
+  return "Unable to discover GitHub repositories. Retry or check repository access in Settings.";
+}
 const autosaveDelay = 400;
 // Browsers limit the combined body size of outstanding keepalive requests.
 const canKeepAlive = (body) => new TextEncoder().encode(body).length <= 64 * 1024;
@@ -258,6 +268,7 @@ function Editor() {
     [saving, setSaving] = useState(false),
     [templatesOpen, setTemplatesOpen] = useState(true);
   const fitView = useRef(null);
+  const reposRequestPending = useRef(false);
   const [dragging, setDragging] = useState(false);
   const settings = current && workflowSettings(current);
   const dirty = !!current && settings !== savedSettings;
@@ -312,15 +323,20 @@ function Editor() {
     }
   }
   async function loadRepos() {
+    if (reposRequestPending.current) return;
+    reposRequestPending.current = true;
     setReposLoading(true);
-    setReposError("");
     try {
-      const data = await api("/api/github/repos");
+      const data = await api("/api/github/repos", { cache: "no-store" });
+      if (data.ok === false) throw new Error(data.error || "Repository discovery failed");
       const visibility = window.RepositoryVisibility;
-      setRepos(visibility?.repositories() ?? visibility?.filter(data.repos || []) ?? data.repos ?? []);
+      const discovered = data.repos ?? [];
+      setRepos(visibility?.filter(discovered) ?? discovered);
+      setReposError("");
     } catch (e) {
-      setReposError(e.message);
+      setReposError(repositoryDiscoveryError(e));
     } finally {
+      reposRequestPending.current = false;
       setReposLoading(false);
     }
   }
@@ -334,8 +350,6 @@ function Editor() {
       const enabled = window.RepositoryVisibility?.repositories();
       if (enabled !== null && enabled !== undefined) {
         setRepos(enabled);
-        setReposLoading(false);
-        setReposError("");
       } else {
         void loadRepos();
       }
