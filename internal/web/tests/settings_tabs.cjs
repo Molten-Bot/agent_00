@@ -1447,6 +1447,13 @@ test('task runtime details appear on the complexity icon', async t => {
   await page.keyboard.press('Shift+Tab');
   await expect(icon).toBeFocused();
   await expect(details).toBeInViewport({ ratio: 1 });
+  await page.evaluate(() => {
+    const list = document.querySelector('#task-list');
+    delete list.dataset.renderSig;
+    renderTasks(state.snapshot);
+  });
+  await expect(icon).toBeFocused();
+  await expect(details).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(details).toBeHidden();
   await expect(icon).toBeFocused();

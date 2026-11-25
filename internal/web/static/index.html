@@ -12405,6 +12405,12 @@
       listNode.dataset.renderSig = renderSig;
       listNode.dataset.taskOrderSig = nextOrderSig;
       listNode.dataset.pendingRenderSig = "";
+      const nativeRuntimePopover = typeof HTMLElement.prototype.showPopover === "function";
+      const openSelector = nativeRuntimePopover ? ".task-runtime-details:popover-open" : ".task-runtime-details:not([hidden])";
+      const openRuntimeID = listNode.querySelector(openSelector)?.closest(".task")?.dataset.requestId;
+      const focusedRuntimeID = listNode.contains(document.activeElement) &&
+        document.activeElement.matches(".task-runtime-complexity button") &&
+        document.activeElement.closest(".task")?.dataset.requestId;
       listNode.replaceChildren();
 
       const renderEmptyState = (emptyOptions = {}) => {
@@ -12541,6 +12547,20 @@
         renderEmptyState();
         restoreTaskScrollAnchor(listNode, scrollAnchor);
         replaceLucideIcons(listNode);
+      if (focusedRuntimeID || openRuntimeID) {
+        for (const runtime of listNode.querySelectorAll(".task-runtime-complexity")) {
+          const id = runtime.closest(".task").dataset.requestId;
+          const button = runtime.querySelector("button");
+          const details = runtime.querySelector(".task-runtime-details");
+          if (id === focusedRuntimeID) button.focus({ preventScroll: true });
+          if (nativeRuntimePopover) {
+            if (id === openRuntimeID) details.showPopover({ source: button });
+            else if (id === focusedRuntimeID) details.hidePopover();
+          } else {
+            details.hidden = id !== openRuntimeID;
+          }
+        }
+      }
         return;
       }
 
@@ -12846,15 +12866,31 @@
 
             const details = document.createElement("span");
             details.className = "task-runtime-details";
-            details.popover = "auto";
             details.textContent = text;
-            trigger.popoverTargetElement = details;
+            if (nativeRuntimePopover) {
+              details.popover = "auto";
+              trigger.popoverTargetElement = details;
+              details.addEventListener("beforetoggle", (event) => {
+                trigger.title = event.newState === "open" ? "" : text;
+              });
+            } else {
+              details.hidden = true;
+              trigger.addEventListener("click", () => { details.hidden = !details.hidden; });
+              trigger.addEventListener("keydown", event => {
+                if (event.key === "Escape" && !details.hidden) {
+                  details.hidden = true;
+                  event.preventDefault();
+                }
+              });
+            }
             trigger.addEventListener("focus", () => {
-              if (trigger.matches(":focus-visible")) details.showPopover({ source: trigger });
+              if (!trigger.matches(":focus-visible")) return;
+              if (nativeRuntimePopover) details.showPopover({ source: trigger });
+              else details.hidden = false;
             });
-            trigger.addEventListener("blur", () => details.hidePopover());
-            details.addEventListener("beforetoggle", (event) => {
-              trigger.title = event.newState === "open" ? "" : text;
+            trigger.addEventListener("blur", () => {
+              if (nativeRuntimePopover) details.hidePopover();
+              else details.hidden = true;
             });
             runtime.addEventListener("click", (event) => event.stopPropagation());
             runtime.append(trigger, details);
@@ -14434,7 +14470,7 @@
       }
       if (event.key === "Escape" && !event.defaultPrevented && (state.taskFullscreenOpen || state.workflowFullscreenTrigger)) {
         // Let the browser dismiss the runtime popover before closing fullscreen.
-        if (document.querySelector(".task-runtime-details:popover-open")) return;
+        if (typeof HTMLElement.prototype.showPopover === "function" && document.querySelector(".task-runtime-details:popover-open")) return;
         event.preventDefault();
         closeFullscreen("escape_key");
         return;
