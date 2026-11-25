@@ -2,7 +2,6 @@ package workflow
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"strings"
 	"time"
@@ -39,8 +38,6 @@ func (e *Engine) scheduleCursor(w Definition, s State) ScheduleCursor {
 	return cursor
 }
 func (e *Engine) ScheduleStatus() ([]ScheduleStatus, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
 	d, err := e.Store.Load()
 	if err != nil {
 		return nil, err
@@ -65,47 +62,37 @@ func (e *Engine) ScheduleStatus() ([]ScheduleStatus, error) {
 	}
 	return out, nil
 }
-func (e *Engine) tickSchedule(ctx context.Context, w Definition, s *State, busy map[string]bool) error {
-	if s.Schedules == nil {
-		s.Schedules = map[string]ScheduleCursor{}
-	}
-	cursor := e.scheduleCursor(w, *s)
-	s.Schedules[w.ID] = cursor
-	now := e.now()
-	entity := strings.ToLower(w.Repository) + "#0"
-	if now.Before(cursor.NextRunAt) || busy[entity] || (e.Active != nil && e.Active(w)) {
+func (e *Engine) tickSchedule(ctx context.Context, w Definition, snapshot State) error {
+	if !e.StillEnabled(w) {
 		return nil
 	}
-	occurrence := cursor.NextRunAt
-	// Persist the occurrence and advance its cursor together before admission.
-	// Missed intervals coalesce into one run; failure retries at the next interval.
-	cursor.NextRunAt = now.Add(time.Duration(math.Round(w.Trigger.IntervalHours*60)) * time.Minute)
-	s.Schedules[w.ID] = cursor
-	r := Run{ID: digest([]any{w.ID, cursor.Policy, occurrence}), Workflow: w, Item: Item{Repository: w.Repository, Kind: "schedule", Title: w.Name}, Status: "dispatching", Reason: "Schedule due at " + occurrence.Format(time.RFC3339), StartedAt: &now, UpdatedAt: now}
-	s.Runs = append(s.Runs, r)
-	if err := e.save(*s); err != nil {
+	// Only Tick advances a cursor. Avoid an active-task lookup until it is due.
+	cursor := e.scheduleCursor(w, snapshot)
+	now := e.now()
+	due := !now.Before(cursor.NextRunAt)
+	if !due && snapshot.Schedules[w.ID] == cursor {
+		return nil
+	}
+	active := due && e.Active != nil && e.Active(w)
+	var run Run
+	err := e.transaction(func(s *State) error {
+		if s.Schedules == nil {
+			s.Schedules = map[string]ScheduleCursor{}
+		}
+		s.Schedules[w.ID] = cursor
+		item := Item{Repository: w.Repository, Kind: "schedule", Title: w.Name}
+		if !due || active || s.busy(item) {
+			return nil
+		}
+		occurrence := cursor.NextRunAt
+		cursor.NextRunAt = now.Add(time.Duration(math.Round(w.Trigger.IntervalHours*60)) * time.Minute)
+		s.Schedules[w.ID] = cursor
+		run = Run{ID: digest([]any{w.ID, cursor.Policy, occurrence}), Workflow: w, Item: item, Status: "dispatching", Reason: "Schedule due at " + occurrence.Format(time.RFC3339), StartedAt: &now, UpdatedAt: now}
+		s.Runs = append(s.Runs, run)
+		return nil
+	})
+	if err != nil || run.ID == "" {
 		return err
 	}
-	e.logRun(r, "dispatch")
-	var id string
-	var err error
-	if !e.StillEnabled(w) {
-		err = fmt.Errorf("workflow changed or was disabled before scheduled submission")
-	} else {
-		id, err = e.Submit(ctx, r)
-	}
-	index := len(s.Runs) - 1
-	if err != nil {
-		s.Runs[index].Status = "failed"
-		s.Runs[index].Reason = "Scheduled submission failed: " + err.Error()
-	} else {
-		s.Runs[index].Status = "running"
-		s.Runs[index].RequestID = id
-		busy[entity] = true
-	}
-	if err := e.save(*s); err != nil {
-		return err
-	}
-	e.logRun(s.Runs[index], "submission")
-	return nil
+	return e.submitReserved(ctx, run)
 }

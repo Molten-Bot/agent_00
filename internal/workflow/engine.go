@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+
 	"strings"
 	"sync"
 	"time"
@@ -174,22 +175,24 @@ type Outcome struct {
 	Reason       string `json:"reason,omitempty"`
 }
 type Engine struct {
-	Now       func() time.Time
-	Active    func(Definition) bool
-	Store     *Store
-	StatePath string
-	Enabled   func() bool
-	Allowed   func(string) bool
-	Fetch     func(context.Context, string, ScanNeeds) ([]Item, error)
-	Submit    func(context.Context, Run) (string, error)
-	Status    func(string) Outcome
-	Reconcile func(string) string
-	InspectPR func(context.Context, string, string) (Item, error)
-	Merge     func(context.Context, Run) error
-	Logf      func(string, ...any)
-	wakeOnce  sync.Once
-	wake      chan struct{}
-	mu        sync.Mutex
+	Now        func() time.Time
+	Active     func(Definition) bool
+	Store      *Store
+	StatePath  string
+	Enabled    func() bool
+	Allowed    func(string) bool
+	Fetch      func(context.Context, string, ScanNeeds) ([]Item, error)
+	Submit     func(context.Context, Run) (string, error)
+	Status     func(string) Outcome
+	Reconcile  func(string) string
+	InspectPR  func(context.Context, string, string) (Item, error)
+	Merge      func(context.Context, Run) error
+	Logf       func(string, ...any)
+	wakeOnce   sync.Once
+	wake       chan struct{}
+	tickMu     sync.Mutex
+	submitting map[string]bool // Live input reservations, guarded by mu.
+	mu         sync.Mutex
 }
 
 var ErrIssueAdmissionPending = errors.New("waiting for issue claim recovery")
@@ -340,152 +343,34 @@ func (e *Engine) Run(ctx context.Context) {
 	}
 }
 func (e *Engine) Tick(ctx context.Context) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	e.tickMu.Lock()
+	defer e.tickMu.Unlock()
 	featureEnabled := e.Enabled()
 	d, err := e.Store.Load()
 	if err != nil {
 		return err
 	}
+	e.mu.Lock()
 	s, err := e.load()
+	var runs []Run
+	for _, r := range s.Runs {
+		if !e.submitting[r.ID] && !terminal(r.Status) {
+			runs = append(runs, r)
+		}
+	}
+	e.mu.Unlock()
 	if err != nil {
 		return err
 	}
-	previous := make(map[string]Run, len(s.Runs))
-	for _, r := range s.Runs {
-		previous[r.ID] = r
-	}
-	save := func() error { return e.save(s) }
 	definitions := map[string]Definition{}
 	for _, w := range d.Workflows {
 		definitions[w.ID] = w
 	}
-	busy := map[string]bool{}
 	var errs []error
-	for n := range s.Runs {
-		r := &s.Runs[n]
+	for _, r := range runs {
 		w, exists := definitions[r.Workflow.ID]
-		if terminal(r.Status) {
-			continue
-		}
-		active := featureEnabled && exists && w.Enabled && e.Allowed(w.Repository) && e.Allowed(r.Item.Repository)
-		if r.Status == "dispatching" || r.Status == "pending_issue" {
-			if r.RequestID == "" && e.Reconcile != nil {
-				r.RequestID = e.Reconcile(r.ID)
-			}
-			if r.RequestID == "" && r.Outcome == nil {
-				if r.Status == "dispatching" {
-					r.Reason = "Submission outcome unknown after restart; retained to prevent duplicate work"
-				}
-				continue
-			}
-			if r.Status == "pending_issue" {
-				r.Reason = "Issue claim recovered"
-			}
-			r.Status = "running"
-		}
-		if r.Status == "running" {
-			var o Outcome
-			if r.Outcome != nil {
-				o = *r.Outcome
-			} else {
-				o = e.Status(r.RequestID)
-			}
-			if o.Status == "failed" {
-				r.Status = "failed"
-				r.Reason = o.Reason
-			} else if o.Status == "succeeded" {
-				r.PRURL = o.PRURL
-				if r.PRURL == "" {
-					r.PRURL = r.Item.URL
-				}
-				if r.Workflow.Merge.Enabled && (!exists || w.Merge.Enabled) && strings.Contains(r.PRURL, "/pull/") {
-					r.Status = "waiting"
-					r.Reason = "Waiting for checks and merge requirements"
-					if r.Workflow.Task.Kind == "review" {
-						if !o.ReviewClean || o.ReviewedHead == "" {
-							r.Status = "completed"
-							r.Reason = "Review posted; no confirmed clean review, so merge was not attempted"
-						} else {
-							r.MergeHead = o.ReviewedHead
-						}
-					}
-				} else {
-					r.Status = "succeeded"
-					r.Reason = "Task completed"
-				}
-			}
-		}
-		if r.Status == "waiting" && (!exists || !w.Merge.Enabled) {
-			r.Status = "succeeded"
-			r.Reason = "Automatic merge disabled in current definition"
-		}
-		if r.Status == "waiting" && !active {
-			r.Reason = "Merge paused: workflow feature, workflow, or repository is disabled"
-		}
-		if r.Status == "waiting" && active {
-			i, inspectErr := e.InspectPR(ctx, r.Item.Repository, r.PRURL)
-			if inspectErr != nil {
-				errs = append(errs, inspectErr)
-				continue
-			}
-			if r.MergeHead == "" && i.HeadSHA != "" {
-				r.MergeHead = i.HeadSHA
-				if err := save(); err != nil {
-					return err
-				}
-			}
-			if i.Merged {
-				r.Status = "merged"
-				r.Reason = "Pull request merged"
-			} else if !i.Open {
-				r.Status = "completed"
-				r.Reason = "Pull request closed"
-			} else if i.Draft {
-				r.Reason = "Waiting for pull request to leave draft"
-			} else if i.ReviewDecision == "CHANGES_REQUESTED" {
-				r.Reason = "Waiting for requested changes"
-			} else if !i.ChecksPassed {
-				r.Reason = "Waiting for successful checks"
-			} else if r.Workflow.Merge.RequireApproval && !i.HumanApproved {
-				r.Reason = "Waiting for human approval"
-			} else if i.HeadSHA == "" {
-				r.Reason = "Waiting for pull request head commit"
-			} else {
-				if r.MergeHead == "" {
-					r.MergeHead = i.HeadSHA
-					if err := save(); err != nil {
-						return err
-					}
-				}
-				if r.MergeHead != i.HeadSHA {
-					r.Status = "failed"
-					r.Reason = "Head changed after merge eligibility; a new review is required"
-				} else if !e.StillEnabled(r.Workflow) {
-					r.Reason = "Workflow changed or was disabled before merge"
-				} else if mergeErr := e.Merge(ctx, *r); mergeErr != nil {
-					r.Reason = "Merge blocked: " + mergeErr.Error()
-				} else {
-					r.Status = "merged"
-					r.Reason = "Pull request merged"
-				}
-			}
-		}
-		r.UpdatedAt = e.now()
-	}
-	for _, r := range s.Runs {
-		if !terminal(r.Status) {
-			entity := fmt.Sprintf("%s#%d", strings.ToLower(r.Item.Repository), r.Item.Number)
-			busy[entity] = true
-		}
-	}
-	if err := save(); err != nil {
-		return err
-	}
-	for _, r := range s.Runs {
-		old := previous[r.ID]
-		if r.Status != old.Status || r.Reason != old.Reason {
-			e.logRun(r, "transition")
+		if err := e.reconcileRun(ctx, r, w, exists, featureEnabled); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	type snapshot struct {
@@ -511,7 +396,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 			continue
 		}
 		if w.Trigger.Event == "schedule" {
-			if err := e.tickSchedule(ctx, w, &s, busy); err != nil {
+			if err := e.tickSchedule(ctx, w, s); err != nil {
 				return err
 			}
 			continue
@@ -528,6 +413,9 @@ func (e *Engine) Tick(ctx context.Context) error {
 				errs = append(errs, fetched.err)
 				reportedErrors[key] = true
 			}
+			continue
+		}
+		if !e.StillEnabled(w) {
 			continue
 		}
 		// Configuration edits establish a fresh baseline; layout/name edits do not.
@@ -553,48 +441,37 @@ func (e *Engine) Tick(ctx context.Context) error {
 			// Keep observing a match becoming false while work is active. Only
 			// defer admission of a new match, otherwise a later false-to-true
 			// transition is lost permanently when the current task finishes.
-			if match && busy[entity] && (hadBaseline || w.IncludeBacklog) {
-				continue
-			}
 			old.Fingerprint = fingerprint
 			old.Generation++
-			s.Observations[obsKey] = old
 			if !match || (!hadBaseline && !w.IncludeBacklog) {
+				s.Observations[obsKey] = old
 				continue
 			}
-			id := digest([]any{obsKey, fingerprint, old.Generation})
 			now := e.now()
-			r := Run{ID: id, Workflow: w, Item: i, Status: "dispatching", Reason: reason, StartedAt: &now, UpdatedAt: now}
-			s.Runs = append(s.Runs, r)
-			if err := save(); err != nil {
+			r := Run{ID: digest([]any{obsKey, fingerprint, old.Generation}), Workflow: w, Item: i, Status: "dispatching", Reason: reason, StartedAt: &now, UpdatedAt: now}
+			reserved := false
+			err := e.transaction(func(current *State) error {
+				if current.busy(i) {
+					return errJournalUnchanged
+				}
+				current.Observations[obsKey] = old
+				current.Runs = append(current.Runs, r)
+				reserved = true
+				return nil
+			})
+			if err != nil {
 				return err
 			}
-			e.logRun(r, "dispatch")
-			var request string
-			var submitErr error
-			if !e.StillEnabled(w) {
-				submitErr = fmt.Errorf("workflow changed or was disabled before submission")
-			} else {
-				request, submitErr = e.Submit(ctx, r)
+			if !reserved {
+				continue
 			}
-			index := len(s.Runs) - 1
-			if errors.Is(submitErr, ErrIssueAdmissionPending) {
-				s.Runs[index].Status = "pending_issue"
-				s.Runs[index].Reason = submitErr.Error()
-				busy[entity] = true
-				errs = append(errs, submitErr)
-			} else if submitErr != nil {
-				s.Runs[index].Status = "failed"
-				s.Runs[index].Reason = "Submission failed: " + submitErr.Error()
-			} else {
-				s.Runs[index].Status = "running"
-				s.Runs[index].RequestID = request
-				busy[entity] = true
+			s.Observations[obsKey] = old
+			if err := e.submitReserved(ctx, r); err != nil {
+				if !errors.Is(err, ErrIssueAdmissionPending) {
+					return err
+				}
+				errs = append(errs, err)
 			}
-			if err := save(); err != nil {
-				return err
-			}
-			e.logRun(s.Runs[index], "submission")
 		}
 		// A successful fetch contains every open item. Closed items disappear
 		// from it; record that non-match so reopening can activate again.
@@ -607,30 +484,243 @@ func (e *Engine) Tick(ctx context.Context) error {
 		}
 		s.Baselines[baselineKey] = true
 	}
-	if err := save(); err != nil {
+	// Only the tick coordinator writes observations and baselines.
+	if err := e.transaction(func(current *State) error {
+		current.Observations, current.Baselines = s.Observations, s.Baselines
+		return nil
+	}); err != nil {
 		return err
 	}
 	return errors.Join(errs...)
 }
-func terminal(status string) bool {
-	return contains([]string{"failed", "succeeded", "merged", "completed"}, status)
+
+func (s *State) run(id string) *Run {
+	for n := range s.Runs {
+		if s.Runs[n].ID == id {
+			return &s.Runs[n]
+		}
+	}
+	return nil
 }
 
-// Complete durably records the task's semantic outcome independently of UI logs.
-func (e *Engine) Complete(id string, outcome Outcome) error {
+func (s *State) busy(item Item) bool {
+	for _, run := range s.Runs {
+		if !terminal(run.Status) && strings.EqualFold(run.Item.Repository, item.Repository) && run.Item.Number == item.Number {
+			return true
+		}
+	}
+	return false
+}
+
+var errJournalUnchanged = errors.New("no workflow journal update")
+
+// transaction reloads the last committed journal. Callbacks only modify local state.
+func (e *Engine) transaction(change func(*State) error) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	s, err := e.load()
 	if err != nil {
 		return err
 	}
-	for n := range s.Runs {
-		if s.Runs[n].ID == id {
-			s.Runs[n].Outcome = &outcome
-			return e.save(s)
+	if err := change(&s); err != nil {
+		if err == errJournalUnchanged {
+			return nil
+		}
+		return err
+	}
+	return e.save(s)
+}
+
+func (e *Engine) submitReserved(ctx context.Context, r Run) error {
+	e.logRun(r, "dispatch")
+	var request string
+	var submitErr error
+	if !e.StillEnabled(r.Workflow) {
+		submitErr = errors.New("workflow changed or was disabled before submission")
+	} else {
+		request, submitErr = e.Submit(ctx, r)
+	}
+	if err := e.finishSubmission(r.ID, request, submitErr); err != nil {
+		return err
+	}
+	if errors.Is(submitErr, ErrIssueAdmissionPending) {
+		return submitErr
+	}
+	return nil
+}
+
+func (e *Engine) finishSubmission(id, request string, submitErr error) error {
+	var result Run
+	err := e.transaction(func(s *State) error {
+		r := s.run(id)
+		if r == nil {
+			return ErrActivationNotFound
+		}
+		r.RequestID = request
+		r.UpdatedAt = e.now()
+		r.Status = "running"
+		if errors.Is(submitErr, ErrIssueAdmissionPending) {
+			r.Status = "pending_issue"
+			r.Reason = submitErr.Error()
+		} else if submitErr != nil && r.Outcome == nil {
+			// A worker may already have recorded completion before submit returns.
+			r.Status = "failed"
+			r.Reason = "Submission failed: " + submitErr.Error()
+		}
+		result = *r
+		return nil
+	})
+	if err == nil {
+		e.logRun(result, "submission")
+	}
+	return err
+}
+
+func sameOutcome(a, b *Outcome) bool { return a == b || (a != nil && b != nil && *a == *b) }
+
+func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, exists, featureEnabled bool) error {
+	r := original
+	// Only Complete can change a run being reconciled. Live submissions are
+	// excluded from the tick snapshot. Compare the outcome before replacing it.
+	expected := original
+	stale := false
+	commit := func() error {
+		return e.transaction(func(s *State) error {
+			current := s.run(r.ID)
+			if current == nil || !sameOutcome(current.Outcome, expected.Outcome) || current.Status != expected.Status || current.RequestID != expected.RequestID {
+				stale = true
+				return errJournalUnchanged
+			}
+			*current = r
+			expected = r
+			return nil
+		})
+	}
+	finish := func() error {
+		if err := commit(); err != nil {
+			return err
+		}
+		if !stale && (original.Status != r.Status || original.Reason != r.Reason) {
+			e.logRun(r, "transition")
+		}
+		return nil
+	}
+	active := featureEnabled && exists && w.Enabled && e.Allowed(w.Repository) && e.Allowed(r.Item.Repository)
+	if r.Status == "dispatching" || r.Status == "pending_issue" {
+		if r.RequestID == "" && e.Reconcile != nil {
+			r.RequestID = e.Reconcile(r.ID)
+		}
+		if r.RequestID == "" && r.Outcome == nil {
+			if r.Status == "dispatching" {
+				r.Reason = "Submission outcome unknown after restart; retained to prevent duplicate work"
+			}
+			return finish()
+		}
+		if r.Status == "pending_issue" {
+			r.Reason = "Issue claim recovered"
+		}
+		r.Status = "running"
+	}
+	if r.Status == "running" {
+		var o Outcome
+		if r.Outcome != nil {
+			o = *r.Outcome
+		} else {
+			o = e.Status(r.RequestID)
+		}
+		if o.Status == "failed" {
+			r.Status = "failed"
+			r.Reason = o.Reason
+		} else if o.Status == "succeeded" {
+			r.PRURL = o.PRURL
+			if r.PRURL == "" {
+				r.PRURL = r.Item.URL
+			}
+			if r.Workflow.Merge.Enabled && (!exists || w.Merge.Enabled) && strings.Contains(r.PRURL, "/pull/") {
+				r.Status = "waiting"
+				r.Reason = "Waiting for checks and merge requirements"
+				if r.Workflow.Task.Kind == "review" {
+					if !o.ReviewClean || o.ReviewedHead == "" {
+						r.Status = "completed"
+						r.Reason = "Review posted; no confirmed clean review, so merge was not attempted"
+					} else {
+						r.MergeHead = o.ReviewedHead
+					}
+				}
+			} else {
+				r.Status = "succeeded"
+				r.Reason = "Task completed"
+			}
 		}
 	}
-	return ErrActivationNotFound
+	if r.Status == "waiting" && (!exists || !w.Merge.Enabled) {
+		r.Status = "succeeded"
+		r.Reason = "Automatic merge disabled in current definition"
+	}
+	if r.Status == "waiting" && !active {
+		r.Reason = "Merge paused: workflow feature, workflow, or repository is disabled"
+	}
+	if r.Status == "waiting" && active {
+		i, inspectErr := e.InspectPR(ctx, r.Item.Repository, r.PRURL)
+		if inspectErr != nil {
+			return errors.Join(inspectErr, finish())
+		}
+		if r.MergeHead == "" && i.HeadSHA != "" {
+			r.MergeHead = i.HeadSHA
+		}
+		if err := commit(); err != nil {
+			return err
+		}
+		if stale {
+			return nil
+		}
+		if i.Merged {
+			r.Status = "merged"
+			r.Reason = "Pull request merged"
+		} else if !i.Open {
+			r.Status = "completed"
+			r.Reason = "Pull request closed"
+		} else if i.Draft {
+			r.Reason = "Waiting for pull request to leave draft"
+		} else if i.ReviewDecision == "CHANGES_REQUESTED" {
+			r.Reason = "Waiting for requested changes"
+		} else if !i.ChecksPassed {
+			r.Reason = "Waiting for successful checks"
+		} else if r.Workflow.Merge.RequireApproval && !i.HumanApproved {
+			r.Reason = "Waiting for human approval"
+		} else if i.HeadSHA == "" {
+			r.Reason = "Waiting for pull request head commit"
+		} else if r.MergeHead != i.HeadSHA {
+			r.Status = "failed"
+			r.Reason = "Head changed after merge eligibility; a new review is required"
+		} else if !e.Allowed(r.Item.Repository) || !e.StillEnabled(r.Workflow) {
+			r.Reason = "Workflow changed or was disabled before merge"
+		} else if mergeErr := e.Merge(ctx, r); mergeErr != nil {
+			r.Reason = "Merge blocked: " + mergeErr.Error()
+		} else {
+			r.Status = "merged"
+			r.Reason = "Pull request merged"
+		}
+	}
+
+	r.UpdatedAt = e.now()
+	return finish()
+}
+
+func terminal(status string) bool {
+	return contains([]string{"failed", "succeeded", "merged", "completed"}, status)
+}
+
+// Complete durably records the task's semantic outcome independently of UI logs.
+func (e *Engine) Complete(id string, outcome Outcome) error {
+	return e.transaction(func(s *State) error {
+		r := s.run(id)
+		if r == nil {
+			return ErrActivationNotFound
+		}
+		r.Outcome = &outcome
+		return nil
+	})
 }
 
 // StillEnabled rechecks switches after potentially slow GitHub reads.
