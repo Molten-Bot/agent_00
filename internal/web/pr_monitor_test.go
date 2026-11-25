@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/githubutil"
 )
 
 type stubPRMonitorRunner struct {
@@ -41,6 +42,11 @@ func (s *stubPRMonitorRunner) Commands() []execx.Command {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return slices.Clone(s.commands)
+}
+
+func (m *PRMergeMonitor) checkTaskPR(ctx context.Context, task Task) {
+	state, err := m.prState(ctx, task.PRURL)
+	m.applyPRState(ctx, task, state, err)
 }
 
 func TestDefaultPRMergePollIntervalIsLowLatency(t *testing.T) {
@@ -394,4 +400,45 @@ func waitForHubUITest(t *testing.T, timeout time.Duration, cond func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("condition not met before timeout")
+}
+
+func TestPRMonitorSharesReadsAndWaitsForQuota(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		broker := NewBroker()
+		for i := 0; i < 8; i++ {
+			id := fmt.Sprintf("req-%d", i)
+			broker.IngestLog("task status=start request_id=" + id)
+			broker.IngestLog(fmt.Sprintf("task status=completed request_id=%s pr_url=https://github.com/acme/repo/pull/%d", id, 1+i%4))
+		}
+		runner := &stubPRMonitorRunner{result: execx.Result{Stdout: `{"state":"OPEN"}`}}
+		cooldown := &githubutil.Cooldown{}
+		m := PRMergeMonitor{Broker: broker, Runner: runner, Cooldown: cooldown, Logf: t.Logf}
+		poll := func() { m.pollOnce(t.Context()); synctest.Wait() }
+		poll()
+		poll()
+		if got := len(runner.Commands()); got != 8 {
+			t.Fatalf("two ticks across four PRs made %d calls", got)
+		}
+		for _, cmd := range runner.Commands() {
+			if cmd.Args[0] != "pr" || cmd.Args[1] != "view" || cmd.Args[4] != "state,mergedAt,title" {
+				t.Fatalf("unexpected lookup %v", cmd.Args)
+			}
+		}
+		runner.err = errors.New("secondary rate limit")
+		poll()
+		calls := len(runner.Commands())
+		if cooldown.RetryAt().IsZero() {
+			t.Fatal("missing retry deadline")
+		}
+		poll()
+		if len(runner.Commands()) != calls {
+			t.Fatal("called GitHub during cooldown")
+		}
+		runner.err = nil
+		time.Sleep(time.Minute)
+		poll()
+		if got := len(runner.Commands()) - calls; got != 4 {
+			t.Fatalf("recovery made %d calls", got)
+		}
+	})
 }
