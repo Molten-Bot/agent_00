@@ -244,8 +244,14 @@ func isSkippedRolloutRepair(record localruntime.IssueRepairRecord) bool {
 }
 
 func isIssueRepairDependencyBlock(reason string) bool {
-	return reason == failurefollowup.OpenDependencyReason || reason == failurefollowup.UnmergedDependencyReason ||
-		reason == failurefollowup.ExternalRolloutPrerequisitesReason || reason == failurefollowup.HumanActionRequiredReason
+	switch reason {
+	case failurefollowup.OpenDependencyReason, failurefollowup.UnmergedDependencyReason,
+		failurefollowup.ExternalRolloutPrerequisitesReason, failurefollowup.ExternalEvidencePrerequisitesReason,
+		failurefollowup.HumanActionRequiredReason:
+		return true
+	default:
+		return false
+	}
 }
 
 func isIssueRepairClaimBlock(reason string) bool {
@@ -316,37 +322,33 @@ func (q *issueRepairQueue) dependencyBlockReason(record localruntime.IssueRepair
 			return failurefollowup.OpenDependencyReason, nil
 		case localruntime.IssueIncidentHumanAction:
 			return failurefollowup.HumanActionRequiredReason, nil
+		case localruntime.IssueIncidentExternalEvidence:
+			return failurefollowup.ExternalEvidencePrerequisitesReason, nil
 		}
 		sourceFailure := issue.FailureDetail()
 		if reason := failurefollowup.NonRemediableFailureReason(errors.New(sourceFailure)); isIssueRepairDependencyBlock(reason) {
 			return reason, nil
 		}
-		humanAction, humanMatched := q.humanActionBlockedFromLogs(issue.RequestID, sourceFailure)
-		if !humanMatched && failure != failurefollowup.RedactFailureDetail(sourceFailure) {
-			humanAction, humanMatched = q.humanActionBlockedFromLogs(issue.RequestID, failure)
+		reason, matched := q.externalPrerequisiteFromLogs(issue.RequestID, sourceFailure)
+		if !matched && failure != failurefollowup.RedactFailureDetail(sourceFailure) {
+			reason, matched = q.externalPrerequisiteFromLogs(issue.RequestID, failure)
 		}
-		if humanAction {
-			if issue.Incident != localruntime.IssueIncidentHumanAction {
-				if err := q.persistRecoveredHumanActionBlock(issue); err != nil {
+		matchedLogs = matchedLogs || matched
+		if reason != "" {
+			incident := localruntime.IssueIncidentExternalRollout
+			switch reason {
+			case failurefollowup.HumanActionRequiredReason:
+				incident = localruntime.IssueIncidentHumanAction
+			case failurefollowup.ExternalEvidencePrerequisitesReason:
+				incident = localruntime.IssueIncidentExternalEvidence
+			}
+			if issue.Incident != incident {
+				// Record the retry blocker before the outbox stops checking this report.
+				if err := q.persistRecoveredPrerequisiteBlock(issue, incident); err != nil {
 					return "", err
 				}
 			}
-			return failurefollowup.HumanActionRequiredReason, nil
-		}
-		blocked, matched := q.rolloutBlockedFromLogs(issue.RequestID, sourceFailure)
-		if !matched && failure != failurefollowup.RedactFailureDetail(sourceFailure) {
-			blocked, matched = q.rolloutBlockedFromLogs(issue.RequestID, failure)
-		}
-		matchedLogs = matchedLogs || matched
-		if blocked {
-			if issue.Incident == localruntime.IssueIncidentExternalRollout {
-				return failurefollowup.ExternalRolloutPrerequisitesReason, nil
-			}
-			// Record the retry blocker before the outbox stops checking this report.
-			if err := q.persistRecoveredRolloutBlock(issue); err != nil {
-				return "", err
-			}
-			return failurefollowup.ExternalRolloutPrerequisitesReason, nil
+			return reason, nil
 		}
 		if issue.Incident == localruntime.IssueIncidentExternalRollout && !matched && failurefollowup.HasTruncatedErrorDetails(sourceFailure) {
 			// Missing stdout cannot disprove a blocker recorded for this report.
@@ -378,19 +380,13 @@ func issueRepairSourceFulfilled(source localruntime.IssueClaimRecord, issues []l
 	return false
 }
 
-func (q *issueRepairQueue) rolloutBlockedFromLogs(requestID, failure string) (blocked, matched bool) {
-	return app.CheckExternalRolloutFailureFromStdout(failure, func(stage string) string {
+func (q *issueRepairQueue) externalPrerequisiteFromLogs(requestID, failure string) (reason string, matched bool) {
+	return app.ExternalPrerequisiteFailureFromStdout(failure, func(stage string) string {
 		return issueRepairAgentStdout(q.logRoot, requestID, stage)
 	})
 }
 
-func (q *issueRepairQueue) humanActionBlockedFromLogs(requestID, failure string) (blocked, matched bool) {
-	return app.CheckHumanActionFailureFromStdout(failure, func(stage string) string {
-		return issueRepairAgentStdout(q.logRoot, requestID, stage)
-	})
-}
-
-func (q *issueRepairQueue) persistRecoveredHumanActionBlock(issue localruntime.IssueClaimRecord) error {
+func (q *issueRepairQueue) persistRecoveredPrerequisiteBlock(issue localruntime.IssueClaimRecord, incident string) error {
 	lock, err := q.claims.TryLock(localruntime.IssueExecutionKey(issue.Run.GitHubIssue))
 	if err != nil {
 		return err
@@ -401,32 +397,10 @@ func (q *issueRepairQueue) persistRecoveredHumanActionBlock(issue localruntime.I
 	defer lock.Close()
 	return q.claims.Update(issue.ID, func(current *localruntime.IssueClaimRecord) error {
 		if current.RequestID != issue.RequestID || current.FailureDetail() != issue.FailureDetail() || current.Incident != issue.Incident {
-			return errors.New("source issue claim changed during human-action recovery")
+			return errors.New("source issue claim changed during prerequisite recovery")
 		}
 		if current.Outcome == "error" && current.State != "fulfilled" {
-			current.Incident = localruntime.IssueIncidentHumanAction
-			current.RunError = current.FailureDetail()
-			current.NextAttemptAt = time.Time{}
-		}
-		return nil
-	})
-}
-
-func (q *issueRepairQueue) persistRecoveredRolloutBlock(issue localruntime.IssueClaimRecord) error {
-	lock, err := q.claims.TryLock(localruntime.IssueExecutionKey(issue.Run.GitHubIssue))
-	if err != nil {
-		return err
-	}
-	if lock == nil {
-		return errors.New("source issue claim is locked")
-	}
-	defer lock.Close()
-	return q.claims.Update(issue.ID, func(current *localruntime.IssueClaimRecord) error {
-		if current.RequestID != issue.RequestID || current.FailureDetail() != issue.FailureDetail() || current.Incident != issue.Incident {
-			return errors.New("source issue claim changed during rollout recovery")
-		}
-		if current.Outcome == "error" && current.State != "fulfilled" {
-			current.Incident = localruntime.IssueIncidentExternalRollout
+			current.Incident = incident
 			current.RunError = current.FailureDetail()
 			current.NextAttemptAt = time.Time{}
 		}

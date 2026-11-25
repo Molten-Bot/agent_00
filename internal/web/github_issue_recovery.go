@@ -27,6 +27,8 @@ func issueDependencyRetryError(incident string) string {
 		return failurefollowup.ExternalRolloutPrerequisitesReason + "; explicit retry required after provisioning"
 	case localruntime.IssueIncidentHumanAction:
 		return failurefollowup.HumanActionRequiredReason + "; explicit retry required after the handoff"
+	case localruntime.IssueIncidentExternalEvidence:
+		return failurefollowup.ExternalEvidencePrerequisitesReason + "; explicit retry required after evidence and access are available"
 	default:
 		return ""
 	}
@@ -232,13 +234,13 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		reason := failurefollowup.NonRemediableFailureReason(errors.New(failure))
 		previousIncident := record.Incident
 		truncated := failurefollowup.HasTruncatedErrorDetails(failure)
-		var blockedFromLogs, matchedLogs bool
-		var humanActionFromLogs bool
-		if truncated && s.IssueRolloutBlockedFromLogs != nil {
-			blockedFromLogs, matchedLogs = s.IssueRolloutBlockedFromLogs(record.RequestID, failure)
-		}
-		if truncated && s.IssueHumanActionBlockedFromLogs != nil {
-			humanActionFromLogs, _ = s.IssueHumanActionBlockedFromLogs(record.RequestID, failure)
+		var matchedLogs bool
+		if truncated && s.IssueExternalPrerequisiteFromLogs != nil {
+			var logReason string
+			logReason, matchedLogs = s.IssueExternalPrerequisiteFromLogs(record.RequestID, failure)
+			if logReason != "" {
+				reason = logReason
+			}
 		}
 		// Legacy records used Error for both terminal reports and mutable
 		// recovery status. Only the terminal report can disprove a blocker.
@@ -252,9 +254,11 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 			record.Incident = localruntime.IssueIncidentUnmergedDependency
 		case reason == failurefollowup.OpenDependencyReason:
 			record.Incident = localruntime.IssueIncidentOpenDependency
-		case reason == failurefollowup.HumanActionRequiredReason || humanActionFromLogs:
+		case reason == failurefollowup.HumanActionRequiredReason:
 			record.Incident = localruntime.IssueIncidentHumanAction
-		case reason == failurefollowup.ExternalRolloutPrerequisitesReason, blockedFromLogs:
+		case reason == failurefollowup.ExternalEvidencePrerequisitesReason:
+			record.Incident = localruntime.IssueIncidentExternalEvidence
+		case reason == failurefollowup.ExternalRolloutPrerequisitesReason:
 			record.Incident = localruntime.IssueIncidentExternalRollout
 		case previousIncident == localruntime.IssueIncidentExternalRollout && (matchedLogs || (!truncated && terminalEvidence)):
 			record.Incident = "missing_pr"

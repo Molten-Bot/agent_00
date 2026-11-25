@@ -616,7 +616,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `code_review: { id: "code_review", label: "Code Review"`) ||
 		!strings.Contains(markup, `function isReadOnlyReviewTask(task) {`) ||
 		!strings.Contains(markup, `return taskStartSource(task) === "review" || isReadOnlyReviewTask(task);`) ||
-		!strings.Contains(markup, `const reviewStepIDs = [entry, "prepare", "clone", "code_review", "finalize"];`) ||
+		!strings.Contains(markup, `const reviewStepIDs = [...entrySteps, "prepare", "clone", "code_review", "finalize"];`) ||
 		!strings.Contains(markup, `if (isReadOnlyReviewTask(task)) {`) ||
 		!strings.Contains(markup, `if (stage === "git" || stage === "review" || TASK_PROGRESS_AGENT_STAGES.has(stage)) {`) ||
 		!strings.Contains(markup, `return "code_review";`) {
@@ -3309,9 +3309,9 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 		t.Fatalf("expected stylesheet to include task progress step icon styles")
 	}
 	if !strings.Contains(css, "filter: brightness(0) saturate(100%);") ||
-		!strings.Contains(css, ".task-progress-track {\n  position: relative;\n  height: 42px;\n}") ||
+		!strings.Contains(css, ".task-progress-track {\n  position: relative;\n  width: max-content;\n  min-width: 100%;\n  height: 42px;\n}") ||
 		!strings.Contains(css, ".task-progress-line {\n  position: absolute;\n  left: 26px;\n  right: 26px;\n  top: 50%;") ||
-		!strings.Contains(css, ".task-progress-steps {\n  position: relative;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  min-height: 42px;\n}") ||
+		!strings.Contains(css, ".task-progress-steps {\n  position: relative;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 4px;\n  min-height: 42px;\n}") ||
 		!strings.Contains(css, ".task-progress-step {\n  width: 24px;\n  height: 24px;\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  overflow: visible;") ||
 		!strings.Contains(css, ".task-progress-step.has-icon {\n  background: color-mix(in srgb, var(--surface-progress-step) 92%, var(--surface-task-button-bg));\n  border: 1px solid rgba(113, 136, 177, 0.32);\n}") ||
 		!strings.Contains(css, ".task-progress-step-icon {\n  width: 21.33px;\n  height: 21.33px;") ||

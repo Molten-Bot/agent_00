@@ -6990,13 +6990,20 @@ func codexFailureDetailWithErrorDetails(res execx.Result, failureDetail string) 
 	display = codexDisplayErrorDetail(errorDetail)
 	full = detail + "\n" + errorDetail
 	if strings.HasSuffix(display, truncatedErrorDetails) {
-		// Keep a complete blocker statement in the persisted error if the
-		// full report confirms the same blocker.
+		// Keep a concise blocker statement when the full report confirms
+		// the same classification and has no evidence of a code failure.
 		if details, ok := strings.CutPrefix(errorDetail, "Error details:"); ok {
 			first, _, _ := strings.Cut(strings.TrimSpace(details), "\n")
 			if len(first) <= maxErrorDetailChars {
-				if (failurefollowup.IsHumanActionFailure(detail, first) && failurefollowup.IsHumanActionFailure(detail, details)) ||
-					(failurefollowup.IsExternalRolloutFailure(detail, first) && failurefollowup.IsExternalRolloutFailure(detail, details)) {
+				firstReason := failurefollowup.ExternalPrerequisiteFailureReason(detail, first)
+				fullReason := failurefollowup.ExternalPrerequisiteFailureReason(detail, details)
+				if firstReason == "" && failurefollowup.IsHumanActionFailure(detail, first) {
+					firstReason = failurefollowup.HumanActionRequiredReason
+				}
+				if fullReason == "" && failurefollowup.IsHumanActionFailure(detail, details) {
+					fullReason = failurefollowup.HumanActionRequiredReason
+				}
+				if firstReason != "" && firstReason == fullReason {
 					display = "Error details: " + first
 				}
 			}
@@ -7568,69 +7575,49 @@ func isAgentReportSection(line, field string, detailsHeadingLevel int) bool {
 const truncatedErrorDetails = failurefollowup.TruncatedErrorDetails
 const maxErrorDetailChars = 320
 
-// CheckExternalRolloutFailureFromStdout reports the classification and whether
+// ExternalPrerequisiteFailureFromStdout reports the classification and whether
 // the preserved stdout matched the stored truncated report.
-func CheckExternalRolloutFailureFromStdout(failure string, readStdout func(stage string) string) (blocked, matched bool) {
+func ExternalPrerequisiteFailureFromStdout(failure string, readStdout func(stage string) string) (reason string, matched bool) {
 	failure, _, _ = strings.Cut(failure, "\npersist task logs: ")
 	if !strings.HasSuffix(failure, truncatedErrorDetails) {
-		return false, false
+		return "", false
 	}
 	stage, report, _ := strings.Cut(failure, ": ")
 	if stage != agentruntime.HarnessCodex && stage != agentruntime.HarnessClaude {
-		return false, false
+		return "", false
 	}
 	if !strings.HasPrefix(report, stage+" reported failure: ") {
-		return false, false
+		return "", false
 	}
 	stdout := readStdout(stage)
 	failed, summary := codexReportedFailureInOutput(stdout, true)
 	if !failed {
-		return false, false
+		return "", false
 	}
 	detail := codexExtractErrorDetail(stdout)
 	details, ok := strings.CutPrefix(detail, "Error details:")
 	if !ok {
-		return false, false
+		return "", false
 	}
 	// Reproduce the legacy display before applying the classification to the
 	// full report. The redacted repair prompt may be the only stored error.
 	legacy := stage + ": " + stage + " reported failure: " + summary + " " + codexDisplayErrorDetail(detail)
 	if legacy != failure && failurefollowup.RedactFailureDetail(legacy) != failure {
-		return false, false
+		return "", false
 	}
-	return failurefollowup.IsExternalRolloutFailure(summary, details), true
+	reason := failurefollowup.ExternalPrerequisiteFailureReason(summary, details)
+	if reason == "" && failurefollowup.IsHumanActionFailure(summary, details) {
+		reason = failurefollowup.HumanActionRequiredReason
+	}
+	return reason, true
 }
 
 // CheckHumanActionFailureFromStdout reclassifies a truncated handoff report
 // only when its preserved stdout matches the stored summary and contains the
 // complete human-action-only evidence.
 func CheckHumanActionFailureFromStdout(failure string, readStdout func(stage string) string) (blocked, matched bool) {
-	failure, _, _ = strings.Cut(failure, "\npersist task logs: ")
-	if !strings.HasSuffix(failure, truncatedErrorDetails) {
-		return false, false
-	}
-	stage, report, _ := strings.Cut(failure, ": ")
-	if stage != agentruntime.HarnessCodex && stage != agentruntime.HarnessClaude {
-		return false, false
-	}
-	if !strings.HasPrefix(report, stage+" reported failure: ") {
-		return false, false
-	}
-	stdout := readStdout(stage)
-	failed, summary := codexReportedFailureInOutput(stdout, true)
-	if !failed {
-		return false, false
-	}
-	detail := codexExtractErrorDetail(stdout)
-	details, ok := strings.CutPrefix(detail, "Error details:")
-	if !ok {
-		return false, false
-	}
-	legacy := stage + ": " + stage + " reported failure: " + summary + " " + codexDisplayErrorDetail(detail)
-	if legacy != failure && failurefollowup.RedactFailureDetail(legacy) != failure {
-		return false, false
-	}
-	return failurefollowup.IsHumanActionFailure(summary, details), true
+	reason, matched := ExternalPrerequisiteFailureFromStdout(failure, readStdout)
+	return reason == failurefollowup.HumanActionRequiredReason, matched
 }
 
 func codexDisplayErrorDetail(detail string) string {
