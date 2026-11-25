@@ -191,21 +191,24 @@ function Editor() {
   async function reload() {
     try {
       let d = await api("/api/workflows");
+      updateEditor({ doc: d });
       let pending;
       try {
-        pending = JSON.parse(localStorage.getItem(pendingWorkflowSaveKey) || "null");
+        pending = JSON.parse(sessionStorage.getItem(pendingWorkflowSaveKey) || "null");
       } catch (_err) {
-        localStorage.removeItem(pendingWorkflowSaveKey);
+        return;
       }
       if (pending?.workflow?.id) {
         const saved = d.workflows.find((workflow) => workflow.id === pending.workflow.id);
         if (saved && workflowSettings(saved) === workflowSettings(pending.workflow)) {
-          localStorage.removeItem(pendingWorkflowSaveKey);
+          sessionStorage.removeItem(pendingWorkflowSaveKey);
         } else {
           for (let attempt = 0; attempt < 3; attempt += 1) {
             try {
+              const before = d.workflows.find((w) => w.id === pending.workflow.id);
+              if (JSON.stringify(before ?? null) !== JSON.stringify(pending.base)) throw new Error("Workflow changed elsewhere. Reload the saved workflow before editing.");
               d = await api("/api/workflows", jsonOptions("PUT", replaceDefinition(d, pending.workflow)));
-              localStorage.removeItem(pendingWorkflowSaveKey);
+              sessionStorage.removeItem(pendingWorkflowSaveKey);
               break;
             } catch (e) {
               if (e.status !== 409 || attempt === 2) throw e;
@@ -400,9 +403,9 @@ function Editor() {
     const request = jsonOptions("PUT", document);
     const keepalive = canKeepAlive(request.body);
     const workflow = document.workflows.find((candidate) => workflowSettings(candidate) === settings);
-    const journal = workflow ? JSON.stringify({ workflow }) : "";
+    const journal = workflow ? JSON.stringify({ workflow, base: latest.current.doc.workflows.find((w) => w.id === workflow.id) ?? null }) : "";
     if (journal) {
-      try { localStorage.setItem(pendingWorkflowSaveKey, journal); } catch (_err) {}
+      try { sessionStorage.setItem(pendingWorkflowSaveKey, journal); } catch (_err) {}
     }
     setSaving(true);
     setSaveError("");
@@ -410,7 +413,7 @@ function Editor() {
       .then((doc) => {
         if (journal) {
           try {
-            if (localStorage.getItem(pendingWorkflowSaveKey) === journal) localStorage.removeItem(pendingWorkflowSaveKey);
+            if (sessionStorage.getItem(pendingWorkflowSaveKey) === journal) sessionStorage.removeItem(pendingWorkflowSaveKey);
           } catch (_err) {}
         }
         updateEditor({ doc });
@@ -421,6 +424,13 @@ function Editor() {
         if (e.status === 409) {
           return api("/api/workflows")
             .then((doc) => {
+              const base = latest.current.doc.workflows.find((w) => w.id === workflow?.id);
+              const remote = doc.workflows.find((w) => w.id === workflow?.id);
+              if (!workflow || JSON.stringify(base) !== JSON.stringify(remote)) {
+                setSaveError("Workflow changed elsewhere. Reload before saving.");
+                if (journal && sessionStorage.getItem(pendingWorkflowSaveKey) === journal) sessionStorage.removeItem(pendingWorkflowSaveKey);
+                return false;
+              }
               updateEditor({ doc });
               if (write.current) write.current.conflict = true;
               setSaveError("");

@@ -136,9 +136,9 @@ test('large pending autosaves survive leaving the page and restore on reload', a
  await waitForDraft(page);
  const workflow=getDocument().workflows[0];
  const pending={...workflow,name:'Restored large workflow',task:{...workflow.task,instructions:'x'.repeat(70_000)}};
- await page.evaluate(value=>localStorage.setItem('hubui.workflowPendingSave.v1',JSON.stringify({workflow:value})),pending);
+ await page.evaluate(value=>sessionStorage.setItem('hubui.workflowPendingSave.v1',JSON.stringify(value)),{workflow:pending,base:workflow});
  await page.reload();
- await page.waitForFunction(()=>localStorage.getItem('hubui.workflowPendingSave.v1')===null);
+ await page.waitForFunction(()=>sessionStorage.getItem('hubui.workflowPendingSave.v1')===null);
  const restored=getDocument().workflows.find(w=>w.id===workflow.id);
  assert.equal(restored.name,pending.name);
  assert.equal(restored.task.instructions.length,70_000);
