@@ -9,10 +9,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/config"
+	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
 
 // IssueClaimRecord is the durable lifecycle of one issue attempt. Version zero
@@ -30,6 +32,7 @@ type IssueClaimRecord struct {
 	Outcome          string        `json:"outcome,omitempty"`
 	RunError         string        `json:"runError,omitempty"`
 	ExitCode         int           `json:"exitCode,omitempty"`
+	CheckoutComplete bool          `json:"checkoutComplete,omitempty"`
 	PublicationReady bool          `json:"publicationReady,omitempty"`
 	Step             string        `json:"step,omitempty"`
 	StepStartedAt    time.Time     `json:"stepStartedAt,omitempty"`
@@ -60,6 +63,9 @@ type IssueClaimRecord struct {
 	ProcessBootID    string        `json:"processBootId,omitempty"`
 	NoChangeEvidence bool          `json:"noChangeEvidence,omitempty"`
 	Control          string        `json:"control,omitempty"`
+
+	// ExecutionAgentAttempts records the retry count before the active worker.
+	ExecutionAgentAttempts *int `json:"executionAgentAttempts,omitempty"`
 }
 
 // FailureDetail prefers the terminal run error over a later recovery status.
@@ -73,6 +79,9 @@ func (r IssueClaimRecord) FailureDetail() string {
 type IssueClaimStore struct {
 	Root string
 	mu   sync.Mutex
+
+	// Keep admission holds visible if the journal cannot write a receipt yet.
+	pendingStorageHolds map[string]IssueClaimRecord
 }
 
 var issueClaimIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
@@ -85,6 +94,7 @@ const (
 	IssueIncidentExternalRollout    = "external_rollout_prerequisites"
 	IssueIncidentHumanAction        = "human_action_required"
 	IssueIncidentExternalEvidence   = "external_evidence_prerequisites"
+	IssueIncidentWorkspaceStorage   = "workspace_storage"
 	IssueIncidentBranchRecovery     = "reserved_branch_recovery"
 )
 
@@ -105,7 +115,72 @@ func (s *IssueClaimStore) Save(record IssueClaimRecord) error {
 
 func (s *IssueClaimStore) save(record IssueClaimRecord) error {
 	record.UpdatedAt = time.Now().UTC()
-	return writeIssueJSON(s.Root, record.ID+".json", record)
+	if err := writeIssueJSON(s.Root, record.ID+".json", record); err != nil {
+		return err
+	}
+	delete(s.pendingStorageHolds, record.ID)
+	return nil
+}
+
+// BeginExecution reserves an inode before a worker can fill the journal volume.
+// Removing it can durably record a storage hold without allocating a new file.
+func (s *IssueClaimStore) BeginExecution(record IssueClaimRecord) error {
+	return s.beginExecution(record, os.OpenFile)
+}
+
+func (s *IssueClaimStore) beginExecution(record IssueClaimRecord, openReserve func(string, int, os.FileMode) (*os.File, error)) error {
+	if s == nil || s.Root == "" || !issueClaimIDPattern.MatchString(record.ID) {
+		return fmt.Errorf("invalid issue storage or ID")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	file, err := openReserve(issueStorageReserve(s.Root, record.ID), os.O_CREATE|os.O_WRONLY, 0600)
+	if err == nil {
+		if err = file.Close(); err == nil {
+			baseline := record.AgentAttempts
+			record.ExecutionAgentAttempts = &baseline
+			err = s.save(record)
+		}
+		if err != nil {
+			err = errors.Join(err, s.releaseExecutionReserve(record.ID))
+		}
+	}
+	if !workspace.IsDiskFull(err) {
+		return err
+	}
+
+	record.holdForJournalStorage(time.Now().UTC())
+	record.RunError = fmt.Sprintf("begin issue execution: %v", err)
+	if holdErr := s.save(record); holdErr != nil {
+		if s.pendingStorageHolds == nil {
+			s.pendingStorageHolds = make(map[string]IssueClaimRecord)
+		}
+		s.pendingStorageHolds[record.ID] = record
+		return errors.Join(err, fmt.Errorf("persist issue storage hold: %w", holdErr))
+	}
+	return err
+}
+
+func issueStorageReserve(root, id string) string {
+	return filepath.Join(root, ".storage-reserve-"+id)
+}
+
+// ReleaseExecutionReserve records a hold if the terminal receipt is still
+// missing. After a successful terminal save it only releases the reservation.
+func (s *IssueClaimStore) ReleaseExecutionReserve(id string) error {
+	if s == nil || s.Root == "" || !issueClaimIDPattern.MatchString(id) {
+		return fmt.Errorf("invalid issue storage or ID")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.releaseExecutionReserve(id)
+}
+
+func (s *IssueClaimStore) releaseExecutionReserve(id string) error {
+	if err := os.Remove(issueStorageReserve(s.Root, id)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove issue execution reserve: %w", err)
+	}
+	return syncIssueDirectory(s.Root)
 }
 
 func writeIssueJSON(root, name string, value any) error {
@@ -135,6 +210,10 @@ func writeIssueJSON(root, name string, value any) error {
 		return err
 	}
 	// Sync the directory so an acknowledged admission survives a machine restart.
+	return syncIssueDirectory(root)
+}
+
+func syncIssueDirectory(root string) error {
 	dir, err := os.Open(root)
 	if err != nil {
 		return err
@@ -156,7 +235,7 @@ func (s *IssueClaimStore) List() ([]IssueClaimRecord, error) {
 	records := make([]IssueClaimRecord, 0, len(paths))
 	var problems []error
 	for _, path := range paths {
-		record, err := readIssueRecord(path)
+		record, err := s.read(path)
 		if err != nil {
 			problems = append(problems, fmt.Errorf("issue record %s: %w", filepath.Base(path), err))
 			continue
@@ -164,6 +243,14 @@ func (s *IssueClaimStore) List() ([]IssueClaimRecord, error) {
 		records = append(records, record)
 	}
 	return records, errors.Join(problems...)
+}
+
+func (s *IssueClaimStore) read(path string) (IssueClaimRecord, error) {
+	id := strings.TrimSuffix(filepath.Base(path), ".json")
+	if record, ok := s.pendingStorageHolds[id]; ok {
+		return record, nil
+	}
+	return readIssueRecord(path)
 }
 
 func readIssueRecord(path string) (IssueClaimRecord, error) {
@@ -178,7 +265,28 @@ func readIssueRecord(path string) (IssueClaimRecord, error) {
 	if !issueClaimIDPattern.MatchString(record.ID) || filepath.Base(path) != record.ID+".json" || record.Run.GitHubIssue == nil || record.Run.GitHubIssue.Claim == nil || record.Run.GitHubIssue.Claim.ID != record.ID {
 		return record, fmt.Errorf("invalid persisted issue claim")
 	}
+	if record.ExecutionAgentAttempts != nil && record.Outcome == "" {
+		_, err := os.Stat(issueStorageReserve(filepath.Dir(path), record.ID))
+		if errors.Is(err, os.ErrNotExist) {
+			record.AgentAttempts = *record.ExecutionAgentAttempts
+			record.holdForJournalStorage(record.UpdatedAt)
+		} else if err != nil {
+			return record, err
+		}
+	}
 	return record, nil
+}
+
+func (r *IssueClaimRecord) holdForJournalStorage(stoppedAt time.Time) {
+	r.ExecutionAgentAttempts = nil
+	r.Outcome = "error"
+	r.State = "blocked"
+	r.Incident = IssueIncidentWorkspaceStorage
+	r.Error = "issue journal ran out of space; free space, then select Retry"
+	r.RunError = r.Error
+	r.StoppedAt = stoppedAt
+	r.NextAttemptAt = time.Time{}
+	r.UnlockPending = r.LabelAdded
 }
 
 func (s *IssueClaimStore) Load(id string) (IssueClaimRecord, error) {
@@ -187,7 +295,7 @@ func (s *IssueClaimStore) Load(id string) (IssueClaimRecord, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return readIssueRecord(filepath.Join(s.Root, id+".json"))
+	return s.read(filepath.Join(s.Root, id+".json"))
 }
 
 // Update prevents admission receipts from overwriting fast worker completion.
@@ -197,7 +305,7 @@ func (s *IssueClaimStore) Update(id string, change func(*IssueClaimRecord) error
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	record, err := readIssueRecord(filepath.Join(s.Root, id+".json"))
+	record, err := s.read(filepath.Join(s.Root, id+".json"))
 	if err != nil {
 		return err
 	}

@@ -888,3 +888,68 @@ func TestAdaptiveSchedulerSharesDiskSamplesWithinAdmissionPass(t *testing.T) {
 		t.Fatalf("second pass: probes = %d, third admitted = %v", probes, third.granted)
 	}
 }
+
+func TestAdaptiveSchedulerChecksIssueWorkspaceStorage(t *testing.T) {
+	t.Parallel()
+	const reserve = workspace.MinimumFreeBytes
+	for _, tc := range []struct {
+		name       string
+		storageErr error
+		free       uint64
+		total      uint64
+		force      bool
+		wantErr    error
+	}{
+		{name: "full", total: 2 * reserve},
+		{name: "undersized", free: reserve / 2, total: reserve / 2, wantErr: workspace.ErrUnsuitableStorage},
+		{name: "force cannot bypass memory mount", storageErr: workspace.ErrUnsuitableStorage, free: 2 * reserve, total: 2 * reserve, force: true, wantErr: workspace.ErrUnsuitableStorage},
+		{name: "force cannot bypass free space floor", free: reserve / 2, total: 2 * reserve, force: true, wantErr: workspace.ErrDiskFull},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			existing := filepath.Join(root, "saved-claim")
+			request := TaskDiskRequest{
+				Workspace:   workspace.NewManager(),
+				ExistingDir: existing,
+				CheckPersistentStorage: func(path string) error {
+					if path != existing {
+						t.Fatalf("checked %q, want %q", path, existing)
+					}
+					return tc.storageErr
+				},
+			}
+			request.Workspace.Root = root
+			free := tc.free
+			scheduler := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 1}, nil, WithSchedulerDiskSpace(func(path string) (string, uint64, uint64, error) {
+				if path != existing {
+					t.Fatalf("sampled %q, want %q", path, existing)
+				}
+				return "issue-device", free, tc.total, nil
+			}))
+			waiter := &taskWaiter{disk: &request, notify: make(chan struct{}, 1)}
+			if tc.force {
+				_, release, err := scheduler.AcquireWorkspace(context.Background(), tc.name, request, true)
+				if release != nil {
+					release()
+				}
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("force error = %v, want %v", err, tc.wantErr)
+				}
+				return
+			}
+			scheduler.waiters = []*taskWaiter{waiter}
+			scheduler.tryGrantLocked(0)
+			if waiter.granted || !errors.Is(waiter.err, tc.wantErr) {
+				t.Fatalf("initial admission granted = %t, error = %v, want %v", waiter.granted, waiter.err, tc.wantErr)
+			}
+			if tc.wantErr == nil {
+				free = reserve
+				scheduler.tryGrantLocked(0)
+				if !waiter.granted {
+					t.Fatal("issue remained queued after workspace space recovered")
+				}
+				scheduler.releaseFunc(waiter)()
+			}
+		})
+	}
+}

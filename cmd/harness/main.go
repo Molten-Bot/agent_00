@@ -289,6 +289,7 @@ func runServer(args []string) int {
 	}
 	logRouter := newRuntimeLogRouter(logger, monitorBroker, logLevel)
 	daemonLogger := logRouter.Printf
+	logIssueWorkspaceStorage(filepath.Join(filepath.Dir(issueClaims.Root), "issue-workspaces"), "", daemonLogger)
 
 	runtimeCfg, runtimeErr := agentruntime.Resolve(cfg.AgentHarness, cfg.AgentCommand)
 	var authGate agentAuthGate
@@ -314,7 +315,9 @@ func runServer(args []string) int {
 		// submissions for as long as SetupRequirement reports the hold.
 		daemonLogger("commit_signing status=error event=setup_required err=%q", err)
 	}
-	if err := workspace.PrepareDefaultRoots(); err != nil {
+	if err := workspace.PrepareDefaultRoots(); workspace.IsDiskFull(err) {
+		daemonLogger("workspace_storage status=warn action=prepare_default_roots err=%q", err)
+	} else if err != nil {
 		writeStderrLine(logger, fmt.Sprintf("workspace init error: %v", err))
 		return app.ExitWorkspace
 	}
@@ -501,7 +504,21 @@ func runServer(args []string) int {
 					if err := persistentLogs.Sync(); err != nil {
 						issueResult.Err = errors.Join(issueResult.Err, fmt.Errorf("persist task logs: %w", err))
 					}
-					if err := issueWork.finish(runCtx, finalState, issueResult); err != nil {
+					reported := false
+					if err := issueWork.finish(runCtx, finalState, issueResult, func() bool {
+						if !reported {
+							daemonLogger("event=issue_finish status=warn request_id=%s err=%q", requestID, "issue journal is full; free disk space so the outcome can be saved")
+							reported = true
+						}
+						// Retry the full receipt while the daemon is running.
+						// The issue journal also records a restart-safe storage hold.
+						select {
+						case <-ctx.Done():
+							return false
+						case <-time.After(5 * time.Second):
+							return true
+						}
+					}); err != nil {
 						daemonLogger("event=issue_finish status=error request_id=%s err=%q", requestID, err)
 					}
 					if wakeIssueRecovery != nil {
@@ -519,6 +536,9 @@ func runServer(args []string) int {
 			diskKey := localruntime.TaskDiskKey(runCfg.RepoList())
 			diskRequest := localTaskDiskRequest(runCtx, diskHistory, diskKey)
 			diskRequest.CleanupOnCompletion = issueWork == nil && repairWork == nil
+			if issueWork != nil {
+				logIssueWorkspaceStorage(diskRequest.ExistingDir, requestID, daemonLogger)
+			}
 			forceRetry := false
 			for {
 				if taskHandle != nil {
@@ -1632,20 +1652,18 @@ func runLocalTask(
 	res := h.Run(ctx, runCfg)
 	res.ReviewClean = cleanReview
 	res.ReviewedHead = reviewedHead
-	if ctx.Err() == nil && res.ExitCode == app.ExitWorkspace && res.WorkspaceDir == "" &&
-		(canRetryWorkspace || localruntime.IsWorkspaceDiskFull(res.Err)) {
+	_, issue := ctx.Value(issueExecutionContextKey{}).(*issueExecution)
+	if ctx.Err() == nil && !issue && res.ExitCode == app.ExitWorkspace && res.WorkspaceDir == "" &&
+		(canRetryWorkspace || workspace.IsDiskFull(res.Err)) {
 		return localTaskOutcome{State: "retry_workspace", Result: res}
 	}
-	if ctx.Err() == nil && canRetryWorkspace && res.ExitCode == app.ExitClone &&
-		(errors.Is(res.Err, app.ErrWorkspaceDiskFull) || localruntime.IsWorkspaceDiskFull(res.Err)) {
+	if ctx.Err() == nil && !issue && canRetryWorkspace && res.ExitCode == app.ExitClone && workspace.IsDiskFull(res.Err) {
 		// Only fresh checkouts can move volumes. Retained issue workspaces
 		// are pinned to their root and must preserve their existing work.
-		if _, issue := ctx.Value(issueExecutionContextKey{}).(*issueExecution); !issue {
-			if _, repair := ctx.Value(issueRepairContextKey{}).(*issueRepairWork); !repair {
-				removed, err := removeManagedWorkspaceDir(res.WorkspaceDir)
-				if err == nil && removed {
-					return localTaskOutcome{State: "retry_workspace", Result: res}
-				}
+		if _, repair := ctx.Value(issueRepairContextKey{}).(*issueRepairWork); !repair {
+			removed, err := removeManagedWorkspaceDir(res.WorkspaceDir)
+			if err == nil && removed {
+				return localTaskOutcome{State: "retry_workspace", Result: res}
 			}
 		}
 	}
@@ -1781,6 +1799,9 @@ func unexpectedNoChangesFollowUpRunConfig(
 }
 
 func shouldQueueFailureFollowUp(source string, failedResult app.Result) (bool, string) {
+	if workspace.IsDiskFull(failedResult.Err) || errors.Is(failedResult.Err, workspace.ErrUnsuitableStorage) {
+		return false, "workspace storage requires operator recovery"
+	}
 	if errors.Is(failedResult.Err, app.ErrPRFeedbackTarget) {
 		return false, "PR feedback requires the original pull request target"
 	}

@@ -4,3 +4,6 @@ package workspace
 
 // Other platforms retain their existing workspace selection behavior.
 func checkWorkspaceSpace(string) error { return nil }
+
+// CheckPersistentStorage detects memory-backed mounts on Linux.
+func CheckPersistentStorage(string) error { return nil }

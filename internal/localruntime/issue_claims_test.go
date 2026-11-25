@@ -1,13 +1,99 @@
 package localruntime
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/config"
 )
+
+func TestBeginExecutionReleasesReserveWhenReceiptSaveFails(t *testing.T) {
+	t.Parallel()
+	store := &IssueClaimStore{Root: t.TempDir()}
+	id := strings.Repeat("a", 32)
+	// A directory at the receipt path lets reserve creation succeed but
+	// prevents the temporary receipt from being renamed into place.
+	receipt := filepath.Join(store.Root, id+".json")
+	if err := os.Mkdir(receipt, 0700); err != nil {
+		t.Fatal(err)
+	}
+	var renameErr *os.LinkError
+	if err := store.BeginExecution(IssueClaimRecord{ID: id}); !errors.As(err, &renameErr) || renameErr.New != receipt {
+		t.Fatalf("BeginExecution error = %v, want receipt rename failure", err)
+	}
+	if _, err := os.Stat(issueStorageReserve(store.Root, id)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stat execution reserve = %v, want missing reserve", err)
+	}
+}
+
+func TestBeginExecutionDiskFullHoldsIssueWithoutChargingRetry(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"journal writable", "hold receipt write fails"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			store := &IssueClaimStore{Root: t.TempDir()}
+			id := strings.Repeat("a", 32)
+			record := IssueClaimRecord{
+				Version: 2, ID: id, State: "queued", LabelAdded: true,
+				AgentAttempts: 1, Failures: 2, PriorRunFailures: 3, NextAttemptAt: time.Now().Add(time.Hour),
+				Run: config.Config{GitHubIssue: &config.GitHubIssueConfig{Claim: &config.GitHubIssueClaim{ID: id}}},
+			}
+			if err := store.Save(record); err != nil {
+				t.Fatal(err)
+			}
+			receipt := filepath.Join(store.Root, id+".json")
+			if name == "hold receipt write fails" {
+				// Force the hold write to fail at rename while keeping the issue
+				// visible to readers during the journal outage.
+				if err := os.Rename(receipt, receipt+".backup"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(receipt, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := store.beginExecution(record, func(path string, _ int, _ os.FileMode) (*os.File, error) {
+				return nil, &os.PathError{Op: "open", Path: path, Err: syscall.ENOSPC}
+			})
+			if !errors.Is(err, syscall.ENOSPC) {
+				t.Fatalf("BeginExecution error = %v, want ENOSPC", err)
+			}
+			records, err := store.List()
+			if err != nil || len(records) != 1 || records[0].Incident != IssueIncidentWorkspaceStorage {
+				t.Fatalf("queue records = %+v, error = %v", records, err)
+			}
+			if name == "hold receipt write fails" {
+				if err := os.Remove(receipt); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Rename(receipt+".backup", receipt); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.Update(id, func(r *IssueClaimRecord) error {
+					if !r.StoppedAt.After(record.StoppedAt) || r.Incident != IssueIncidentWorkspaceStorage {
+						t.Fatalf("pending hold lost before receipt could be saved: %+v", r)
+					}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			restarted := &IssueClaimStore{Root: store.Root}
+			got, err := restarted.Load(id)
+			if err != nil || got.State != "blocked" || got.Outcome != "error" || got.Incident != IssueIncidentWorkspaceStorage ||
+				!got.UnlockPending || got.StoppedAt.IsZero() || !got.NextAttemptAt.IsZero() || got.ExecutionAgentAttempts != nil ||
+				got.AgentAttempts != record.AgentAttempts || got.Failures != record.Failures || got.PriorRunFailures != record.PriorRunFailures ||
+				!strings.Contains(got.Error, "select Retry") || !strings.Contains(got.FailureDetail(), syscall.ENOSPC.Error()) {
+				t.Fatalf("restarted receipt = %+v, error = %v", got, err)
+			}
+		})
+	}
+}
 
 func TestIssueClaimStorePersistsAdmissionWithoutPartialFiles(t *testing.T) {
 	t.Parallel()

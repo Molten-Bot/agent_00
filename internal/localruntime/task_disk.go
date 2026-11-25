@@ -157,6 +157,11 @@ type diskReservation struct {
 	cleanupWorkspaces int
 }
 
+// IsWorkspaceDiskFull reports whether workspace allocation ran out of space.
+func IsWorkspaceDiskFull(err error) bool {
+	return workspace.IsDiskFull(err)
+}
+
 func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, samples map[string]diskSample, preparedRoots map[string]error) (bool, error) {
 	if waiter.disk == nil {
 		return true, nil
@@ -174,7 +179,8 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 	var setupErr error
 	var blocked, tooSmall bool
 	manager := waiter.disk.Workspace
-	if !force {
+	checkPersistent := waiter.disk.CheckPersistentStorage
+	if !force || checkPersistent != nil {
 		// Disk admission handles free space. PrepareRoots checks setup even
 		// when capacity is too low for this task to start.
 		manager.CheckSpace = nil
@@ -212,6 +218,12 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 		if waiter.disk.ExistingDir != "" {
 			path = waiter.disk.ExistingDir
 		}
+		if checkPersistent != nil {
+			if err := checkPersistent(path); err != nil {
+				setupErr = err
+				continue
+			}
+		}
 		sample, ok := samples[path]
 		if !ok {
 			sample.device, sample.free, sample.total, sample.err = c.diskSpace(path)
@@ -219,6 +231,22 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 		}
 		if sample.err != nil {
 			setupErr = fmt.Errorf("inspect workspace storage %s: %w", path, sample.err)
+			continue
+		}
+		needed := minimum
+		if force {
+			needed = workspace.MinimumFreeBytes
+		}
+		if checkPersistent != nil && sample.total < needed {
+			// Freeing space here cannot admit this task. Keep looking for
+			// a usable root or a setup error that explains the failure.
+			setupErr = fmt.Errorf("%w: %s has capacity %d bytes and %d bytes free, requires %d bytes; expand or move the workspace filesystem",
+				workspace.ErrUnsuitableStorage, path, sample.total, sample.free, needed)
+			continue
+		}
+		if force && checkPersistent != nil && sample.free < workspace.MinimumFreeBytes {
+			setupErr = fmt.Errorf("%w: %s has %d bytes free, requires %d bytes; free up workspace storage",
+				workspace.ErrDiskFull, path, sample.free, workspace.MinimumFreeBytes)
 			continue
 		}
 		if !force && minimum > sample.total {

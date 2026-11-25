@@ -11,6 +11,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/app"
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
+	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
 
 type issueExecutionContextKey struct{}
@@ -55,12 +56,6 @@ func prepareIssueExecution(store *localruntime.IssueClaimStore, run config.Confi
 	if record.RequestID == "" {
 		return nil, "", fmt.Errorf("issue dispatch intent has no request ID")
 	}
-	if record.Control != "" {
-		return nil, "", fmt.Errorf("issue is %s; explicit resume required", record.Control)
-	}
-	if record.Outcome != "" {
-		return nil, record.RequestID, nil
-	}
 	lock, err := store.TryLock(localruntime.IssueExecutionKey(run.GitHubIssue))
 	if err != nil {
 		return nil, "", err
@@ -68,35 +63,31 @@ func prepareIssueExecution(store *localruntime.IssueClaimStore, run config.Confi
 	if lock == nil {
 		return nil, record.RequestID, nil
 	}
-	if record.WorkspaceDir == "" {
-		record.WorkspaceDir = filepath.Join(filepath.Dir(store.Root), "issue-workspaces", record.ID)
+	// The previous worker may have recorded its outcome before releasing the lock.
+	record, err = store.Load(record.ID)
+	if err != nil {
+		lock.Close()
+		return nil, "", err
 	}
-	// A failed clone may leave a partial directory without a repository. Preserve
-	// that evidence, but let the next attempt clone into its own durable directory.
-	if filepath.Base(record.WorkspaceDir) != record.ID {
-		entries, readErr := os.ReadDir(record.WorkspaceDir)
-		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
-			lock.Close()
-			return nil, "", readErr
-		}
-		hasRepository := false
-		for _, entry := range entries {
-			if entry.IsDir() {
-				if info, err := os.Stat(filepath.Join(record.WorkspaceDir, entry.Name(), ".git")); err == nil && info.IsDir() {
-					hasRepository = true
-					break
-				}
-			}
-		}
-		if !hasRepository {
-			record.WorkspaceDir = filepath.Join(filepath.Dir(store.Root), "issue-workspaces", record.ID)
-			record.PublicationReady = false
-		}
+	if record.Control != "" {
+		lock.Close()
+		return nil, "", fmt.Errorf("issue is %s; explicit resume required", record.Control)
+	}
+	if record.Outcome != "" {
+		lock.Close()
+		return nil, record.RequestID, nil
+	}
+	// A partial clone can have a .git directory and a configured origin.
+	// Preserve it as evidence and give the next attempt a fresh directory.
+	if record.WorkspaceDir == "" || !record.CheckoutComplete {
+		record.WorkspaceDir = filepath.Join(filepath.Dir(store.Root), "issue-workspaces", record.ID)
+		record.CheckoutComplete = false
+		record.PublicationReady = false
 	}
 	record.State = "queued"
 	record.Error = ""
 	record.NextAttemptAt = time.Time{}
-	if err := store.Save(record); err != nil {
+	if err := store.BeginExecution(record); err != nil {
 		lock.Close()
 		return nil, "", err
 	}
@@ -116,7 +107,7 @@ func persistIssueControl(store *localruntime.IssueClaimStore, requestID, control
 	return nil
 }
 
-func (e *issueExecution) finish(ctx context.Context, state string, result app.Result) error {
+func (e *issueExecution) finish(ctx context.Context, state string, result app.Result, waitForStorage func() bool) error {
 	defer e.lock.Close()
 	if state == "" {
 		state = "interrupted"
@@ -127,11 +118,14 @@ func (e *issueExecution) finish(ctx context.Context, state string, result app.Re
 	if ctx.Err() != nil && state != "stopped" && state != "completed" && state != "no_changes" {
 		state = "interrupted"
 	}
-	return e.store.Update(e.record.ID, func(record *localruntime.IssueClaimRecord) error {
+	stoppedAt := time.Now().UTC()
+	var journalErr error
+	holdPersisted := false
+	update := func(record *localruntime.IssueClaimRecord) error {
 		record.Outcome = state
 		record.ExitCode = result.ExitCode
 		record.State = "verifying"
-		record.StoppedAt = time.Now().UTC()
+		record.StoppedAt = stoppedAt
 		record.UnlockPending = record.LabelAdded
 		if result.WorkspaceDir != "" {
 			record.WorkspaceDir = result.WorkspaceDir
@@ -154,8 +148,44 @@ func (e *issueExecution) finish(ctx context.Context, state string, result app.Re
 		if errors.Is(result.Err, app.ErrIssueBranchRecovery) {
 			record.Incident = localruntime.IssueIncidentBranchRecovery
 		}
+		if journalErr != nil || ((state == "error" || state == "interrupted") &&
+			(workspace.IsDiskFull(result.Err) || errors.Is(result.Err, workspace.ErrUnsuitableStorage))) {
+			record.Incident = localruntime.IssueIncidentWorkspaceStorage
+			record.State = "blocked"
+			record.NextAttemptAt = time.Time{}
+			if journalErr != nil {
+				record.RunError = errors.Join(result.Err, journalErr).Error()
+				record.Error = record.RunError
+			}
+			// This execution can charge at most one agent attempt. Restore the
+			// prior count even if a previous write committed before Sync failed.
+			record.AgentAttempts = e.record.AgentAttempts
+		}
+		record.ExecutionAgentAttempts = nil
 		return nil
-	})
+	}
+	for {
+		err := e.store.Update(e.record.ID, update)
+		if err == nil {
+			return e.store.ReleaseExecutionReserve(e.record.ID)
+		}
+		if !workspace.IsDiskFull(err) {
+			return err
+		}
+		if journalErr == nil {
+			journalErr = fmt.Errorf("persist issue outcome: %w", err)
+		}
+		if !holdPersisted {
+			if holdErr := e.store.ReleaseExecutionReserve(e.record.ID); holdErr != nil {
+				err = errors.Join(err, fmt.Errorf("persist workspace storage retry hold: %w", holdErr))
+			} else {
+				holdPersisted = true
+			}
+		}
+		if waitForStorage == nil || !waitForStorage() {
+			return err
+		}
+	}
 }
 
 func (e *issueExecution) configure(ctx context.Context, h *app.Harness) (context.Context, func()) {
@@ -164,7 +194,23 @@ func (e *issueExecution) configure(ctx context.Context, h *app.Harness) (context
 	h.Workspace.Root = filepath.Dir(e.record.WorkspaceDir)
 	h.Workspace.NewGUID = func() string { return filepath.Base(e.record.WorkspaceDir) }
 	h.ResumeIssueWorkspace = true
+	h.IssueCheckoutComplete = e.record.CheckoutComplete
 	h.IssuePublicationReady = e.record.PublicationReady
+	onCheckout := h.OnCheckout
+	h.OnCheckout = func() {
+		if onCheckout != nil {
+			onCheckout()
+		}
+		if e.record.CheckoutComplete {
+			return
+		}
+		if err := e.store.Update(e.record.ID, func(record *localruntime.IssueClaimRecord) error {
+			record.CheckoutComplete = true
+			return nil
+		}); err != nil {
+			cancel(fmt.Errorf("persist completed checkout: %w", err))
+		}
+	}
 	h.SaveIssuePublicationReady = func(ready bool) error {
 		return e.store.Update(e.record.ID, func(record *localruntime.IssueClaimRecord) error {
 			record.PublicationReady = ready

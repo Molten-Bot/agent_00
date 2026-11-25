@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
@@ -92,8 +93,7 @@ func TestRunCodexRejectsAgentDiskSpaceExhaustionBeforeValidationGap(t *testing.T
 		{
 			cmd: firstCmd,
 			res: execx.Result{
-				Stdout: "Failure: Cannot safely meet coverage target in current runtime.\nError details: `bun run test:unit:coverage` failed: `vitest: command not found`.",
-				Stderr: "ENOSPC: failed copying files from cache to destination for package vitest",
+				Stdout: "Failure: Cannot safely meet coverage target in current runtime.\nError details: `bun run test:unit:coverage` failed: `vitest: command not found`. Installing vitest failed with ENOSPC while copying files from cache.",
 			},
 		},
 	}}
@@ -106,8 +106,67 @@ func TestRunCodexRejectsAgentDiskSpaceExhaustionBeforeValidationGap(t *testing.T
 	if !strings.Contains(err.Error(), "workspace storage ran out of space") {
 		t.Fatalf("runCodex() error = %q, want workspace storage diagnosis", err)
 	}
+	if !errors.Is(err, workspace.ErrDiskFull) {
+		t.Fatalf("runCodex() error = %v, want typed disk exhaustion", err)
+	}
 	if !strings.Contains(err.Error(), "HARNESS_WORKSPACE_DISK_BASE") {
 		t.Fatalf("runCodex() error = %q, want storage remediation hint", err)
+	}
+}
+
+func TestRunCodexClassifiesDiskFullOnNonzeroExit(t *testing.T) {
+	t.Parallel()
+	underlying := errors.New("exit status 1")
+	for _, tc := range []struct {
+		name, stdout, stderr string
+		prompt               string
+		err                  error
+		wantDiskFull         bool
+		wantFailure          string
+	}{
+		{name: "terminal diagnostic", stderr: "ENOSPC: failed writing cache", err: underlying, wantDiskFull: true},
+		{name: "terminal failure report", stdout: "Failure: Validation failed.\nError details: copy failed: no space left on device", wantDiskFull: true},
+		{name: "terminal report overrides trailing stderr diagnostic", stdout: "Failure: Tests failed.\nError details: assertion failed.", stderr: "ENOSPC: failed writing cache", wantFailure: "Failure: Tests failed. Error details: assertion failed."},
+		{name: "standalone stderr explains terminal summary", stdout: "Failure: Tests failed.", stderr: "Error: write ENOSPC", wantDiskFull: true},
+		{name: "bare stderr errno", stdout: "Failure: Validation failed.", stderr: "ENOSPC", wantDiskFull: true},
+		{name: "quoted stdout summary", stdout: "Failure: Tests failed.\n````text\n```\nFailure: ENOSPC\n````\nError details: assertion failed.", wantFailure: "Failure: Tests failed. Error details: assertion failed."},
+		{name: "quoted stderr summary", stderr: "Failure: Tests failed.\n~~~text\nFailure: ENOSPC\n~~~", wantFailure: "Failure: Tests failed."},
+		{name: "typed error overrides terminal report", stdout: "Failure: Tests failed.", err: syscall.ENOSPC, wantDiskFull: true},
+		{name: "narration before error details", stdout: "Failure: Validation failed.\nValidation: Local checks stopped before reaching the assertions.\n**Error details:** copy failed with ENOSPC", wantDiskFull: true},
+		{name: "compact stderr narration before error details", stderr: "Failure: Validation failed.\nLocal checks stopped before reaching the assertions.\nError details: copy failed with ENOSPC", wantDiskFull: true},
+		{name: "narration alone mentions disk full", stdout: "Failure: Tests failed.\nRecovered an earlier ENOSPC by moving the cache."},
+		{name: "narration quotes earlier disk full report", stdout: "Failure: Tests failed.\nRecovered from this earlier error:\n~~~text\nError details: copy failed with ENOSPC\n~~~\nError details: assertion failed."},
+		{name: "details across transcript boundary", stdout: "Failure: Tests failed.\nexec\nError details: copy failed with ENOSPC"},
+		{name: "split failure report", stdout: "Failure: Validation failed.", stderr: "Error details: copy failed with ENOSPC", wantDiskFull: true},
+		{name: "split failure report with bullet", stdout: "Failure: Validation failed.", stderr: "**Error details:**\n- copy failed with ENOSPC", wantDiskFull: true},
+		{name: "split details echoed from prompt", stdout: "Failure: Validation failed.", stderr: "Error details: copy failed with ENOSPC", prompt: "Error details: copy failed with ENOSPC", wantFailure: "Failure: Validation failed."},
+		{name: "later stdout failure", stdout: "Failure: ENOSPC copying cache.\nError details: copy failed with ENOSPC\nFailure: Tests failed.\nError details: assertion failed.", wantFailure: "Failure: Tests failed. Error details: assertion failed."},
+		{name: "later compact stderr failure", stderr: "Failure: ENOSPC copying cache.\nError details: copy failed with ENOSPC\nFailure: Tests failed.\nError details: assertion failed.", wantFailure: "Failure: Tests failed. Error details: assertion failed."},
+		{name: "later disk full failure", stdout: "Failure: Tests failed.\nError details: assertion failed.\nFailure: Validation could not finish.\nError details: copy failed with ENOSPC", wantDiskFull: true},
+		{name: "typed error", err: syscall.ENOSPC, wantDiskFull: true},
+		{name: "prompt echo", stderr: "task prompt: investigate ENOSPC\nERROR: unrelated failure", err: underlying},
+		{name: "echoed failure field", stderr: "user\nFailure: ENOSPC\nERROR: unrelated failure", prompt: "Failure: ENOSPC"},
+		{name: "diagnostic shares prompt wording", stderr: "Error: write ENOSPC", prompt: "ENOSPC", err: underlying, wantDiskFull: true},
+		{name: "recovered tool failure", stdout: "ENOSPC: failed writing cache\nRecovered by moving cache.\nFailure: unrelated test failed."},
+		{name: "stale error details", stdout: "Error details: ENOSPC: failed writing cache\nRecovered by moving cache.\nFailure: unrelated test failed.\nError details: assertion failed."},
+		{name: "recovered stderr diagnostic", stderr: "ENOSPC: failed writing cache\nERROR: unrelated failure", err: underlying},
+		{name: "successful run with disk warning", stdout: "Done.", stderr: "ENOSPC: failed writing cache"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := New(diskFullRunner{err: tc.err, res: execx.Result{Stdout: tc.stdout, Stderr: tc.stderr}})
+			prompt := tc.prompt
+			if prompt == "" {
+				prompt = "investigate ENOSPC"
+			}
+			_, err := h.runCodexWithHeartbeat(context.Background(), agentruntime.Default(), t.TempDir(), prompt, codexRunOptions{}, agentInvocationLogMetadata{})
+			if tc.err != nil && !errors.Is(err, tc.err) || errors.Is(err, workspace.ErrDiskFull) != tc.wantDiskFull {
+				t.Fatalf("agent error = %v, want disk exhaustion=%t and underlying %v", err, tc.wantDiskFull, tc.err)
+			}
+			if tc.wantFailure != "" && (err == nil || !strings.Contains(err.Error(), tc.wantFailure)) {
+				t.Fatalf("agent error = %v, want %q", err, tc.wantFailure)
+			}
+		})
 	}
 }
 

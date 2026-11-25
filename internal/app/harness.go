@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"iter"
 	"net/http"
 	"net/url"
 	"os"
@@ -57,8 +58,8 @@ import (
 // never inspects.
 var readOnlyReviewDisallowedTools = []string{"Edit", "Write", "NotebookEdit", "Bash", "Agent", "Skill", "Workflow", "ReportFindings"}
 
-// ErrWorkspaceDiskFull identifies local storage exhaustion reported by Git.
-var ErrWorkspaceDiskFull = errors.New("workspace storage exhausted")
+// ErrWorkspaceDiskFull identifies local storage exhaustion reported by a subprocess.
+var ErrWorkspaceDiskFull = workspace.ErrDiskFull
 
 // ErrIssueBranchRecovery identifies branch conflicts that need operator action.
 var ErrIssueBranchRecovery = errors.New("reserved issue branch recovery required")
@@ -209,6 +210,8 @@ type Harness struct {
 	OnReviewResult func(clean bool, head string)
 
 	ResumeIssueWorkspace bool
+	// IssueCheckoutComplete records that the preserved checkout finished.
+	IssueCheckoutComplete bool
 	// IssuePublicationReady records that a prior attempt accepted the agent result.
 	IssuePublicationReady bool
 	// SaveIssuePublicationReady checkpoints agent acceptance before publication.
@@ -3499,7 +3502,7 @@ func (h Harness) cloneRepository(ctx context.Context, repo *repoWorkspace, branc
 	if repo == nil {
 		return fmt.Errorf("repo workspace is required")
 	}
-	if h.ResumeIssueWorkspace && repo.IssueClaimBranch {
+	if h.ResumeIssueWorkspace && h.IssueCheckoutComplete && repo.IssueClaimBranch {
 		if info, err := os.Stat(filepath.Join(repo.Dir, ".git")); err == nil && info.IsDir() {
 			remote, err := h.runCommand(ctx, "clone", gitCommand(repo.Dir, "remote", "get-url", "origin"))
 			if err != nil {
@@ -5649,40 +5652,13 @@ func (h Harness) runCommandUnchecked(ctx context.Context, phase string, cmd exec
 // fail with their own quota/rate-limit wording that would otherwise be
 // mislabeled as local disk exhaustion.
 func diskSpaceExhaustionError(cmd execx.Command, res execx.Result, err error) error {
-	if cmd.Name != "git" {
-		return nil
-	}
-	detail := strings.ToLower(res.Stdout + "\n" + res.Stderr)
-	signatures := []string{
-		"no space left on device",
-		"out of diskspace",
-		"disk quota exceeded",
-		"enospc",
-	}
-	matched := false
-	for _, sig := range signatures {
-		if strings.Contains(detail, sig) {
-			matched = true
-			break
-		}
-	}
-	if !matched {
+	if cmd.Name != "git" || (!workspace.IsDiskFull(err) && !workspace.DiskFullDiagnostic(res.Stdout+"\n"+res.Stderr)) {
 		return nil
 	}
 	return fmt.Errorf(
 		"workspace storage ran out of space running %s %s in %s; configure HARNESS_WORKSPACE_DISK_BASE on a disk-backed filesystem or free up space: %w",
 		cmd.Name, strings.Join(cmd.Args, " "), cmd.Dir, errors.Join(ErrWorkspaceDiskFull, err),
 	)
-}
-
-func agentWorkspaceStorageExhausted(res execx.Result) bool {
-	detail := strings.ToLower(res.Stdout + "\n" + res.Stderr)
-	return stringsx.ContainsAny(detail, []string{
-		"no space left on device",
-		"out of diskspace",
-		"disk quota exceeded",
-		"enospc",
-	})
 }
 
 func (h Harness) runPRChecksWatch(ctx context.Context, repoDir, prURL string) (execx.Result, error) {
@@ -5928,7 +5904,7 @@ func isNonFastForwardPush(res execx.Result, err error) bool {
 }
 
 func shouldRetryClone(err error, res execx.Result) bool {
-	if err == nil {
+	if err == nil || workspace.IsDiskFull(err) {
 		return false
 	}
 	if isRepoNotFoundCloneError(err, res) {
@@ -6835,11 +6811,13 @@ func (h Harness) runCodexWithHeartbeat(
 				stateErr := agentruntime.MarkCodexAuthenticationRequired(home)
 				return run.res, errors.Join(agentruntime.ErrCodexAuthRequired, stateErr)
 			}
-			if failed, detail := codexReportedFailure(run.res); failed {
+			failed, detail := codexReportedFailure(run.res)
+			if workspace.IsDiskFull(run.err) || ((failed || run.err != nil) &&
+				agentTerminalDiskFull(run.res, prompt, detail)) {
+				return run.res, fmt.Errorf("%s: workspace storage ran out of space while the agent was running; configure HARNESS_WORKSPACE_DISK_BASE on a disk-backed filesystem or free up space: %w", agentStage, errors.Join(ErrWorkspaceDiskFull, run.err))
+			}
+			if failed {
 				detail, fullDetail := codexFailureDetailWithErrorDetails(run.res, detail)
-				if agentWorkspaceStorageExhausted(run.res) {
-					return run.res, fmt.Errorf("%s reported failure: workspace storage ran out of space while the agent was running; configure HARNESS_WORKSPACE_DISK_BASE on a disk-backed filesystem or free up space: %s", agentStage, detail)
-				}
 				if isImplementationTargetFailure(detail) {
 					return run.res, fmt.Errorf("%s reported failure: %s", agentStage, detail)
 				}
@@ -6901,6 +6879,48 @@ func (h Harness) runCodexWithHeartbeat(
 			return execx.Result{}, runCtx.Err()
 		}
 	}
+}
+
+func agentTerminalDiskFull(res execx.Result, prompt, failure string) bool {
+	if prompt = strings.TrimSpace(prompt); prompt != "" {
+		echo := "\n" + prompt + "\n"
+		res.Stdout = strings.ReplaceAll("\n"+res.Stdout+"\n", echo, "\n")
+		res.Stderr = strings.ReplaceAll("\n"+res.Stderr+"\n", echo, "\n")
+		// A failure field can itself have come from the echoed prompt.
+		_, failure = codexReportedFailure(res)
+	}
+	if workspace.DiskFullDiagnostic(failure) {
+		return true
+	}
+	stderr := strings.TrimSpace(res.Stderr)
+	if failure != "" {
+		// Use only error details attached to the reported failure. The
+		// transcript can contain earlier failures that the agent recovered.
+		var details string
+		for _, output := range []string{res.Stdout, res.Stderr} {
+			tail, _ := codexFailureReportTail(output, failure)
+			if details = codexExtractAttachedErrorDetail(tail); details != "" {
+				break
+			}
+		}
+		if details == "" && startsWithErrorDetails(res.Stderr) {
+			details = codexExtractStderrErrorDetail(res.Stderr, failure)
+		}
+		if details != "" {
+			return workspace.DiskFullDiagnostic(details)
+		}
+		// A standalone stderr diagnostic can supply the cause of a summary-only report.
+		if strings.ContainsRune(stderr, '\n') {
+			return false
+		}
+	}
+	// A CLI can exit before emitting a structured report. Its final stderr
+	// line must be a storage diagnostic, not an arbitrary mention of ENOSPC.
+	line := strings.ToLower(strings.TrimSpace(stderr[strings.LastIndexByte(stderr, '\n')+1:]))
+	return workspace.DiskFullDiagnostic(line) &&
+		(line == "enospc" || strings.HasSuffix(line, ": no space left on device") || strings.HasPrefix(line, "enospc:") || strings.HasPrefix(line, "error:") ||
+			strings.HasPrefix(line, "fatal:") || strings.HasPrefix(line, "no space left on device") ||
+			strings.HasPrefix(line, "disk quota exceeded") || strings.HasPrefix(line, "out of diskspace"))
 }
 
 func codexInvocationAuthenticationFailed(res execx.Result, err error) bool {
@@ -6979,16 +6999,18 @@ func codexReportedCompactPlainFailure(output string) (bool, string) {
 	if len(nonEmpty) == 0 || len(nonEmpty) > 8 {
 		return false, ""
 	}
-	for _, line := range nonEmpty {
+	var failure string
+	for _, line := range reportProseLines(nonEmpty) {
 		field := agentFailureFieldLine(line)
 		if lower := strings.ToLower(field); strings.HasPrefix(lower, "failure:") || strings.HasPrefix(lower, "task failed") {
-			return true, field
+			failure = field
+			continue
 		}
-		if isNoImplementationTargetLine(strings.ToLower(line)) {
+		if failure == "" && isNoImplementationTargetLine(strings.ToLower(line)) {
 			return true, "Failure: agent did not identify an implementation target."
 		}
 	}
-	return false, ""
+	return failure != "", failure
 }
 
 func isNoImplementationTargetLine(lowerLine string) bool {
@@ -7052,7 +7074,7 @@ func codexFailureDetailWithErrorDetails(res execx.Result, failureDetail string) 
 	if detail == "" {
 		detail = "Failure: task failed."
 	}
-	errorDetail := codexExtractErrorDetail(res.Stdout)
+	errorDetail := codexExtractStdoutErrorDetail(res.Stdout, failureDetail)
 	if errorDetail == "" {
 		errorDetail = codexExtractStderrErrorDetail(res.Stderr, detail)
 	}
@@ -7479,6 +7501,89 @@ func isNonFatalRemoteDeploymentAuthFailure(detail string, res execx.Result) bool
 	return true
 }
 
+// reportProseLines keeps the original indexes so details following a summary
+// can still include diagnostic output inside a code fence.
+func reportProseLines(lines []string) iter.Seq2[int, string] {
+	return func(yield func(int, string) bool) {
+		var fence string
+		for i, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if fence != "" {
+				if strings.HasPrefix(trimmed, fence) && strings.Trim(trimmed, fence[:1]) == "" {
+					fence = ""
+				}
+				continue
+			}
+			if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+				end := len(trimmed) - len(strings.TrimLeft(trimmed, trimmed[:1]))
+				fence = trimmed[:end]
+				continue
+			}
+			if !yield(i, line) {
+				return
+			}
+		}
+	}
+}
+
+func codexFailureReportTail(output, failure string) (string, bool) {
+	if failure == "" {
+		return "", false
+	}
+	lines := splitOutputLines(output)
+	last := -1
+	for i, line := range reportProseLines(lines) {
+		if strings.EqualFold(agentFailureFieldLine(line), failure) {
+			last = i
+		}
+	}
+	if last >= 0 {
+		return strings.TrimSpace(strings.Join(lines[last+1:], "\n")), true
+	}
+	return "", false
+}
+
+func startsWithErrorDetails(output string) bool {
+	first, _, _ := strings.Cut(strings.TrimSpace(output), "\n")
+	return strings.HasPrefix(strings.ToLower(agentFailureFieldLine(first)), "error details:")
+}
+
+// codexExtractAttachedErrorDetail reads an explicit field after a matched
+// failure summary, allowing narration within the same report.
+func codexExtractAttachedErrorDetail(tail string) string {
+	lines := splitOutputLines(tail)
+	start := -1
+report:
+	for i, line := range reportProseLines(lines) {
+		line = strings.TrimSpace(line)
+		switch strings.ToLower(line) {
+		case "user", "codex", "exec", "tokens used":
+			lines = lines[:i]
+			break report
+		}
+		if start >= 0 {
+			continue
+		}
+		field := strings.ToLower(agentFailureFieldLine(line))
+		if strings.HasPrefix(field, "error details:") {
+			start = i
+		} else if strings.HasPrefix(field, "failure:") || strings.HasPrefix(field, "task failed") {
+			return ""
+		}
+	}
+	if start >= 0 {
+		return codexExtractErrorDetail(strings.Join(lines[start:], "\n"))
+	}
+	return ""
+}
+
+func codexExtractStdoutErrorDetail(output, failure string) string {
+	if tail, ok := codexFailureReportTail(output, failure); ok {
+		output = tail
+	}
+	return codexExtractErrorDetail(output)
+}
+
 func codexExtractStderrErrorDetail(output, failure string) string {
 	// Codex writes its prompt and tool transcript to stderr. Only consume a
 	// compact report at the start of the stream or a standalone diagnostic.
@@ -7488,15 +7593,15 @@ func codexExtractStderrErrorDetail(output, failure string) string {
 		return ""
 	}
 	first := agentFailureFieldLine(lines[0])
-	if len(lines) > 1 && strings.EqualFold(first, failure) {
+	if len(lines) > 1 && (strings.EqualFold(first, failure) || strings.HasPrefix(strings.ToLower(first), "failure:")) {
 		for _, line := range lines[1:] {
 			switch strings.ToLower(strings.TrimSpace(line)) {
 			case "user", "codex", "exec", "tokens used":
 				return ""
 			}
 		}
-		if strings.HasPrefix(strings.ToLower(agentFailureFieldLine(lines[1])), "error details:") {
-			return codexExtractErrorDetail(output)
+		if tail, ok := codexFailureReportTail(output, failure); ok && startsWithErrorDetails(tail) {
+			return codexExtractErrorDetail(tail)
 		}
 		return ""
 	}
@@ -7666,7 +7771,7 @@ func ExternalPrerequisiteFailureFromStdout(failure string, readStdout func(stage
 	if !failed {
 		return "", false
 	}
-	detail := codexExtractErrorDetail(stdout)
+	detail := codexExtractStdoutErrorDetail(stdout, summary)
 	details, ok := strings.CutPrefix(detail, "Error details:")
 	if !ok {
 		return "", false
@@ -7821,7 +7926,7 @@ func codexReportedFailureInOutput(output string, allowStructured bool) (bool, st
 	}
 	lines := splitOutputLines(output)
 	nonEmpty := make([]string, 0, len(lines))
-	for _, line := range lines {
+	for _, line := range reportProseLines(lines) {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
 			continue
@@ -7843,15 +7948,17 @@ func codexReportedFailureInOutput(output string, allowStructured bool) (bool, st
 
 	var structuredTaskFailureLine string
 	var structuredErrorLine string
+	var failure string
 	for i, trimmed := range nonEmpty[start:] {
 		lower := strings.ToLower(trimmed)
 		if field := agentFailureFieldLine(trimmed); strings.HasPrefix(strings.ToLower(field), "failure:") {
 			if isBareFailureHeadingAfterCompletion(field, nonEmpty[:start+i]) {
 				continue
 			}
-			return true, field
+			failure = field
+			continue
 		}
-		if isNoImplementationTargetLine(lower) {
+		if failure == "" && isNoImplementationTargetLine(lower) {
 			return true, "Failure: agent did not identify an implementation target."
 		}
 		if allowStructured && structuredTaskFailureLine == "" && isStructuredTaskFailureLine(trimmed) {
@@ -7861,6 +7968,9 @@ func codexReportedFailureInOutput(output string, allowStructured bool) (bool, st
 		if allowStructured && structuredTaskFailureLine != "" && structuredErrorLine == "" && isStructuredFailureErrorLine(trimmed) {
 			structuredErrorLine = trimmed
 		}
+	}
+	if failure != "" {
+		return true, failure
 	}
 
 	// Treat structured JSON-style failure output as fatal only when both a

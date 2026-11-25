@@ -956,6 +956,12 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		record.IssueNodeID = target.ID
 		record.BranchReserved = !reserve
 		record.WorkspaceDir = previous.WorkspaceDir
+		// Older records can prove checkout completion through a later stage.
+		switch previous.Step {
+		case "agent", "codex", "claude", "git", "workflow", "pr":
+			record.CheckoutComplete = true
+		}
+		record.CheckoutComplete = record.CheckoutComplete || previous.CheckoutComplete || previous.PublicationReady
 		record.PublicationReady = previous.PublicationReady
 		if automatic {
 			record.AgentAttempts = previous.AgentAttempts

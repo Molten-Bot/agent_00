@@ -24,6 +24,8 @@ services:
       WHISPER_SPEECH_LANGUAGE: "${WHISPER_SPEECH_LANGUAGE:-${WHISPER_LANG:-en}}"
     volumes:
       # Set AGENT_00_CONFIG_DIR to reuse an existing configuration directory.
+      # Keep issue-workspaces on this persistent bind mount. A nested tmpfs
+      # would shadow it and make retained issue checkouts volatile.
       - ${AGENT_00_CONFIG_DIR:-./.agent00}:/workspace/config
     depends_on:
       faster-whisper:

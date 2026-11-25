@@ -19,10 +19,13 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/githubassets"
 	"github.com/Molten-Bot/agent_00/internal/githubutil"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
+	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
 
-func issueDependencyRetryError(incident string) string {
+func issueExplicitRetryError(incident string) string {
 	switch incident {
+	case localruntime.IssueIncidentWorkspaceStorage:
+		return "issue workspace storage unavailable; free space or restore a disk-backed mount, then select Retry"
 	case localruntime.IssueIncidentUnmergedDependency:
 		return failurefollowup.UnmergedDependencyReason + "; explicit retry required after merge"
 	case localruntime.IssueIncidentOpenDependency:
@@ -246,7 +249,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	// ambiguous provisioning reports. Preserve the evidence before recovery
 	// checks can replace the last error.
 	if record.Outcome == "error" && record.Incident != localruntime.IssueIncidentBranchRecovery &&
-		(issueDependencyRetryError(record.Incident) == "" || record.Incident == localruntime.IssueIncidentExternalRollout) {
+		(issueExplicitRetryError(record.Incident) == "" || record.Incident == localruntime.IssueIncidentExternalRollout) {
 		failure := record.FailureDetail()
 		reason := failurefollowup.NonRemediableFailureReason(errors.New(failure))
 		previousIncident := record.Incident
@@ -262,11 +265,18 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		// Legacy records used Error for both terminal reports and mutable
 		// recovery status. Only the terminal report can disprove a blocker.
 		lowerFailure := strings.ToLower(failure)
-		terminalEvidence := failure != "" && failure != issueDependencyRetryError(previousIncident) &&
+		// Older harnesses wrapped confirmed storage errors in this diagnosis.
+		// Ordinary agent reports can quote disk errors from earlier commands.
+		_, reported, agentReport := strings.Cut(lowerFailure, " reported failure: ")
+		legacyDiskFull := workspace.DiskFullDiagnostic(failure) &&
+			(!agentReport || strings.HasPrefix(reported, "workspace storage ran out of space"))
+		terminalEvidence := failure != "" && failure != issueExplicitRetryError(previousIncident) &&
 			(record.RunError != "" ||
 				strings.HasPrefix(lowerFailure, "codex: codex reported failure: failure:") ||
 				strings.HasPrefix(lowerFailure, "claude: claude reported failure: failure:"))
 		switch {
+		case legacyDiskFull:
+			record.Incident = localruntime.IssueIncidentWorkspaceStorage
 		case reason == failurefollowup.UnmergedDependencyReason:
 			record.Incident = localruntime.IssueIncidentUnmergedDependency
 		case reason == failurefollowup.OpenDependencyReason:
@@ -279,14 +289,14 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 			record.Incident = localruntime.IssueIncidentExternalRollout
 		case previousIncident == localruntime.IssueIncidentExternalRollout && (matchedLogs || (!truncated && terminalEvidence)):
 			record.Incident = "missing_pr"
-			if record.Error == issueDependencyRetryError(previousIncident) {
+			if record.Error == issueExplicitRetryError(previousIncident) {
 				record.Error = ""
 			}
 		}
 		if record.Incident != previousIncident ||
 			(record.Incident == localruntime.IssueIncidentExternalRollout && record.RunError == "" && terminalEvidence) {
 			record.RunError = failure
-			if issueDependencyRetryError(record.Incident) != "" {
+			if issueExplicitRetryError(record.Incident) != "" {
 				record.NextAttemptAt = time.Time{}
 			}
 			if err := s.IssueClaims.Save(record); err != nil {
@@ -348,6 +358,17 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 			}
 		}
 		record.UnlockPending = record.LabelAdded
+	}
+	if record.Outcome == "interrupted" && record.ExecutionAgentAttempts != nil {
+		// Persist the interruption before removing the reserve. A missing
+		// reserve on an unfinished execution signals journal exhaustion.
+		if err := s.IssueClaims.Save(record); err != nil {
+			return fmt.Errorf("persist interrupted issue outcome: %w", err)
+		}
+		if err := s.IssueClaims.ReleaseExecutionReserve(record.ID); err != nil {
+			return fmt.Errorf("release interrupted issue execution reserve: %w", err)
+		}
+		record.ExecutionAgentAttempts = nil
 	}
 	// Unlock must remain possible even if PR lookup or settings are unavailable.
 	if record.UnlockPending && remote.Claim.ID == record.ID {
@@ -411,17 +432,17 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		}
 	}
 	policy := s.IssueRecovery.Defaults()
-	dependencyRetryError := issueDependencyRetryError(record.Incident)
+	explicitRetryError := issueExplicitRetryError(record.Incident)
 	if record.Control != "" || record.Outcome == "stopped" || record.Outcome == "no_changes" ||
-		dependencyRetryError != "" || record.AgentAttempts >= policy.MaxAttempts || issueRunFailures(record) >= policy.MaxAttempts {
+		explicitRetryError != "" || record.AgentAttempts >= policy.MaxAttempts || issueRunFailures(record) >= policy.MaxAttempts {
 		record.State = "blocked"
 		switch {
 		case record.Outcome == "stopped":
 			record.Error = "stopped by operator; explicit resume required"
 		case record.Outcome == "no_changes":
 			record.Error = "no PR produced; review no-change evidence before retrying"
-		case dependencyRetryError != "":
-			record.Error = dependencyRetryError
+		case explicitRetryError != "":
+			record.Error = explicitRetryError
 			record.NextAttemptAt = time.Time{}
 		case issueRunFailures(record) >= policy.MaxAttempts:
 			record.Error = "workflow retry budget exhausted; explicit retry or deployed fix required"
@@ -582,6 +603,9 @@ func issueRunFailures(record localruntime.IssueClaimRecord) int {
 		return 0
 	}
 	failures := record.PriorRunFailures
+	if record.Incident == localruntime.IssueIncidentWorkspaceStorage {
+		return failures
+	}
 	switch record.Outcome {
 	case "error", "completed", "no_changes":
 		failures++
@@ -631,7 +655,7 @@ func issueRetryDeadline(id string, failures int, policy localruntime.IssueRecove
 
 func repairableIssueIncident(record localruntime.IssueClaimRecord) bool {
 	if record.Control != "" || record.Incident == "" || record.Incident == "service_shutdown" ||
-		issueDependencyRetryError(record.Incident) != "" || record.Outcome == "stopped" || (record.Outcome == "no_changes" && record.NoChangeEvidence) {
+		issueExplicitRetryError(record.Incident) != "" || record.Outcome == "stopped" || (record.Outcome == "no_changes" && record.NoChangeEvidence) {
 		return false
 	}
 	if record.Outcome == "" && record.Failures < 3 {
@@ -666,6 +690,13 @@ func (s Server) deferIssueRecord(record localruntime.IssueClaimRecord, cause err
 		current.RepairError = record.RepairError
 		if errors.Is(cause, localruntime.ErrIssueOwnershipChanged) {
 			blockStaleIssueClaim(current)
+			return nil
+		}
+		if current.Incident == localruntime.IssueIncidentWorkspaceStorage {
+			// Remote verification can back off while the storage hold stays visible.
+			current.State = "blocked"
+			current.Error = issueExplicitRetryError(current.Incident)
+			current.NextAttemptAt = issueRetryDeadline(current.ID, issueRetryFailures(*current), s.IssueRecovery.Defaults(), cause)
 			return nil
 		}
 		if errors.Is(cause, app.ErrIssueBranchRecovery) {

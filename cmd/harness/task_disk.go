@@ -79,6 +79,7 @@ func localTaskDiskRequest(ctx context.Context, history *localruntime.TaskDiskHis
 	}
 	if issue, ok := ctx.Value(issueExecutionContextKey{}).(*issueExecution); ok {
 		request.ExistingDir = issue.record.WorkspaceDir
+		request.CheckPersistentStorage = workspace.CheckPersistentStorage
 	}
 	var existingBytes uint64
 	if request.ExistingDir != "" {
@@ -95,6 +96,20 @@ func localTaskDiskRequest(ctx context.Context, history *localruntime.TaskDiskHis
 		return required - min(required, existingBytes)
 	}
 	return request
+}
+
+func logIssueWorkspaceStorage(path, requestID string, logf func(string, ...any)) {
+	_, free, total, err := workspace.DiskSpace(path)
+	if err == nil {
+		err = workspace.CheckPersistentStorage(path)
+	}
+	if err != nil {
+		logf("workspace_storage status=error request_id=%s path=%q free_bytes=%d total_bytes=%d err=%q", requestID, path, free, total, err)
+	} else if free < workspace.MinimumFreeBytes {
+		logf("workspace_storage status=warn request_id=%s path=%q free_bytes=%d total_bytes=%d minimum_free_bytes=%d", requestID, path, free, total, workspace.MinimumFreeBytes)
+	} else {
+		logf("workspace_storage status=ok request_id=%s path=%q free_bytes=%d total_bytes=%d", requestID, path, free, total)
+	}
 }
 
 func recordLocalTaskDiskUsage(history *localruntime.TaskDiskHistory, key, requestID, runDir string, logf func(string, ...any)) {
