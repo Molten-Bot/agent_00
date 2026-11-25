@@ -24,6 +24,8 @@ type Command struct {
 	InheritedFiles []*os.File
 	// Stdin is optional input piped to the command's stdin.
 	Stdin string
+	// StdinFile supplies interactive protocol input instead of a fixed prompt.
+	StdinFile *os.File
 	// Started persists process identity before execution is acknowledged. A
 	// failure terminates the process group. Exited runs after Wait completes.
 	Started     func(int) error
@@ -79,7 +81,9 @@ func runWithStream(ctx context.Context, cmd Command, handler StreamLineHandler) 
 	} else {
 		c.Env = os.Environ()
 	}
-	if cmd.Stdin != "" {
+	if cmd.StdinFile != nil {
+		c.Stdin = cmd.StdinFile
+	} else if cmd.Stdin != "" {
 		c.Stdin = strings.NewReader(cmd.Stdin)
 	}
 

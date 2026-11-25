@@ -1391,3 +1391,13 @@ test('settings omit workflow defaults and preserve migrated configuration when s
  assert.equal(saved.assign_creator,false);assert.equal(saved.github_issue_link_mode,'close');
  assert.equal(saved.json_enabled,true);
 });
+
+test('default complexity starts at Standard and saves on close', async t => {
+  const { page, writes } = await openSettings(t);
+  await select(page, 'automation');
+  const complexity = page.getByLabel('Default task complexity');
+  assert.equal(await complexity.inputValue(), 'standard');
+  await complexity.selectOption('easy');
+  await close(page);
+  assert.equal(writes.at(-1).default_complexity, 'easy');
+});

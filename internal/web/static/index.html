@@ -816,6 +816,9 @@
               <svg class="lucide lucide-diagram-flow-vertical" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 003.5 3.5 3.5 3.5 0 013.5 3.5v.5"/><path d="M12 8v.5A3.5 3.5 0 018.5 12 3.5 3.5 0 005 15.5v.5"/><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/></svg>
               <span>Workflow (beta)</span>
             </label>
+            <label>Default task complexity
+              <select id="settings-default-complexity"><option value="easy">Easy</option><option value="standard" selected>Standard</option><option value="advanced">Advanced</option></select>
+            </label>
           </fieldset>
           <div id="settings-panel-repositories" class="review-settings-section" role="tabpanel" aria-labelledby="settings-tab-repositories" hidden>
             <div class="repository-settings-heading">
@@ -1564,6 +1567,7 @@
         githubIssueAutoStartExclusionLabel: String(settings.github_issue_auto_start_exclusion_label ?? settings.githubIssueAutoStartExclusionLabel ?? "agent_00-in-progress"),
         githubIssueAutoStartOnlyAssigned: githubIssueAutoStartOnlyAssignedRaw === undefined ? true : Boolean(githubIssueAutoStartOnlyAssignedRaw),
         githubIssueAutoStartLabels: Array.isArray(githubIssueAutoStartLabelsRaw) ? githubIssueAutoStartLabelsRaw.map(label => String(label || "").trim()).filter(Boolean) : [],
+        defaultComplexity: settings.default_complexity ?? "standard",
         assignCreator: assignCreatorRaw === undefined ? true : Boolean(assignCreatorRaw),
         disabledRepositories: dedupeRepoValues(Array.isArray(disabledRepositoriesRaw) ? disabledRepositoriesRaw : []),
         message: String(settings.message || "").trim(),
@@ -2070,6 +2074,7 @@
     const reviewSettingsDeleteMergedBranches = document.getElementById("review-settings-delete-merged-branches");
     const reviewSettingsDefaultLibrary = document.getElementById("review-settings-default-library");
     const reviewSettingsChatEnabled = document.getElementById("review-settings-chat-enabled");
+    const defaultComplexitySelect = document.getElementById("settings-default-complexity");
     const reviewSettingsWorkflowEnabled = document.getElementById("review-settings-workflow-enabled");
     const workflowDisplay = document.getElementById("workflow-display");
     const reviewSettingsJSONEnabled = document.getElementById("review-settings-json-enabled");
@@ -2841,6 +2846,7 @@
       if (reviewSettingsJSONEnabled instanceof HTMLInputElement) {
         reviewSettingsJSONEnabled.checked = state.reviewSettings.jsonEnabled;
       }
+      defaultComplexitySelect.value = state.reviewSettings.defaultComplexity;
       reviewSettingsWorkflowEnabled.checked = state.reviewSettings.workflowEnabled;
       renderRepositorySettings();
       renderRepoHistoryOptions();
@@ -2941,6 +2947,7 @@
         review_level: state.reviewSettings.reviewLevel,
         default_library_enabled: reviewSettingsDefaultLibrary instanceof HTMLInputElement ? reviewSettingsDefaultLibrary.checked : true,
         chat_enabled: reviewSettingsChatEnabled instanceof HTMLInputElement ? reviewSettingsChatEnabled.checked : false,
+        default_complexity: defaultComplexitySelect.value,
         workflow_enabled: reviewSettingsWorkflowEnabled.checked,
         json_enabled: reviewSettingsJSONEnabled instanceof HTMLInputElement ? reviewSettingsJSONEnabled.checked : false,
         github_issues_enabled: reviewSettingsGitHubIssuesEnabled instanceof HTMLInputElement ? reviewSettingsGitHubIssuesEnabled.checked : false,
@@ -12800,6 +12807,12 @@
           update.dataset.requestId = requestID;
           applyTaskTimingSummary(update, task);
           meta.append(repos, branch, update);
+          if (task.complexity) {
+            const runtime = document.createElement("div");
+            const model = task.resolved_model || (task.model_resolution ? "CLI default" : "");
+            runtime.textContent = [`Complexity: ${task.complexity}`, model, task.cli_version, task.model_resolution].filter(Boolean).join(" · ");
+            meta.appendChild(runtime);
+          }
 
           footer.append(meta, topActions);
           body.append(footer);
@@ -14123,6 +14136,7 @@
       state.settingsBusy = Boolean(busy);
       updateSettingsAgentAuth();
       window.CommitSigningSettings?.setModalBusy(Boolean(busy));
+      defaultComplexitySelect.disabled = Boolean(busy) || !state.settingsLoaded;
       reviewSettingsClose.disabled = Boolean(busy);
       for (const control of [reviewSettingsAutoMerge, reviewSettingsDeleteMergedBranches,
         reviewSettingsDefaultLibrary, reviewSettingsChatEnabled, reviewSettingsJSONEnabled, reviewSettingsWorkflowEnabled, reviewSettingsGitHubIssuesEnabled,
@@ -14195,6 +14209,10 @@
       if (!state.reviewSettings.chatEnabled && state.appDisplay === "chat") {
         setAppDisplay("studio");
       }
+    });
+    defaultComplexitySelect.addEventListener("change", () => {
+      state.reviewSettings.defaultComplexity = defaultComplexitySelect.value;
+      setReviewSettingsStatus("", "Changes will be saved on close.");
     });
     reviewSettingsWorkflowEnabled.addEventListener("change", () => {
       state.reviewSettings = { ...state.reviewSettings, workflowEnabled: reviewSettingsWorkflowEnabled.checked };

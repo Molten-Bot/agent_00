@@ -63,6 +63,7 @@ func workflowRunConfigWithLibrary(r workflow.Run, resolve workflowLibraryResolve
 	}
 	assign := w.Task.AssignCreator
 	c.AssignCreator = &assign
+	c.Complexity = w.Task.Complexity
 	c.Draft = w.Task.Draft
 	if w.Task.TargetSubdir != "" {
 		c.TargetSubdir = w.Task.TargetSubdir

@@ -39,6 +39,7 @@ func TestReadRuntimeConfigUISettingsMatchesIndividualReaders(t *testing.T) {
 	}
 	for name, path := range paths {
 		want := RuntimeConfigUISettings{
+			DefaultComplexity:                  "standard",
 			DefaultLibraryEnabled:              ReadRuntimeConfigDefaultLibraryEnabled(path),
 			ChatEnabled:                        ReadRuntimeConfigChatEnabled(path),
 			JSONEnabled:                        ReadRuntimeConfigJSONEnabled(path),
@@ -54,5 +55,27 @@ func TestReadRuntimeConfigUISettingsMatchesIndividualReaders(t *testing.T) {
 		if got := ReadRuntimeConfigUISettings(path); !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: ReadRuntimeConfigUISettings() = %+v, want %+v", name, got, want)
 		}
+	}
+}
+
+func TestDefaultComplexitySettingsUpdate(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.json")
+	save := func(level *string) error {
+		return SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, nil, nil, nil, nil, RuntimeConfigUISettingsUpdate{DefaultComplexity: level})
+	}
+	advanced := "advanced"
+	invalid := "model-name"
+	if err := save(&advanced); err != nil {
+		t.Fatal(err)
+	}
+	if err := save(nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := save(&invalid); err == nil {
+		t.Fatal("invalid complexity accepted")
+	}
+	if settings, err := LoadRuntimeConfigUISettings(path); err != nil || settings.DefaultComplexity != advanced {
+		t.Fatal(settings, err)
 	}
 }

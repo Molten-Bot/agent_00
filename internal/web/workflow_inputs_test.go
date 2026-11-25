@@ -18,7 +18,7 @@ import (
 func inputWorkflowServer(t *testing.T, source string) (Server, workflow.Definition) {
 	t.Helper()
 	root := t.TempDir()
-	w := workflow.Definition{ID: "input", Name: "Input", Enabled: true, Repository: "acme/repo", Trigger: workflow.Trigger{Event: "app." + source}, Filters: workflow.Filters{Mode: "all"}, Task: workflow.Task{Kind: "implement", Instructions: "Run focused tests", IssueLinkMode: "reference"}, ReviewCycles: 2, Merge: workflow.Merge{Method: "squash", RequireApproval: true}}
+	w := workflow.Definition{ID: "input", Name: "Input", Enabled: true, Repository: "acme/repo", Trigger: workflow.Trigger{Event: "app." + source}, Filters: workflow.Filters{Mode: "all"}, Task: workflow.Task{Kind: "implement", Complexity: "easy", Instructions: "Run focused tests", IssueLinkMode: "reference"}, ReviewCycles: 2, Merge: workflow.Merge{Method: "squash", RequireApproval: true}}
 	store := &workflow.Store{Path: filepath.Join(root, "workflows.json")}
 	if err := store.Initialize(workflow.Document{Version: workflow.Version, Workflows: []workflow.Definition{w}}); err != nil {
 		t.Fatal(err)
@@ -47,7 +47,7 @@ func TestInputWorkflowsKeepPayloadAndJournalCompletion(t *testing.T) {
 			if err != nil || id != "request-one" {
 				t.Fatal(id, err)
 			}
-			if got.Workflow == nil || got.Workflow.ReviewCycles != 2 || !strings.Contains(got.Prompt, "Fix the endpoint") || !strings.Contains(got.Prompt, "Run focused tests") || got.BaseBranch != "feature" || got.TargetSubdir != "src" || got.ResponseMode != "off" {
+			if got.Complexity != "easy" || got.Workflow == nil || got.Workflow.ReviewCycles != 2 || !strings.Contains(got.Prompt, "Fix the endpoint") || !strings.Contains(got.Prompt, "Run focused tests") || got.BaseBranch != "feature" || got.TargetSubdir != "src" || got.ResponseMode != "off" {
 				t.Fatalf("lost submission or policy: %+v", got)
 			}
 			if err := s.Workflows.Tick(t.Context()); err != nil {
@@ -233,5 +233,16 @@ func TestJSONSubmissionCannotSetWorkflowMarker(t *testing.T) {
 				t.Fatalf("expected a direct JSON task, got %+v", task)
 			}
 		})
+	}
+}
+
+func TestTaskModelDiagnostics(t *testing.T) {
+	t.Parallel()
+	b := NewBroker()
+	b.RecordTaskRunConfig("request-model", []byte(`{"prompt":"test","complexity":"advanced"}`))
+	b.IngestLog(`task request_id=request-model stage=codex status=ok action=resolve_model complexity=advanced model="account-model" cli_version="codex 1.2" resolution=model/list`)
+	task, ok := b.Task("request-model")
+	if !ok || task.Complexity != "advanced" || task.ResolvedModel != "account-model" || task.CLIVersion != "codex 1.2" || task.ModelResolution != "model/list" {
+		t.Fatalf("missing diagnostics: %+v", task)
 	}
 }

@@ -71,7 +71,7 @@ func unchangedImportedSchedule(w workflow.Definition, schedule localruntime.Libr
 		w.Trigger.Event == "schedule" && w.Trigger.IntervalHours == float64(schedule.IntervalHours) &&
 		w.Task.Kind == "implement" && w.Task.LibraryTaskName == schedule.LibraryTaskName &&
 		w.Task.Instructions == schedule.PromptContext && w.Task.BaseBranch == schedule.BaseBranch &&
-		w.Task.TargetSubdir == target && w.Task.Draft == schedule.Draft &&
+		w.Task.Complexity == "" && w.Task.TargetSubdir == target && w.Task.Draft == schedule.Draft &&
 		w.Task.Reviewers != nil && reflect.DeepEqual(*w.Task.Reviewers, reviewers) &&
 		w.ReviewCycles == 0 && w.Merge == (workflow.Merge{Method: "squash", RequireApproval: true})
 }

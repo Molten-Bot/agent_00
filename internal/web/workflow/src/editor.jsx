@@ -1041,6 +1041,18 @@ function Editor() {
               {selection === "task" && (
                 <>
                   <h2>Agent task</h2>
+                  <Field label="Task complexity">
+                    <select
+                      aria-label="Task complexity"
+                      value={current.task.complexity || ""}
+                      onChange={(e) => updateTask("complexity", e.target.value || undefined)}
+                    >
+                      <option value="">Use settings default</option>
+                      <option value="easy">Easy</option>
+                      <option value="standard">Standard</option>
+                      <option value="advanced">Advanced</option>
+                    </select>
+                  </Field>
                   {current.trigger.event.startsWith("pr.") && (
                     <Field label="Task kind">
                       <select

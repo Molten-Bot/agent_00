@@ -193,6 +193,7 @@ type ReviewSettingsState struct {
 	ReviewLevel                        string   `json:"review_level"`
 	DefaultLibraryEnabled              bool     `json:"default_library_enabled"`
 	ChatEnabled                        bool     `json:"chat_enabled"`
+	DefaultComplexity                  string   `json:"default_complexity"`
 	WorkflowEnabled                    bool     `json:"workflow_enabled"`
 	JSONEnabled                        bool     `json:"json_enabled"`
 	GitHubIssuesEnabled                bool     `json:"github_issues_enabled"`
@@ -220,6 +221,7 @@ type ReviewSettingsRequest struct {
 	// ChatEnabled is a pointer for the same reason as DefaultLibraryEnabled.
 	ChatEnabled *bool `json:"chat_enabled,omitempty"`
 	// WorkflowEnabled and JSONEnabled preserve saved values when omitted.
+	DefaultComplexity                  *string   `json:"default_complexity,omitempty"`
 	WorkflowEnabled                    *bool     `json:"workflow_enabled,omitempty"`
 	JSONEnabled                        *bool     `json:"json_enabled,omitempty"`
 	GitHubIssuesEnabled                *bool     `json:"github_issues_enabled,omitempty"`

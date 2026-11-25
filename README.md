@@ -629,6 +629,26 @@ signing remains global. Turning off Workflow stops custom activations and merges
 while already started tasks retain their captured policy and can finish.
 Configured default automation remains available with the builder off.
 
+In Settings → Features, **Default task complexity** starts at Standard. Each workflow’s
+Agent task can inherit that setting or select Easy, Standard, or Advanced. The
+server captures the effective level when it queues a task and reuses it for
+retries. A standalone run config can also specify `"complexity": "advanced"`.
+
+Codex queries the installed CLI’s app-server model catalog with the task environment.
+Standard uses the recommended model. Easy favors a model offering lower reasoning
+effort and Advanced favors one offering higher effort. Among models offering the same effort, the catalog’s descriptions of simple or
+complex tasks take priority, followed by its recommended model. Image tasks require image support when the catalog reports input
+modalities. If discovery is unavailable, Codex uses its configured CLI default.
+An empty compatible catalog or an explicit provider rejection fails the task.
+
+The Claude Code CLI uses the provider’s configured Haiku, Sonnet, or Opus model
+for Easy, Standard, or Advanced respectively. The standalone CLI integration
+uses the corresponding CLI alias as its fallback when no provider model override
+is set. The alias can resolve to different versions across accounts and providers.
+Expanded task details show the requested level, model identifier passed to the CLI,
+CLI version, and resolution source. For Codex’s default fallback they show “CLI
+default”. A rejected model surfaces the CLI’s error in the task log.
+
 The isolated editor source is in `internal/web/workflow`. To update its checked-in
 Go-embedded assets, run:
 

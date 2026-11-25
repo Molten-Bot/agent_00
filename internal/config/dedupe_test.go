@@ -247,3 +247,18 @@ func TestWorkflowActivationsHaveIndependentDedupeKeys(t *testing.T) {
 		t.Fatal("renaming changed activation identity")
 	}
 }
+
+func TestDedupeKeyKeepsDifferentComplexitiesSeparate(t *testing.T) {
+	t.Parallel()
+	cfg := Config{Prompt: "Fix tests"}
+	legacy := DedupeKey(cfg)
+	seen := map[string]bool{}
+	for _, level := range []string{"standard", "easy", "advanced"} {
+		cfg.Complexity = level
+		key := DedupeKey(cfg)
+		if seen[key] || (level == "standard" && key != legacy) {
+			t.Fatalf("unexpected deduplication key for %s: %s", level, key)
+		}
+		seen[key] = true
+	}
+}
