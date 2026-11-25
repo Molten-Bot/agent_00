@@ -451,7 +451,7 @@ test('switching workflows by keyboard during a drag leaves the new workflow unto
  await second.focus();
  await page.keyboard.press('Enter');
  assert.equal(await name.inputValue(),'First workflow','switching is blocked while the pointer drag is active');
- assert.match(await page.getByRole('status').textContent(),/Finish moving the workflow/);
+ assert.match(await page.locator('.wf-notice').textContent(),/Finish moving the workflow/);
  await page.mouse.move(x+120,y,{steps:4});
  await page.mouse.up();
  assert.equal(await name.inputValue(),'First workflow');
