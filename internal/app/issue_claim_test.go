@@ -56,18 +56,17 @@ func TestReservedIssueCheckoutRecovery(t *testing.T) {
 			runGit(dir, "init", "-b", "main")
 			runGit(dir, "config", "user.name", "Test")
 			runGit(dir, "config", "user.email", "test@example.com")
-			runGit(dir, "config", "commit.gpgsign", "false")
 			file := filepath.Join(dir, "work.txt")
 			if err := os.WriteFile(file, []byte("base"), 0600); err != nil {
 				t.Fatal(err)
 			}
 			runGit(dir, "add", "work.txt")
-			runGit(dir, "commit", "-m", "base")
+			runGit(dir, "commit", "--no-gpg-sign", "-m", "base")
 			runGit(dir, "switch", "-c", reserved)
 			runGit(dir, "remote", "add", "origin", remoteDir)
 			runGit(dir, "push", "origin", "main", reserved)
 			runGit(dir, "branch", "-m", renamed)
-			runGit(dir, "commit", "--allow-empty", "-m", "agent commit")
+			runGit(dir, "commit", "--no-gpg-sign", "--allow-empty", "-m", "agent commit")
 			if len(tc.prepare) > 0 {
 				runGit(dir, tc.prepare...)
 			}

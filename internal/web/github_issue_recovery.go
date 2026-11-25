@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -353,15 +354,17 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 			return s.deferIssueUnlock(record.ID, err)
 		}
 	}
-	if cooling {
+	if cooling || record.State == "fulfilled" {
 		return nil
 	}
-	if remote.Claim.ID == record.ID && record.BranchReserved {
-		pr, err := s.verifiedIssuePR(ctx, issue)
+	// Branch conflicts need explicit recovery with evidence from the saved
+	// workspace before a matching PR can fulfill the claim.
+	if remote.Claim.ID == record.ID && record.BranchReserved && !requiresIssueBranchRecovery(record) {
+		pr, err := s.findIssuePR(ctx, issue)
 		if err != nil {
 			return s.deferIssueRecord(record, err)
 		}
-		if pr.URL != "" {
+		if pr.URL != "" && !pr.Closed {
 			return s.recordVerifiedIssuePR(record, pr)
 		}
 	}
@@ -520,7 +523,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	return nil
 }
 
-func (s Server) recordVerifiedIssuePR(record localruntime.IssueClaimRecord, pr verifiedIssuePullRequest) error {
+func (s Server) recordVerifiedIssuePR(record localruntime.IssueClaimRecord, pr issuePullRequest) error {
 	record.PRURL = pr.URL
 	record.PRTitle = strings.TrimSpace(pr.Title)
 	record.VerifiedAt = time.Now().UTC()
@@ -669,6 +672,11 @@ func (s Server) deferIssueRecord(record localruntime.IssueClaimRecord, cause err
 
 const legacyIssueBranchRenameFailure = "reserved issue branch cannot be renamed; explicit recovery is required"
 
+func requiresIssueBranchRecovery(record localruntime.IssueClaimRecord) bool {
+	return record.Incident == localruntime.IssueIncidentBranchRecovery ||
+		strings.HasSuffix(record.FailureDetail(), legacyIssueBranchRenameFailure)
+}
+
 func missingReservedIssueRef(branch string) error {
 	return fmt.Errorf("%w: restore the remote ref %q to the intended issue commits, then use Recover / retry",
 		app.ErrIssueBranchRecovery, "refs/heads/"+branch)
@@ -679,6 +687,7 @@ func blockIssueBranchRecovery(record *localruntime.IssueClaimRecord, action stri
 	record.Incident = localruntime.IssueIncidentBranchRecovery
 	record.Error = action
 	record.NextAttemptAt = time.Time{}
+	record.UnlockPending = record.LabelAdded
 }
 
 func isStaleIssueClaim(record localruntime.IssueClaimRecord) bool {
@@ -723,18 +732,59 @@ func (s Server) unlockIssue(ctx context.Context, record *localruntime.IssueClaim
 	return s.IssueClaims.Save(*record)
 }
 
-type verifiedIssuePullRequest struct {
-	URL   string
-	Title string
+type issuePullRequest struct {
+	URL     string
+	Title   string
+	HeadSHA string
+	Closed  bool
+	Merged  bool
 }
 
-func (s Server) verifiedIssuePR(ctx context.Context, issue *config.GitHubIssueConfig) (verifiedIssuePullRequest, error) {
+func (s Server) verifyRecoveredIssuePR(ctx context.Context, record localruntime.IssueClaimRecord, pr issuePullRequest) error {
+	issue := record.Run.GitHubIssue
+	action := fmt.Errorf("%w: verify the recovered commits in the saved workspace, publish them on %q in the existing pull request, then use Recover / retry",
+		app.ErrIssueBranchRecovery, issue.Claim.Branch)
+	if record.WorkspaceDir == "" || pr.HeadSHA == "" {
+		return action
+	}
+	// Claimed issue runs have exactly one checkout, under repo/ in the run
+	// workspace. Read it without updating the index or walking parent repos.
+	gitCtx, cancel := context.WithTimeout(ctx, githubIssueCommandTimeout)
+	defer cancel()
+	dir := filepath.Join(record.WorkspaceDir, "repo")
+	runner := execx.OSRunner{}
+	status, err := runner.Run(gitCtx, execx.Command{Dir: dir, Name: "git",
+		Args: []string{"--no-optional-locks", "-c", "core.fsmonitor=false", "--git-dir=.git", "--work-tree=.", "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"}})
+	if err != nil || status.Stdout != "" {
+		return action
+	}
+	head, err := runner.Run(gitCtx, execx.Command{Dir: dir, Name: "git",
+		Args: []string{"--git-dir=.git", "rev-parse", "--verify", "HEAD"}})
+	if err != nil || strings.TrimSpace(head.Stdout) != pr.HeadSHA {
+		return action
+	}
+	if !pr.Merged {
+		sha, err := s.issueBranchSHA(ctx, issue.Repository, issue.Claim.Branch)
+		if err != nil {
+			return fmt.Errorf("verify the reserved branch for the existing pull request: %w", err)
+		}
+		if sha != pr.HeadSHA {
+			return action
+		}
+	}
+	return nil
+}
+
+// Prefer a PR that can fulfill the claim. Retain a closed, unmerged match
+// across pages so recovery can require reopening it before dispatch.
+func (s Server) findIssuePR(ctx context.Context, issue *config.GitHubIssueConfig) (issuePullRequest, error) {
 	owner, _, _ := strings.Cut(issue.Repository, "/")
+	var closed issuePullRequest
 	for page := 1; ; page++ {
 		query := url.Values{"state": {"all"}, "head": {owner + ":" + issue.Claim.Branch}, "base": {issue.Claim.BaseBranch}, "per_page": {"100"}, "page": {fmt.Sprint(page)}}
 		result, err := s.runIssueGH(ctx, execx.Command{Name: "gh", Args: []string{"api", "repos/" + issue.Repository + "/pulls?" + query.Encode()}})
 		if err != nil {
-			return verifiedIssuePullRequest{}, err
+			return issuePullRequest{}, err
 		}
 		var prs []struct {
 			Number   int
@@ -743,6 +793,7 @@ func (s Server) verifiedIssuePR(ctx context.Context, issue *config.GitHubIssueCo
 			MergedAt *time.Time `json:"merged_at"`
 			Head     struct {
 				Ref  string
+				SHA  string
 				Repo struct {
 					FullName string `json:"full_name"`
 				}
@@ -755,18 +806,29 @@ func (s Server) verifiedIssuePR(ctx context.Context, issue *config.GitHubIssueCo
 			}
 		}
 		if err := json.Unmarshal([]byte(result.Stdout), &prs); err != nil {
-			return verifiedIssuePullRequest{}, err
+			return issuePullRequest{}, err
 		}
 		for _, pr := range prs {
-			if pr.Number > 0 && (pr.State == "open" || pr.MergedAt != nil) && pr.Head.Ref == issue.Claim.Branch && pr.Base.Ref == issue.Claim.BaseBranch && strings.EqualFold(pr.Head.Repo.FullName, issue.Repository) && strings.EqualFold(pr.Base.Repo.FullName, issue.Repository) {
-				return verifiedIssuePullRequest{
-					URL:   fmt.Sprintf("https://github.com/%s/pull/%d", issue.Repository, pr.Number),
-					Title: pr.Title,
-				}, nil
+			if pr.Number <= 0 || pr.Head.Ref != issue.Claim.Branch || pr.Base.Ref != issue.Claim.BaseBranch ||
+				!strings.EqualFold(pr.Head.Repo.FullName, issue.Repository) || !strings.EqualFold(pr.Base.Repo.FullName, issue.Repository) {
+				continue
+			}
+			match := issuePullRequest{
+				URL:     fmt.Sprintf("https://github.com/%s/pull/%d", issue.Repository, pr.Number),
+				Title:   pr.Title,
+				HeadSHA: pr.Head.SHA,
+				Merged:  pr.MergedAt != nil,
+			}
+			if pr.State == "open" || match.Merged {
+				return match, nil
+			}
+			if pr.State == "closed" && closed.URL == "" {
+				match.Closed = true
+				closed = match
 			}
 		}
 		if len(prs) < 100 {
-			return verifiedIssuePullRequest{}, nil
+			return closed, nil
 		}
 	}
 }

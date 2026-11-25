@@ -370,6 +370,8 @@ func (s Server) blockIssueClaim(record localruntime.IssueClaimRecord, cause erro
 			current.UnlockPending = current.LabelAdded
 			if errors.Is(cause, localruntime.ErrIssueOwnershipChanged) {
 				blockStaleIssueClaim(current)
+			} else if errors.Is(cause, app.ErrIssueBranchRecovery) {
+				blockIssueBranchRecovery(current, cause.Error())
 			} else if s.IssueRecovery != nil {
 				s.scheduleIssueRetry(current, cause)
 				var rate *githubutil.RateLimitError
@@ -416,6 +418,15 @@ func (s Server) finishIssueAdmission(ctx context.Context, record localruntime.Is
 	}
 	if err := s.ensureIssueClaimLabel(ctx, issue); err != nil {
 		return "", s.blockIssueClaim(record, err)
+	}
+	if record.Version == 2 && record.BranchReserved {
+		exists, err := s.issueBranchExists(ctx, issue.Repository, issue.Claim.Branch)
+		if err != nil {
+			return "", s.blockIssueClaim(record, err)
+		}
+		if !exists {
+			return "", s.blockIssueClaim(record, missingReservedIssueRef(issue.Claim.Branch))
+		}
 	}
 	record.Phase = "submitting"
 	record.Error = ""
@@ -811,16 +822,27 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 			return s.SubmitTaskRerun(ctx, previous.RequestID, body, false)
 		}
 	}
-	branchRecovery := previous.Incident == localruntime.IssueIncidentBranchRecovery ||
-		strings.HasSuffix(previous.FailureDetail(), legacyIssueBranchRenameFailure)
-	if (automatic || branchRecovery) && s.IssueRecovery != nil && remote.Claim.ID != "" {
-		pr, err := s.verifiedIssuePR(ctx, &config.GitHubIssueConfig{Repository: repository, Number: number, Claim: &remote.Claim})
+	branchRecovery := requiresIssueBranchRecovery(previous)
+	if s.IssueRecovery != nil && remote.Claim.ID != "" {
+		claimedIssue := &config.GitHubIssueConfig{Repository: repository, Number: number, Claim: &remote.Claim}
+		pr, err := s.findIssuePR(ctx, claimedIssue)
 		if err != nil {
 			return "", 502, err
 		}
-		if pr.URL != "" {
+		if pr.Closed {
+			return "", http.StatusConflict, fmt.Errorf("%w: reopen the existing pull request for %q before using Recover / retry",
+				app.ErrIssueBranchRecovery, remote.Claim.Branch)
+		}
+		if pr.URL != "" && (automatic || branchRecovery) {
 			if !automatic && branchRecovery && previous.Version == 2 &&
 				previous.InstanceID == remote.InstanceID && previous.InstanceID == s.instanceID() {
+				if err := s.verifyRecoveredIssuePR(ctx, previous, pr); err != nil {
+					status := http.StatusBadGateway
+					if errors.Is(err, app.ErrIssueBranchRecovery) {
+						status = http.StatusConflict
+					}
+					return "", status, err
+				}
 				if err := s.recordVerifiedIssuePR(previous, pr); err != nil {
 					return "", 503, err
 				}
