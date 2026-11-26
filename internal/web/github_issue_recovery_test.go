@@ -563,7 +563,9 @@ func TestIssueRecoveryUnlocksOnlyAfterWorkerExit(t *testing.T) {
 			s, f := recoveryServer(t)
 			reconcileOrAdmitTestIssue(context.Background(), s)
 			record := completeRecoveryRecord(t, s, outcome, 1)
-			lock, err := s.IssueClaims.TryLock(localruntime.IssueExecutionKey(record.Run.GitHubIssue))
+			// This fixture has no worker children; explicitly release the lock so
+			// unrelated parallel subprocess launches cannot inherit it until exec.
+			lock, err := s.IssueClaims.TryControlLock(localruntime.IssueExecutionKey(record.Run.GitHubIssue))
 			if err != nil || lock == nil {
 				t.Fatal(err)
 			}

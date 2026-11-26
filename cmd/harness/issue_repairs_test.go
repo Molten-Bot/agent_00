@@ -275,7 +275,8 @@ func TestIssueRepairDispatchWithholdsLegacyAgentReport(t *testing.T) {
 }
 
 func TestIssueRepairOutboxKeepsSupersededRolloutSkipped(t *testing.T) {
-	t.Parallel()
+	// Raw worker locks can be inherited by parallel subprocess launches until exec.
+	// Keep this immediate release-and-reconcile fixture serial.
 	for _, tc := range []struct {
 		name               string
 		attempt, number    int
