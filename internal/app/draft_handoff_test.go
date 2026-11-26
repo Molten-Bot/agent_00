@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -16,12 +17,13 @@ import (
 )
 
 func TestClaimedIssueDraftHandoff(t *testing.T) {
-	t.Parallel()
+	t.Setenv("GH_TOKEN", "test-gh-token")
+	t.Setenv("GITHUB_TOKEN", "test-github-token")
 	const (
 		branch       = "agent00-issue-17"
 		repoURL      = "https://github.com/acme/repo.git"
 		prURL        = "https://github.com/acme/repo/pull/42"
-		requirement  = "Verify the submitted clean review and the CI result for the draft head."
+		requirement  = "Verify the complete live changed-file inventory, the change to work.txt, the submitted clean review, and the CI result for the draft head."
 		localSuccess = "Implementation and local checks passed.\nDraft handoff: " + requirement
 	)
 	for _, tc := range []struct {
@@ -31,13 +33,17 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 		retry        bool
 		findings     bool
 		headMoved    bool
+		filesPartial bool
+		reviewStale  bool
 		queued       bool
 		wantExit     int
 	}{
-		{name: "publish and verify", answer: localSuccess, change: true},
+		{name: "verify private draft from supplied evidence", answer: localSuccess, change: true},
 		{name: "retry verification on the same draft", answer: localSuccess, change: true, retry: true, wantExit: ExitPR},
 		{name: "findings keep the draft blocked", answer: localSuccess, change: true, findings: true, wantExit: ExitPR},
 		{name: "head changed before verification", answer: localSuccess, change: true, headMoved: true, wantExit: ExitPR},
+		{name: "changed-file evidence unavailable", answer: localSuccess, change: true, filesPartial: true, wantExit: ExitPR},
+		{name: "submitted review stale", answer: localSuccess, change: true, reviewStale: true, wantExit: ExitPR},
 		{name: "blocked implementation", answer: "Failure: Implementation remains blocked.\nError details: Local tests failed.\nDraft handoff: " + requirement, change: true, wantExit: ExitCodex},
 		{name: "agent execution failed", answer: localSuccess, change: true, agentErr: errors.New("execution failed"), wantExit: ExitCodex},
 		{name: "missing handoff", answer: "Implementation and local checks passed.", change: true, wantExit: ExitCodex},
@@ -78,6 +84,14 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			var implementations, creates, verifications, ready int
 			var draft, accepted bool
 			var savedRequirement string
+			hasGitHubCredential := func(cmd execx.Command) bool {
+				if cmd.Env == nil {
+					return os.Getenv("GH_TOKEN") != "" || os.Getenv("GITHUB_TOKEN") != ""
+				}
+				return slices.ContainsFunc(cmd.Env, func(entry string) bool {
+					return strings.HasPrefix(entry, "GH_TOKEN=") || strings.HasPrefix(entry, "GITHUB_TOKEN=")
+				})
+			}
 			runner := issueBranchRunner(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
 				args := strings.Join(cmd.Args, " ")
 				if res, ok, err := api.handle(cmd); ok {
@@ -100,14 +114,28 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 						return execx.Result{}, nil
 					case strings.Contains(cmd.Stdin, "Verify the remaining acceptance criteria against live GitHub evidence"):
 						verifications++
+						if hasGitHubCredential(cmd) || !strings.Contains(args, "network={enabled=false}") {
+							t.Error("private draft verifier must run without GitHub credentials or network access")
+						}
 						if !draft || api.posts != 1 || !strings.Contains(cmd.Stdin, requirement) ||
-							!strings.Contains(cmd.Stdin, "#pullrequestreview-1") || !strings.Contains(cmd.Stdin, `"conclusion":"SUCCESS"`) {
+							!strings.Contains(cmd.Stdin, `"state":"OPEN","isDraft":true`) ||
+							!strings.Contains(cmd.Stdin, `"headRefOid":"`+api.head+`"`) ||
+							!strings.Contains(cmd.Stdin, `"commit_id":"`+api.head+`"`) ||
+							!strings.Contains(cmd.Stdin, "#pullrequestreview-1") || !strings.Contains(cmd.Stdin, "No material issues found.") ||
+							!strings.Contains(cmd.Stdin, `"conclusion":"SUCCESS"`) || !strings.Contains(cmd.Stdin, `"path":"work.txt"`) ||
+							!strings.Contains(cmd.Stdin, "+implemented") {
 							t.Error("verification started before draft and submitted evidence were available")
+						}
+						if tc.filesPartial {
+							if !strings.Contains(cmd.Stdin, "Incomplete: the returned file count") {
+								t.Error("partial live file inventory was not marked incomplete")
+							}
+							return execx.Result{Stdout: `{"status":"blocked","evidence":"Need the complete live changed-file inventory from GitHub."}`}, nil
 						}
 						if tc.retry && verifications == 1 {
 							return execx.Result{Stdout: `{"status":"blocked","evidence":"Missing live evidence"}`}, nil
 						}
-						return execx.Result{Stdout: `{"status":"passed","evidence":"CI and the submitted clean review match the draft head"}`}, nil
+						return execx.Result{Stdout: `{"status":"passed","evidence":"The live inventory lists work.txt, its patch shows the change, and CI and the clean review match the draft head."}`}, nil
 					case strings.Contains(cmd.Stdin, "Prepared pull-request review context"):
 						if !draft {
 							t.Error("review ran before draft publication")
@@ -130,6 +158,16 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 					}
 				case "gh":
 					switch {
+					case args == "api repos/acme/repo/pulls/42/reviews/1":
+						if !hasGitHubCredential(cmd) {
+							return execx.Result{}, errors.New("private draft review requires authentication")
+						}
+						review := api.review
+						if tc.reviewStale {
+							review.Head = "older-head"
+						}
+						data, err := json.Marshal(review)
+						return execx.Result{Stdout: string(data)}, err
 					case args == "--version" || strings.HasPrefix(args, "auth ") || strings.HasPrefix(args, "issue edit "):
 						return execx.Result{}, nil
 					case strings.HasPrefix(args, "pr create "):
@@ -157,10 +195,21 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 						return execx.Result{Stdout: "CI\tpass\n"}, nil
 					case strings.HasPrefix(args, "pr view "):
 						head := api.head
-						if tc.headMoved && strings.Contains(args, "statusCheckRollup") {
-							head = "new-head"
+						fileEvidence := ""
+						if strings.Contains(args, "statusCheckRollup") && strings.Contains(args, "changedFiles,files") {
+							if !hasGitHubCredential(cmd) {
+								return execx.Result{}, errors.New("private draft file metadata requires authentication")
+							}
+							if tc.headMoved {
+								head = "new-head"
+							}
+							fileCount := 1
+							if tc.filesPartial {
+								fileCount = 2
+							}
+							fileEvidence = fmt.Sprintf(`,"changedFiles":%d,"files":[{"path":"work.txt","additions":1,"deletions":1}]`, fileCount)
 						}
-						return execx.Result{Stdout: fmt.Sprintf(`{"number":42,"url":%q,"state":"OPEN","mergeable":"MERGEABLE","baseRefName":"main","headRefName":%q,"headRefOid":%q,"isDraft":%t,"statusCheckRollup":[{"name":"CI","conclusion":"SUCCESS"}]}`, prURL, branch, head, draft)}, nil
+						return execx.Result{Stdout: fmt.Sprintf(`{"number":42,"url":%q,"state":"OPEN","mergeable":"MERGEABLE","baseRefName":"main","headRefName":%q,"headRefOid":%q,"isDraft":%t,"statusCheckRollup":[{"name":"CI","conclusion":"SUCCESS"}]%s}`, prURL, branch, head, draft, fileEvidence)}, nil
 					case strings.Contains(args, "api repos/acme/repo/pulls?") && creates > 0:
 						return execx.Result{Stdout: fmt.Sprintf(`[{"html_url":%q,"title":"Issue","state":"open","head":{"ref":%q,"repo":{"full_name":"acme/repo"}},"base":{"ref":"main"}}]`, prURL, branch)}, nil
 					case strings.HasPrefix(args, "api "):
@@ -199,9 +248,18 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			if tc.wantExit != ExitSuccess && (!draft || ready != 0 || result.ReviewReceipt != nil || result.PRVerificationPassed) {
 				t.Fatalf("failed verification or review released the draft: %+v", result)
 			}
-			if tc.findings || tc.headMoved {
+			if tc.filesPartial {
+				if creates != 1 || api.posts != 1 || verifications != 1 || !strings.Contains(fmt.Sprint(result.Err), "Need the complete live changed-file inventory from GitHub.") {
+					t.Fatalf("expected one blocked verification with an actionable reason: %+v", result)
+				}
+				return
+			}
+			if tc.findings || tc.headMoved || tc.reviewStale {
 				if creates != 1 || api.posts != 1 || verifications != 0 {
 					t.Fatal("expected one submitted review and verification blocked")
+				}
+				if tc.reviewStale && !strings.Contains(fmt.Sprint(result.Err), "submitted review 1 to show a clean verdict on the draft head") {
+					t.Fatalf("expected the stale review to block verification: %+v", result)
 				}
 				return
 			}

@@ -87,6 +87,12 @@ func (r SubmittedReview) Matches(head, marker string) bool {
 		r.SubmittedAt != "" && strings.HasPrefix(r.Body, marker+"\n")
 }
 
+func (r ReviewReceipt) MatchesSubmittedCleanReview(review SubmittedReview) bool {
+	return review.ID == r.ReviewID && review.Matches(r.Head, r.Marker) &&
+		strings.HasPrefix(review.Body, r.Marker+"\n"+CleanReviewVerdict+"\n") &&
+		strings.Contains(review.Body, "No material issues found.")
+}
+
 func ReviewEndpoint(prURL string) string {
 	return "repos/" + PullRequestRepository(prURL) + "/pulls/" + PullRequestSelector(prURL) + "/reviews"
 }
@@ -197,9 +203,7 @@ func verifySubmittedCleanReview(ctx context.Context, gh ReviewCommand, receipt R
 				return fmt.Errorf("duplicate submitted review in pull request review list")
 			}
 			seenReceipt = true
-			found = review.Matches(receipt.Head, receipt.Marker) &&
-				strings.HasPrefix(review.Body, receipt.Marker+"\n"+CleanReviewVerdict+"\n") &&
-				strings.Contains(review.Body, "No material issues found.")
+			found = receipt.MatchesSubmittedCleanReview(review)
 		}
 		switch review.State {
 		case "CHANGES_REQUESTED", "APPROVED", "DISMISSED":
