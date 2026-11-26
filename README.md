@@ -653,6 +653,17 @@ not a webhook event replay: changes that occur entirely between polls can be
 missed, and a match must become false before it can activate again. For GitHub triggers, definition
 policy edits establish a new baseline; renaming and moving nodes do not.
 
+To react to a failed GitHub Actions workflow, choose **GitHub Actions failure**
+and enter the workflow filename (for example, `deploy-prod.yml`) or numeric ID.
+In JSON, use `"trigger": {"event":"action.failed","value":"deploy-prod.yml"}`.
+Configure an implementation prompt or library task. The app polls the latest 100
+runs of that workflow with the configured GitHub account. Each completed
+`failure` attempt can activate once. Existing failures are baselined unless
+`includeBacklog` is enabled. Failures on `agent00-` work branches are skipped to
+avoid triggering repair work from its own checks. The task receives the run URL,
+attempt, head branch, and commit for diagnosis, and opens any fix from the
+configured task base branch or repository default.
+
 Issue tasks retain durable claims, reserved branches, fresh issue comments, and
 recovery. PR tasks either review and comment or repair the existing head branch.
 Review limits are 0–10 repair cycles plus a final confirmation review; review-only

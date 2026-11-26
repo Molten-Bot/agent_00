@@ -41,7 +41,7 @@ import { ReviewPasses } from "./review-passes.jsx";
 import { ComplexitySlider } from "./complexity-slider.jsx";
 import { ScheduleInterval } from "./schedule-interval.jsx";
 import { RepositoryPicker } from "./repository-picker.jsx";
-import { events, newWorkflow, diagram, replaceDefinition, workflowTemplates, workflowSettings, incompleteWorkflow, automaticLayout } from "./model.js";
+import { actionFailedEvent, events, newWorkflow, diagram, replaceDefinition, workflowTemplates, workflowSettings, incompleteWorkflow, automaticLayout } from "./model.js";
 const icons = {
   calendar: CalendarClock, json: FileJson, prompt: SquarePen, chat: MessageSquare, pullRequest: GitPullRequest, issue: CircleDot, repair: Wrench,
   repository: FolderGit2,
@@ -504,6 +504,7 @@ function Editor({ defaultComplexity }) {
   }, [loaded]);
   const scheduled = current?.trigger.event === "schedule";
   const inputTriggered = current?.trigger.event.startsWith("app.");
+  const actionFailed = current?.trigger.event === actionFailedEvent;
   const libraryTask = libraryTasks.find(
     (t) => t.name === current?.task.libraryTaskName,
   );
@@ -787,7 +788,7 @@ function Editor({ defaultComplexity }) {
             loading={reposLoading}
             error={reposError}
             onRetry={loadRepos}
-            autoSelect={!dirty}
+            autoSelect={!dirty && !current}
             onChange={changeRepository}
           />
           <div className="wf-step-list">
@@ -931,11 +932,23 @@ function Editor({ defaultComplexity }) {
                         <option key={e} value={e}>
                           {e === "schedule"
                             ? "Scheduled"
-                            : e.startsWith("app.") ? `${e.slice(4)} submission` : e.replaceAll(".", " · ").replaceAll("_", " ")}
+                            : e === actionFailedEvent ? "GitHub Actions failure"
+                              : e.startsWith("app.") ? `${e.slice(4)} submission` : e.replaceAll(".", " · ").replaceAll("_", " ")}
                         </option>
                       ))}
                     </select>
                   </Field>
+                  {actionFailed && (
+                    <Field label="Workflow filename or ID">
+                      <input
+                        placeholder="deploy-prod.yml"
+                        value={current.trigger.value || ""}
+                        onChange={(e) =>
+                          edit({ trigger: { ...current.trigger, value: e.target.value } })
+                        }
+                      />
+                    </Field>
+                  )}
                   {scheduled && (
                     <>
                       <ScheduleInterval
@@ -1011,14 +1024,15 @@ function Editor({ defaultComplexity }) {
                         onChange={(v) => edit({ includeBacklog: v })}
                       />
                       <p className="wf-muted">
-                        GitHub is checked every 30 seconds. A match must stop
-                        matching before it can activate again.
+                        {actionFailed
+                          ? "Checks the latest 100 runs of this workflow every 30 seconds. Each failed attempt can start work once."
+                          : "GitHub is checked every 30 seconds. A match must stop matching before it can activate again."}
                       </p>
                     </>
                   )}
                 </>
               )}
-              {selection === "filters" && !scheduled && !inputTriggered && (
+              {selection === "filters" && !scheduled && !inputTriggered && !actionFailed && (
                 <>
                   <h2>Which items?</h2>
                   <Field label="Match rules">
@@ -1336,9 +1350,10 @@ function Editor({ defaultComplexity }) {
           <summary>Matching preview ({preview.filter((p) => p.matches).length} matches)</summary>
           <div>
             {preview.map((p) => (
-              <p key={p.item.number}>
+              <p key={p.item.actionRunId ?? p.item.number}>
                 <strong>
-                  {p.item.kind === "schedule" ? "" : `#${p.item.number} `}
+                  {p.item.kind === "action" ? `Run #${p.item.actionRunId}, attempt ${p.item.actionRunAttempt} · `
+                    : p.item.kind === "schedule" ? "" : `#${p.item.number} `}
                   {p.item.title}
                 </strong>{" "}
                 · {p.matches ? "Matches" : "Skipped"} — {p.reason}

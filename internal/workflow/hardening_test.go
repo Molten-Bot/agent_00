@@ -17,12 +17,18 @@ func TestTriggerTransitionsWhileTaskIsRunning(t *testing.T) {
 			t.Parallel()
 			w := definition("transitions")
 			w.Trigger = Trigger{Event: event, Value: "agent"}
+			if event == ActionFailedEvent {
+				w.Trigger.Value = "build.yml"
+			}
 			if strings.HasPrefix(event, "pr.") {
 				w.Task.Kind = "review"
 			}
 			e, items, count := testEngine(t, w)
 			tick(t, e) // Baseline before the item exists.
 			item := Item{Repository: w.Repository, Number: 1, Kind: strings.Split(event, ".")[0], Open: true, Labels: []string{"agent"}, Assignees: []string{"agent"}, Reviewers: []string{"agent"}, ChecksFailed: true, ReviewDecision: "CHANGES_REQUESTED"}
+			if event == ActionFailedEvent {
+				item = Item{Repository: w.Repository, Kind: "action", ActionRunID: 1, ActionRunAttempt: 1, ChecksFailed: true}
+			}
 			*items = []Item{item}
 			tick(t, e)
 			if *count != 1 {
@@ -44,6 +50,10 @@ func TestTriggerTransitionsWhileTaskIsRunning(t *testing.T) {
 				(*items)[0].ReviewDecision = "APPROVED"
 			case "pr.checks_failed":
 				(*items)[0].ChecksFailed = false
+			case ActionFailedEvent:
+				item.ActionRunAttempt++
+				(*items)[0] = item
+				(*items)[0].ChecksFailed = false
 			}
 			tick(t, e)
 			*items = []Item{item}
@@ -55,7 +65,13 @@ func TestTriggerTransitionsWhileTaskIsRunning(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err = e.Complete(runs[0].ID, Outcome{Status: "succeeded"}); err != nil {
+			activeID := ""
+			for _, run := range runs {
+				if run.Status == "running" {
+					activeID = run.ID
+				}
+			}
+			if err = e.Complete(activeID, Outcome{Status: "succeeded"}); err != nil {
 				t.Fatal(err)
 			}
 			tick(t, e)

@@ -62,6 +62,10 @@ func workflowRunConfigWithLibrary(r workflow.Run, resolve workflowLibraryResolve
 	if i.Kind == "issue" || i.Kind == "pr" {
 		c.Prompt += "\n\nGitHub item: " + i.URL + "\nTitle: " + i.Title + "\n\n" + i.Body
 	}
+	if i.Kind == "action" {
+		c.Prompt += fmt.Sprintf("\n\nFailed GitHub Actions run: %s\nWorkflow: %s\nRun ID: %d\nAttempt: %d\nHead branch: %s\nHead commit: %s",
+			i.URL, strings.TrimSpace(w.Trigger.Value), i.ActionRunID, i.ActionRunAttempt, i.HeadBranch, i.HeadSHA)
+	}
 	assign := w.Task.AssignCreator
 	c.AssignCreator = &assign
 	c.Complexity = w.Task.Complexity

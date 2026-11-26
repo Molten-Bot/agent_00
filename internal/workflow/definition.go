@@ -16,6 +16,7 @@ import (
 )
 
 const Version = 2
+const ActionFailedEvent = "action.failed"
 
 type Document struct {
 	LibrarySchedulesMigrated bool         `json:"librarySchedulesMigrated,omitempty"`
@@ -80,7 +81,8 @@ type Merge struct {
 
 var repoPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,80}$`)
-var Events = []string{"schedule", "app.prompt", "app.json", "app.chat", "issue.opened", "issue.assigned", "issue.labeled", "pr.opened", "pr.assigned", "pr.labeled", "pr.ready", "pr.review_requested", "pr.changes_requested", "pr.checks_failed"}
+var actionWorkflowPattern = regexp.MustCompile(`^([1-9][0-9]*|[A-Za-z0-9_.-]+\.ya?ml)$`)
+var Events = []string{"schedule", "app.prompt", "app.json", "app.chat", "issue.opened", "issue.assigned", "issue.labeled", "pr.opened", "pr.assigned", "pr.labeled", "pr.ready", "pr.review_requested", "pr.changes_requested", "pr.checks_failed", ActionFailedEvent}
 
 func contains(values []string, value string) bool {
 	for _, v := range values {
@@ -138,6 +140,14 @@ func (w Definition) Validate() error {
 	}
 	if IsInputEvent(w.Trigger.Event) && (w.Task.Kind != "implement" || w.Task.LibraryTaskName != "" || len(w.Filters.Rules) != 0 || w.IncludeBacklog || w.Trigger.Value != "") {
 		return fmt.Errorf("app triggers use the submitted task with optional instructions, without library templates, GitHub filters, or backlog")
+	}
+	if w.Trigger.Event == ActionFailedEvent {
+		if !actionWorkflowPattern.MatchString(strings.TrimSpace(w.Trigger.Value)) {
+			return fmt.Errorf("GitHub Actions failure triggers require a workflow filename or numeric workflow ID")
+		}
+		if w.Task.Kind != "implement" || len(w.Filters.Rules) != 0 {
+			return fmt.Errorf("GitHub Actions failure triggers run implementation tasks without issue/PR filters")
+		}
 	}
 	if w.Task.LibraryTaskName != "" && !regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`).MatchString(w.Task.LibraryTaskName) {
 		return fmt.Errorf("library task name must be a task slug")

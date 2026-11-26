@@ -40,9 +40,16 @@ func (g GitHub) command(ctx context.Context, args ...string) (string, error) {
 // ScanNeeds combines the GitHub data required by enabled triggers in one repository.
 type ScanNeeds struct {
 	Issues, PullRequests, Viewer, LinkedIssues, Reviews, Checks bool
+
+	// A selected Actions workflow is fetched independently of issue/PR scans.
+	ActionWorkflow string
 }
 
 func (n *ScanNeeds) include(w Definition) {
+	if w.Trigger.Event == ActionFailedEvent {
+		n.ActionWorkflow = strings.TrimSpace(w.Trigger.Value)
+		return
+	}
 	n.Issues = n.Issues || strings.HasPrefix(w.Trigger.Event, "issue.")
 	n.PullRequests = n.PullRequests || strings.HasPrefix(w.Trigger.Event, "pr.")
 	n.Reviews = n.Reviews || w.Trigger.Event == "pr.changes_requested"
@@ -80,6 +87,9 @@ func (g GitHub) Fetch(ctx context.Context, repo string, needs ScanNeeds) ([]Item
 	if err := g.Cooldown.CheckDiscovery(); err != nil {
 		return nil, err
 	}
+	if needs.ActionWorkflow != "" {
+		return g.fetchActionRuns(ctx, repo, needs.ActionWorkflow)
+	}
 	var viewer string
 	if needs.Viewer {
 		raw, err := g.command(ctx, "api", "user", "--jq", ".login", "--cache", "10m")
@@ -93,6 +103,49 @@ func (g GitHub) Fetch(ctx context.Context, repo string, needs ScanNeeds) ([]Item
 		resource = "pulls"
 	}
 	return g.fetchCollection(ctx, repo, resource, viewer, needs)
+}
+
+func (g GitHub) fetchActionRuns(ctx context.Context, repo, selector string) ([]Item, error) {
+	if !actionWorkflowPattern.MatchString(selector) {
+		return nil, fmt.Errorf("invalid GitHub Actions workflow selector")
+	}
+	// Bound polling to the most recent runs of the selected workflow. Include
+	// in-progress runs so the same window is used regardless of conclusion.
+	raw, err := g.command(ctx, "api", "repos/"+repo+"/actions/workflows/"+selector+"/runs?per_page=100")
+	if err != nil {
+		return nil, err
+	}
+	var response struct {
+		Runs []struct {
+			ID         int64  `json:"id"`
+			Attempt    int    `json:"run_attempt"`
+			HeadBranch string `json:"head_branch"`
+			HeadSHA    string `json:"head_sha"`
+			Name       string
+			Status     string
+			Conclusion string
+		} `json:"workflow_runs"`
+	}
+	if err := json.Unmarshal([]byte(raw), &response); err != nil {
+		return nil, fmt.Errorf("decode GitHub Actions runs: %w", err)
+	}
+	if response.Runs == nil {
+		return nil, fmt.Errorf("GitHub Actions response is missing workflow runs")
+	}
+	items := make([]Item, 0, len(response.Runs))
+	for _, run := range response.Runs {
+		if run.ID <= 0 || run.Attempt <= 0 {
+			return nil, fmt.Errorf("GitHub Actions response is missing a run ID or attempt number")
+		}
+		items = append(items, Item{
+			Repository: repo, Kind: "action", Title: run.Name,
+			URL:         fmt.Sprintf("https://github.com/%s/actions/runs/%d/attempts/%d", repo, run.ID, run.Attempt),
+			ActionRunID: run.ID, ActionRunAttempt: run.Attempt,
+			HeadBranch: run.HeadBranch, HeadSHA: run.HeadSHA,
+			ChecksFailed: run.Status == "completed" && run.Conclusion == "failure",
+		})
+	}
+	return items, nil
 }
 
 func (g GitHub) fetchCollection(ctx context.Context, repo, resource, viewer string, needs ScanNeeds) ([]Item, error) {
