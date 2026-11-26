@@ -36,6 +36,10 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 		findings            bool
 		headMoved           bool
 		pendingChecks       int
+		checkRollups        []string
+		requiredChecks      string
+		ruleset             string
+		wantChecksPending   bool
 		checksFail          bool
 		filesPartial        bool
 		filesTruncated      bool
@@ -48,6 +52,22 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 	}{
 		{name: "verify private draft from supplied evidence", answer: localSuccess, change: true},
 		{name: "wait for pending checks on reviewed head", answer: localSuccess, change: true, pendingChecks: 1},
+		{name: "empty rollup after pending with no configured checks", answer: localSuccess, change: true, pendingChecks: 1,
+			checkRollups: []string{`[{"name":"CI","status":"IN_PROGRESS"}]`, `[]`}},
+		{name: "empty rollup after pending with required checks", answer: localSuccess, change: true, pendingChecks: 1, wantExit: ExitPR, wantChecksPending: true,
+			requiredChecks: `{"contexts":["CI"]}`,
+			checkRollups:   []string{`[{"name":"CI","status":"IN_PROGRESS"}]`, `[]`}},
+		{name: "successful partial rollup omits required check", answer: localSuccess, change: true, pendingChecks: 1, wantExit: ExitPR, wantChecksPending: true,
+			requiredChecks: `{"checks":[{"context":"CI"},{"context":"lint"}]}`,
+			checkRollups:   []string{`[{"name":"CI","status":"IN_PROGRESS"}]`, `[{"name":"CI","conclusion":"SUCCESS"}]`}},
+		{name: "successful partial rollup omits ruleset check", answer: localSuccess, change: true, pendingChecks: 1, wantExit: ExitPR, wantChecksPending: true,
+			ruleset:      `[] [{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"lint"}]}}]`,
+			checkRollups: []string{`[{"name":"CI","status":"IN_PROGRESS"}]`, `[{"name":"CI","conclusion":"SUCCESS"}]`}},
+		{name: "successful partial rollup omits previously observed check", answer: localSuccess, change: true, pendingChecks: 1, wantExit: ExitPR, wantChecksPending: true,
+			checkRollups: []string{`[{"name":"CI","conclusion":"SUCCESS"},{"context":"lint","state":"PENDING"}]`, `[{"name":"CI","conclusion":"SUCCESS"}]`}},
+		{name: "required status context appears after partial rollup", answer: localSuccess, change: true, pendingChecks: 1,
+			requiredChecks: `{"contexts":["CI","lint"]}`,
+			checkRollups:   []string{`[{"name":"CI","conclusion":"SUCCESS"}]`, `[{"name":"CI","conclusion":"SUCCESS"},{"context":"lint","state":"SUCCESS"}]`}},
 		{name: "pending checks outlive the wait budget", answer: localSuccess, change: true, pendingChecks: 3, wantExit: ExitPR},
 		{name: "head moves while checks are pending", answer: localSuccess, change: true, pendingChecks: 1, headMoved: true, wantExit: ExitPR},
 		{name: "failed checks block verification", answer: localSuccess, change: true, checksFail: true, wantExit: ExitPR},
@@ -148,7 +168,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 							!strings.Contains(cmd.Stdin, `"headRefOid":"`+api.head+`"`) ||
 							!strings.Contains(cmd.Stdin, `"commit_id":"`+api.head+`"`) ||
 							!strings.Contains(cmd.Stdin, "#pullrequestreview-1") || !strings.Contains(cmd.Stdin, "No material issues found.") ||
-							!strings.Contains(cmd.Stdin, `"conclusion":"SUCCESS"`) || !strings.Contains(cmd.Stdin, `"path":"work.txt"`) ||
+							(len(tc.checkRollups) == 0 && !strings.Contains(cmd.Stdin, `"conclusion":"SUCCESS"`)) || !strings.Contains(cmd.Stdin, `"path":"work.txt"`) ||
 							!strings.Contains(cmd.Stdin, "+implemented") {
 							t.Error("verification started before draft and submitted evidence were available")
 						}
@@ -255,22 +275,34 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 						}
 						draft = slices.Contains(cmd.Args, "--undo")
 						return execx.Result{}, nil
+					case args == "api repos/acme/repo/branches/main/protection/required_status_checks":
+						if tc.requiredChecks != "" {
+							return execx.Result{Stdout: tc.requiredChecks}, nil
+						}
+						return execx.Result{Stderr: "Branch not protected"}, errors.New("exit status 1")
+					case args == "api --paginate repos/acme/repo/rules/branches/main?per_page=100":
+						if tc.ruleset != "" {
+							return execx.Result{Stdout: tc.ruleset}, nil
+						}
+						return execx.Result{Stdout: "[]"}, nil
 					case strings.HasPrefix(args, "pr checks "):
 						return execx.Result{Stdout: "CI\tpass\n"}, nil
 					case strings.HasPrefix(args, "pr view "):
 						head := api.head
 						fileEvidence := ""
-						check := `"conclusion":"SUCCESS"`
+						rollup := `[{"name":"CI","conclusion":"SUCCESS"}]`
 						if strings.Contains(args, "statusCheckRollup") && strings.Contains(args, "changedFiles,files") {
 							if !hasGitHubCredential(cmd) {
 								return execx.Result{}, errors.New("private draft file metadata requires authentication")
 							}
 							evidenceReads++
 							switch {
+							case evidenceReads <= len(tc.checkRollups):
+								rollup = tc.checkRollups[evidenceReads-1]
 							case tc.pendingChecks >= evidenceReads:
-								check = `"status":"IN_PROGRESS"`
+								rollup = `[{"name":"CI","status":"IN_PROGRESS"}]`
 							case tc.checksFail:
-								check = `"conclusion":"FAILURE"`
+								rollup = `[{"name":"CI","conclusion":"FAILURE"}]`
 							}
 							if tc.headMoved && evidenceReads > tc.pendingChecks {
 								head = "new-head"
@@ -288,7 +320,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 							}
 							fileEvidence = fmt.Sprintf(`,"changedFiles":%d,"files":[%s]`, fileCount, strings.Join(files, ","))
 						}
-						return execx.Result{Stdout: fmt.Sprintf(`{"number":42,"url":%q,"state":"OPEN","mergeable":"MERGEABLE","baseRefName":"main","headRefName":%q,"headRefOid":%q,"isDraft":%t,"statusCheckRollup":[{"name":"CI",%s}]%s}`, prURL, branch, head, draft, check, fileEvidence)}, nil
+						return execx.Result{Stdout: fmt.Sprintf(`{"number":42,"url":%q,"state":"OPEN","mergeable":"MERGEABLE","baseRefName":"main","headRefName":%q,"headRefOid":%q,"isDraft":%t,"statusCheckRollup":%s%s}`, prURL, branch, head, draft, rollup, fileEvidence)}, nil
 					case strings.Contains(args, "api repos/acme/repo/pulls?") && creates > 0:
 						return execx.Result{Stdout: fmt.Sprintf(`[{"html_url":%q,"title":"Issue","state":"open","head":{"ref":%q,"repo":{"full_name":"acme/repo"}},"base":{"ref":"main"}}]`, prURL, branch)}, nil
 					case strings.HasPrefix(args, "api "):
@@ -348,13 +380,14 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			if tc.pendingChecks > 0 && waits != 1 {
 				t.Fatalf("waits = %d, want one pending check retry", waits)
 			}
-			if tc.pendingChecks > 1 && !errors.Is(result.Err, ErrReviewPending) {
+			checksPending := tc.wantChecksPending || tc.pendingChecks > 1
+			if checksPending && !errors.Is(result.Err, errDraftChecksPending) {
 				t.Fatalf("expected pending verification after retry budget, got %v", result.Err)
 			}
 			if tc.checksFail && !strings.Contains(fmt.Sprint(result.Err), "checks failed on the reviewed pull request head") {
 				t.Fatalf("expected failed checks to block verification, got %v", result.Err)
 			}
-			if tc.findings || tc.headMoved || tc.reviewStale || tc.checksFail || tc.pendingChecks > 1 {
+			if tc.findings || tc.headMoved || tc.reviewStale || tc.checksFail || checksPending {
 				if creates != 1 || api.posts != 1 || verifications != 0 {
 					t.Fatal("expected one submitted review and verification blocked")
 				}

@@ -148,7 +148,7 @@ func (e *issueExecution) finish(ctx context.Context, state string, result app.Re
 		if state == "interrupted" && errors.Is(context.Cause(ctx), context.Canceled) {
 			record.Incident = "service_shutdown"
 		}
-		if errors.Is(result.Err, app.ErrReviewPending) && state == "error" {
+		if state == "error" && (errors.Is(result.Err, app.ErrReviewPending) || errors.Is(result.Err, app.ErrReviewHeadChanged)) {
 			record.Outcome = workflow.OutcomeReviewPending
 			record.PRURL = result.PRURL
 		}

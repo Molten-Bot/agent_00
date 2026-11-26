@@ -134,6 +134,9 @@ var errPRChecksWatchTimeout = errors.New("pull request checks watch timed out")
 // ErrReviewPending indicates that the draft must remain gated while GitHub catches up.
 var ErrReviewPending = errors.New("pull request review pending")
 
+// ErrReviewHeadChanged requires a new review on the current published head.
+var ErrReviewHeadChanged = errors.New("published branch differs from the local review head; a fresh review is required")
+
 var errFinalReviewFindingsRemain = errors.New("post-task review findings remain")
 
 // Result captures run output and status.
@@ -4837,7 +4840,7 @@ func (h Harness) confirmPublishedReviewHead(ctx context.Context, repo repoWorksp
 		return fmt.Errorf("confirm published review head: %w", err)
 	}
 	if remoteBranchHead(remote.Stdout, repo.Branch) != expected {
-		return fmt.Errorf("%w: published branch differs from the local review head; a fresh review is required", ErrReviewPending)
+		return ErrReviewHeadChanged
 	}
 	return nil
 }
@@ -9925,22 +9928,29 @@ func (h Harness) reconcileNoChecksWithRequiredStatusChecks(ctx context.Context, 
 		return false, "", nil
 	}
 
-	res, err := h.runCommand(ctx, "checks", requiredStatusChecksCommand(repo.Dir, targetRepo, baseBranch))
+	names, err := h.configuredRequiredStatusChecks(ctx, repo.Dir, targetRepo, baseBranch, false)
 	if err != nil {
-		if isRequiredStatusChecksNotConfigured(res, err) {
-			return true, fmt.Sprintf("No required status checks are configured for branch %s.", baseBranch), nil
-		}
 		return false, "", err
-	}
-
-	names, parseErr := parseRequiredStatusCheckNames(res.Stdout)
-	if parseErr != nil {
-		return false, "", parseErr
 	}
 	if len(names) == 0 {
 		return true, fmt.Sprintf("No required status checks are configured for branch %s.", baseBranch), nil
 	}
 	return false, strings.Join(names, "\n"), nil
+}
+
+func (h Harness) configuredRequiredStatusChecks(ctx context.Context, repoDir, targetRepo, baseBranch string, sanitized bool) ([]string, error) {
+	cmd := requiredStatusChecksCommand(repoDir, targetRepo, baseBranch)
+	if sanitized {
+		cmd = commandWithoutGitHubTokenEnv(cmd)
+	}
+	res, err := h.runCommand(ctx, "checks", cmd)
+	if isRequiredStatusChecksNotConfigured(res, err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return parseRequiredStatusCheckNames(res.Stdout)
 }
 
 func (h Harness) reconcileNoChecksWithWorkflowDispatch(ctx context.Context, repo repoWorkspace) (bool, string, error) {

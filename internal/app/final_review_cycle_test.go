@@ -562,13 +562,14 @@ func TestRunFinalReviewCycleDoesNotSendBranchHistoryFindingToRepairAgent(t *test
 
 func TestRunFinalReviewCycleConfirmsFinalPassFixBeforeRelease(t *testing.T) {
 	for _, tc := range []struct {
-		name                 string
-		lagReads, waits      int
-		remoteMoved, pending bool
+		name            string
+		lagReads, waits int
+		remoteMoved     bool
+		wantErr         error
 	}{
 		{name: "transient lag", lagReads: 1, waits: 1},
-		{name: "persistent lag", lagReads: 10, waits: 5, pending: true},
-		{name: "concurrent update while metadata shows the repair", remoteMoved: true, pending: true},
+		{name: "persistent lag", lagReads: 10, waits: 5, wantErr: ErrReviewPending},
+		{name: "concurrent update while metadata shows the repair", remoteMoved: true, wantErr: ErrReviewHeadChanged},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			runner := &finalFindingReviewCycleRunner{t: t, findingsPass: 1, repairLagReads: tc.lagReads, remoteMoved: tc.remoteMoved}
@@ -611,10 +612,10 @@ func TestRunFinalReviewCycleConfirmsFinalPassFixBeforeRelease(t *testing.T) {
 			if waits != tc.waits {
 				t.Fatalf("waits = %d, want %d", waits, tc.waits)
 			}
-			if tc.pending {
-				if !errors.Is(err, ErrReviewPending) || exitCode != ExitPR || stage != "review" ||
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) || exitCode != ExitPR || stage != "review" ||
 					runner.reviews != 1 || runner.comments != 1 || repo.ReviewReceipt != nil {
-					t.Fatalf("expected review to stay pending without new evidence, got (%d, %q, %v), reviews=%d, receipt=%+v", exitCode, stage, err, runner.reviews, repo.ReviewReceipt)
+					t.Fatalf("expected review to stay gated without new evidence, got (%d, %q, %v), reviews=%d, receipt=%+v", exitCode, stage, err, runner.reviews, repo.ReviewReceipt)
 				}
 				return
 			}

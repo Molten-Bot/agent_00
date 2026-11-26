@@ -410,7 +410,7 @@ func VerifyReviewCheckRules(ctx context.Context, gh ReviewCommand, appID int64, 
 	if pr.State != "OPEN" || pr.HeadRefOID != receipt.Head || pr.BaseRefName == "" {
 		return fmt.Errorf("pull request changed before review policy verification")
 	}
-	raw, err = gh(ctx, "api", "--paginate", "repos/"+repo+"/rules/branches/"+url.PathEscape(pr.BaseRefName)+"?per_page=100")
+	raw, err = readActiveBranchRules(ctx, gh, repo, pr.BaseRefName)
 	if err != nil {
 		return err
 	}
@@ -508,40 +508,75 @@ func PublishReviewCheck(ctx context.Context, gh ReviewCommand, appID int64, rece
 	return nil
 }
 
-func verifyRequiredReviewCheck(raw string, appID int64) error {
-	type rule struct {
-		Type       string
-		Parameters struct {
-			Checks []struct {
-				Context       string
-				IntegrationID int64 `json:"integration_id"`
-			} `json:"required_status_checks"`
-			ThreadResolution bool `json:"required_review_thread_resolution"`
+type branchRule struct {
+	Type       string
+	Parameters struct {
+		Checks []struct {
+			Context       string
+			IntegrationID int64 `json:"integration_id"`
+		} `json:"required_status_checks"`
+		ThreadResolution bool `json:"required_review_thread_resolution"`
+	}
+}
+
+func readActiveBranchRules(ctx context.Context, gh ReviewCommand, repo, branch string) (string, error) {
+	return gh(ctx, "api", "--paginate", "repos/"+repo+"/rules/branches/"+url.PathEscape(branch)+"?per_page=100")
+}
+
+func decodeBranchRules(raw string) ([]branchRule, error) {
+	dec := json.NewDecoder(strings.NewReader(raw))
+	var rules []branchRule
+	for {
+		var page []branchRule
+		if err := dec.Decode(&page); err == io.EOF {
+			return rules, nil
+		} else if err != nil || page == nil {
+			return nil, fmt.Errorf("cannot verify active target branch rules")
+		}
+		rules = append(rules, page...)
+	}
+}
+
+// RequiredBranchRuleStatusChecks returns check names from all active ruleset pages.
+func RequiredBranchRuleStatusChecks(ctx context.Context, gh ReviewCommand, repo, branch string) ([]string, error) {
+	raw, err := readActiveBranchRules(ctx, gh, repo, branch)
+	if err != nil {
+		return nil, err
+	}
+	rules, err := decodeBranchRules(raw)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, rule := range rules {
+		if rule.Type == "required_status_checks" {
+			for _, check := range rule.Parameters.Checks {
+				names = append(names, check.Context)
+			}
 		}
 	}
-	dec := json.NewDecoder(strings.NewReader(raw))
+	return names, nil
+}
+
+func verifyRequiredReviewCheck(raw string, appID int64) error {
+	rules, err := decodeBranchRules(raw)
+	if err != nil {
+		return err
+	}
 	required, threads := false, false
-	for {
-		var page []rule
-		if err := dec.Decode(&page); err == io.EOF {
-			break
-		} else if err != nil || page == nil {
-			return fmt.Errorf("cannot verify active target branch rules")
-		}
-		for _, rule := range page {
-			switch rule.Type {
-			case "merge_queue":
-				return fmt.Errorf("review policy enforcement requires a target branch without a merge queue")
-			case "pull_request":
-				threads = threads || rule.Parameters.ThreadResolution
-			case "required_status_checks":
-				for _, check := range rule.Parameters.Checks {
-					if check.Context == ReviewCheckName {
-						if check.IntegrationID != appID || appID <= 0 {
-							return fmt.Errorf("active rules do not pin %q to the configured GitHub App", ReviewCheckName)
-						}
-						required = true
+	for _, rule := range rules {
+		switch rule.Type {
+		case "merge_queue":
+			return fmt.Errorf("review policy enforcement requires a target branch without a merge queue")
+		case "pull_request":
+			threads = threads || rule.Parameters.ThreadResolution
+		case "required_status_checks":
+			for _, check := range rule.Parameters.Checks {
+				if check.Context == ReviewCheckName {
+					if check.IntegrationID != appID || appID <= 0 {
+						return fmt.Errorf("active rules do not pin %q to the configured GitHub App", ReviewCheckName)
 					}
+					required = true
 				}
 			}
 		}

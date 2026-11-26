@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -81,9 +80,9 @@ func (h Harness) waitForDraftVerificationPrompt(ctx context.Context, repo repoWo
 	if sleep == nil {
 		sleep = sleepWithContext
 	}
-	requireChecks := false
+	observedChecks := make(map[string]bool)
 	for remaining := timeout; ; {
-		prompt, err := h.draftVerificationPrompt(ctx, repo, requireChecks)
+		prompt, err := h.draftVerificationPrompt(ctx, repo, observedChecks)
 		if !errors.Is(err, errDraftChecksPending) || remaining <= 0 {
 			return prompt, err
 		}
@@ -93,16 +92,15 @@ func (h Harness) waitForDraftVerificationPrompt(ctx context.Context, repo repoWo
 			return "", err
 		}
 		remaining -= delay
-		requireChecks = true
 	}
 }
 
-func (h Harness) draftVerificationPrompt(ctx context.Context, repo repoWorkspace, requireChecks bool) (string, error) {
+func (h Harness) draftVerificationPrompt(ctx context.Context, repo repoWorkspace, observedChecks map[string]bool) (string, error) {
 	receipt := repo.ReviewReceipt
 	if receipt == nil || !receipt.Clean() {
 		return "", fmt.Errorf("waiting for a submitted clean review receipt for draft verification")
 	}
-	readGH := func(args ...string) (string, error) {
+	readGH := func(ctx context.Context, args ...string) (string, error) {
 		cmd := ghCommand(repo.Dir, args...)
 		if repo.ReviewSanitize {
 			cmd = commandWithoutGitHubTokenEnv(cmd)
@@ -110,7 +108,7 @@ func (h Harness) draftVerificationPrompt(ctx context.Context, repo repoWorkspace
 		res, err := h.runCommand(ctx, "pr_verification", cmd)
 		return res.Stdout, err
 	}
-	rawMetadata, err := readGH("pr", "view", repo.PRURL,
+	rawMetadata, err := readGH(ctx, "pr", "view", repo.PRURL,
 		"--json", "number,url,state,isDraft,baseRefName,headRefName,headRefOid,statusCheckRollup,reviewDecision,labels,changedFiles,files")
 	if err != nil {
 		return "", fmt.Errorf("load live pull request evidence: %w", err)
@@ -149,19 +147,49 @@ func (h Harness) draftVerificationPrompt(ctx context.Context, repo repoWorkspace
 			return "", fmt.Errorf("decode reviewed head checks: %w", err)
 		}
 	}
-	if requireChecks || slices.ContainsFunc(checks, func(check githubutil.StatusCheck) bool {
-		return check.Name != githubutil.ReviewCheckName && check.Context != githubutil.ReviewCheckName
-	}) {
-		passed, failed := githubutil.CIStatus(checks)
-		if failed {
-			return "", fmt.Errorf("checks failed on the reviewed pull request head")
+	visibleChecks := make(map[string]bool)
+	for _, check := range checks {
+		if check.Name == githubutil.ReviewCheckName || check.Context == githubutil.ReviewCheckName {
+			continue
 		}
-		if !passed {
+		visibleChecks[stringsx.FirstNonEmpty(check.Name, check.Context)] = true
+	}
+	passed, failed := githubutil.CIStatus(checks)
+	if failed {
+		return "", fmt.Errorf("checks failed on the reviewed pull request head")
+	}
+	for name := range visibleChecks {
+		observedChecks[name] = true
+	}
+	if len(visibleChecks) > 0 && !passed {
+		return "", errDraftChecksPending
+	}
+
+	targetRepo := githubutil.PullRequestRepository(receipt.PRURL)
+	required, err := h.configuredRequiredStatusChecks(ctx, repo.Dir, targetRepo, repo.BaseBranch, repo.ReviewSanitize)
+	if err != nil {
+		return "", fmt.Errorf("load required checks for draft verification: %w", err)
+	}
+	ruleChecks, err := githubutil.RequiredBranchRuleStatusChecks(ctx, readGH, targetRepo, repo.BaseBranch)
+	if err != nil {
+		return "", fmt.Errorf("load required ruleset checks for draft verification: %w", err)
+	}
+	for _, name := range append(required, ruleChecks...) {
+		if name != githubutil.ReviewCheckName && !visibleChecks[name] {
 			return "", errDraftChecksPending
 		}
 	}
+	// A nonempty rollup must account for checks already seen on this head.
+	// An empty rollup is allowed when the base has no required CI checks.
+	if len(visibleChecks) > 0 {
+		for name := range observedChecks {
+			if !visibleChecks[name] {
+				return "", errDraftChecksPending
+			}
+		}
+	}
 
-	rawReview, err := readGH("api", fmt.Sprintf("%s/%d", githubutil.ReviewEndpoint(receipt.PRURL), receipt.ReviewID))
+	rawReview, err := readGH(ctx, "api", fmt.Sprintf("%s/%d", githubutil.ReviewEndpoint(receipt.PRURL), receipt.ReviewID))
 	if err != nil {
 		return "", fmt.Errorf("load submitted review %d for draft verification: %w", receipt.ReviewID, err)
 	}

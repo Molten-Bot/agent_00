@@ -704,7 +704,7 @@ func runServer(args []string) int {
 				if outcome.Result.Err != nil {
 					reviewOutcome.Reason = outcome.Result.Err.Error()
 				}
-				if outcome.State == "error" && errors.Is(outcome.Result.Err, app.ErrReviewPending) {
+				if outcome.State == "error" && (errors.Is(outcome.Result.Err, app.ErrReviewPending) || errors.Is(outcome.Result.Err, app.ErrReviewHeadChanged)) {
 					reviewOutcome.Status = workflow.OutcomeReviewPending
 				}
 
