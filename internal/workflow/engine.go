@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
-
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -298,11 +298,12 @@ func (e *Engine) logRun(r Run, event string) {
 	if strings.HasPrefix(r.Reason, "Review writeback pending:") {
 		reason = "review_writeback_pending"
 	}
-	var durationMS int64
-	if r.StartedAt != nil && (r.Status == "succeeded" || r.Status == "merged") {
-		durationMS = r.UpdatedAt.Sub(*r.StartedAt).Milliseconds()
+	durationMS := "unknown"
+	if terminal(r.Status) && r.StartedAt != nil && !r.StartedAt.IsZero() &&
+		!r.UpdatedAt.IsZero() && !r.UpdatedAt.Before(*r.StartedAt) {
+		durationMS = strconv.FormatInt(r.UpdatedAt.Sub(*r.StartedAt).Milliseconds(), 10)
 	}
-	e.Logf("workflow event=%s workflow_id=%q run_id=%q request_id=%q status=%s reason=%s duration_ms=%d", event, r.Workflow.ID, r.ID, r.RequestID, r.Status, reason, durationMS)
+	e.Logf("workflow event=%s workflow_id=%q run_id=%q request_id=%q status=%s reason=%s duration_ms=%s", event, r.Workflow.ID, r.ID, r.RequestID, r.Status, reason, durationMS)
 }
 func (e *Engine) Preview(ctx context.Context, w Definition) ([]Decision, error) {
 	if err := w.Validate(); err != nil {
@@ -624,6 +625,7 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		})
 	}
 	finish := func() error {
+		r.UpdatedAt = e.now()
 		if err := commit(); err != nil {
 			return err
 		}
@@ -738,7 +740,6 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 				r.Status, r.Reason = "succeeded", "Task completed"
 			}
 		}
-		r.UpdatedAt = e.now()
 		return finish()
 	}
 	waiting := r.Status == "waiting" || r.Status == awaitingReview
@@ -768,7 +769,6 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 				// entity against fresh review work.
 				r.Status = awaitingReview
 				r.Reason = "Waiting for a submitted clean review on the current pull request head"
-				r.UpdatedAt = e.now()
 				return finish()
 			}
 			r.MergeHead = receipt.Head
@@ -829,7 +829,6 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		}
 	}
 
-	r.UpdatedAt = e.now()
 	return finish()
 }
 

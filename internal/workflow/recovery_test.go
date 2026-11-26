@@ -75,7 +75,8 @@ func TestDispatchRecoveryUsesSavedOutcomeWithoutTaskHistory(t *testing.T) {
 	w := definition("recover-outcome")
 	e, _, _ := testEngine(t, w)
 	var events []string
-	e.Logf = func(format string, args ...any) { events = append(events, args[4].(string)) }
+	e.Logf = func(format string, args ...any) { events = append(events, fmt.Sprintf(format, args...)) }
+	e.Now = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 	e.Status = func(string) Outcome {
 		t.Fatal("looked up task status despite durable outcome")
 		return Outcome{}
@@ -93,7 +94,7 @@ func TestDispatchRecoveryUsesSavedOutcomeWithoutTaskHistory(t *testing.T) {
 	}
 	tick(t, e)
 	runs, err := e.Runs()
-	if err != nil || len(runs) != 0 || len(events) != 1 || events[0] != "succeeded" {
+	if err != nil || len(runs) != 0 || len(events) != 1 || !strings.HasSuffix(events[0], "status=succeeded reason=succeeded duration_ms=unknown") {
 		t.Fatalf("runs=%+v events=%v err=%v", runs, events, err)
 	}
 }
