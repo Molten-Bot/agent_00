@@ -35,7 +35,7 @@ func (h Harness) verifyDraftHandoff(ctx context.Context, repo repoWorkspace, run
 	receipt := repo.ReviewReceipt
 	h.logf("stage=pr_verification status=start")
 	cmd := ghCommand(repo.Dir, "pr", "view", repo.PRURL,
-		"--json", "number,url,state,isDraft,baseRefName,headRefName,headRefOid,statusCheckRollup,reviewDecision,closingIssuesReferences,labels")
+		"--json", "number,url,state,isDraft,baseRefName,headRefName,headRefOid,statusCheckRollup,reviewDecision,labels")
 	if repo.ReviewSanitize {
 		cmd = commandWithoutGitHubTokenEnv(cmd)
 	}
