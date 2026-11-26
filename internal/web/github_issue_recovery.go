@@ -279,7 +279,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	if record.State == "blocked" && record.Incident == localruntime.IssueIncidentBranchRecovery && !record.UnlockPending {
 		return nil
 	}
-	lock, err := s.IssueClaims.TryLock(localruntime.IssueExecutionKey(record.Run.GitHubIssue))
+	lock, err := s.IssueClaims.TryControlLock(localruntime.IssueExecutionKey(record.Run.GitHubIssue))
 	if err != nil {
 		return err
 	}

@@ -3,6 +3,7 @@ package localruntime
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -62,6 +63,26 @@ func (s *IssueClaimStore) TryLock(key string) (*os.File, error) {
 		return nil, err
 	}
 	return f, nil
+}
+
+type issueControlLock struct {
+	file *os.File
+}
+
+// TryControlLock acquires the worker's lock for recovery or a liveness probe.
+// The returned handle stays in the controller and is never passed to workers.
+func (s *IssueClaimStore) TryControlLock(key string) (*issueControlLock, error) {
+	file, err := s.TryLock(key)
+	if file == nil {
+		return nil, err
+	}
+	return &issueControlLock{file: file}, nil
+}
+
+func (l *issueControlLock) Close() error {
+	// A concurrent fork can retain the open file description until exec.
+	// Unlock explicitly so that reference cannot delay recovery or dispatch.
+	return errors.Join(unlockIssueLock(l.file), l.file.Close())
 }
 
 // IssueRunner keeps the worker lock in every subprocess, including agents.
