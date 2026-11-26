@@ -248,6 +248,21 @@ test('running tasks omit the status icon and always expose their original prompt
   assert.equal(await page.locator('#task-prompt-modal-body').textContent(), originalPrompt);
 });
 
+test('task card shows an icon-only GitHub repository link named for its destination', async t => {
+  const { page } = await openPage(t, 'current-work', { width: 1280, height: 900 }, false);
+  const repos = page.locator('#task-list .task').first().locator('.task-meta-sites');
+  const link = repos.getByRole('link', { name: 'example/mobile-project', exact: true });
+  const url = 'https://github.com/example/mobile-project';
+  await link.locator('svg.lucide-link').waitFor();
+  assert.equal((await repos.innerText()).trim(), '');
+  assert.equal(await link.getAttribute('title'), 'example/mobile-project');
+  assert.equal(await link.getAttribute('href'), url);
+
+  await page.evaluate(() => { window.open = url => { window.openedRepo = url; }; });
+  await link.click();
+  assert.equal(await page.evaluate(() => window.openedRepo), url);
+});
+
 test('task card distinguishes the titled pull request from the merged pull request', async t => {
   const trackedURL = 'https://github.com/example/project/pull/10';
   const titledURL = 'https://github.com/example/other-project/pull/20';
