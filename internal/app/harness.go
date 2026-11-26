@@ -392,6 +392,10 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		agentsPath = ""
 	}
 	h.logf("stage=workspace status=ok run_dir=%s guid=%s agents=%s", runDir, guid, agentsPath)
+	if storageErr := workspace.CheckPersistentStorage(runDir); errors.Is(storageErr, workspace.ErrUnsuitableStorage) {
+		h.logf("workspace_storage status=warn run_dir=%q filesystem=memory_backed action=%q", runDir,
+			"task checkout, build caches and temporary files use RAM; configure HARNESS_WORKSPACE_RAM_BASE and HARNESS_WORKSPACE_DISK_BASE on disk for Go or browser runs")
+	}
 
 	repoURLs := cfg.RepoList()
 	if len(repoURLs) == 0 {
@@ -4797,6 +4801,9 @@ func (h Harness) logFinalReviewStoppedForMergedPR(repo repoWorkspace, pass, tota
 }
 
 func finalReviewMode(passes int) string {
+	if passes <= 0 {
+		return "off"
+	}
 	switch passes {
 	case 2:
 		return "low"
@@ -4805,7 +4812,7 @@ func finalReviewMode(passes int) string {
 	case 10:
 		return "high"
 	default:
-		return "off"
+		return "custom"
 	}
 }
 
