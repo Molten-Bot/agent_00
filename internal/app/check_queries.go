@@ -213,6 +213,9 @@ func (h Harness) confirmCurrentRequiredChecks(ctx context.Context, repo repoWork
 	}
 	passing := make(map[string]bool, len(required))
 	for _, check := range checks {
+		if !check.IsRequired {
+			continue
+		}
 		name := check.Name
 		if name == "" {
 			name = check.Context
@@ -220,9 +223,6 @@ func (h Harness) confirmCurrentRequiredChecks(ctx context.Context, repo repoWork
 		passed, failed := githubutil.CIStatus([]githubutil.StatusCheck{check.StatusCheck})
 		if failed {
 			return fmt.Errorf("check %q failed on the current pull request head", name)
-		}
-		if !check.IsRequired {
-			continue
 		}
 		if previous, seen := passing[name]; seen {
 			passed = passed && previous
