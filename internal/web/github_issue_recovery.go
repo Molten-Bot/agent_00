@@ -468,7 +468,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 				return s.deferIssueRecord(record, err)
 			}
 		}
-		if ownsBranch && pr.URL != "" && !pr.Closed && pr.BaseBranch == issue.Claim.BaseBranch {
+		if ownsBranch && pr.URL != "" && !pr.Closed && pr.BaseBranch == issue.Claim.BaseBranch && !pr.resumesVerification(record) {
 			if record.Outcome == "interrupted" {
 				if err := s.verifyRecoveredIssuePR(ctx, record, pr); err != nil {
 					return s.deferIssueRecord(record, err)
@@ -808,6 +808,11 @@ type issuePullRequest struct {
 	BaseBranch string
 	Closed     bool
 	Merged     bool
+}
+
+func (pr issuePullRequest) resumesVerification(record localruntime.IssueClaimRecord) bool {
+	return pr.URL != "" && !pr.Closed && !pr.Merged && record.PRVerification != "" &&
+		pr.BaseBranch == record.Run.GitHubIssue.Claim.BaseBranch
 }
 
 func (pr issuePullRequest) recoveryBlocker(issue *config.GitHubIssueConfig) error {

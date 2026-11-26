@@ -140,6 +140,8 @@ func (e *issueExecution) finish(ctx context.Context, state string, result app.Re
 		}
 		if state != "completed" {
 			record.Incident = "missing_pr"
+		} else if result.PRVerificationPassed {
+			record.PRVerification = ""
 		}
 		record.NoChangeEvidence = result.NoChangeEvidence
 		if state == "interrupted" && errors.Is(context.Cause(ctx), context.Canceled) {
@@ -196,6 +198,7 @@ func (e *issueExecution) configure(ctx context.Context, h *app.Harness) (context
 	h.ResumeIssueWorkspace = true
 	h.IssueCheckoutComplete = e.record.CheckoutComplete
 	h.IssuePublicationReady = e.record.PublicationReady
+	h.IssuePRVerification = e.record.PRVerification
 	onCheckout := h.OnCheckout
 	h.OnCheckout = func() {
 		if onCheckout != nil {
@@ -211,9 +214,12 @@ func (e *issueExecution) configure(ctx context.Context, h *app.Harness) (context
 			cancel(fmt.Errorf("persist completed checkout: %w", err))
 		}
 	}
-	h.SaveIssuePublicationReady = func(ready bool) error {
+	h.SaveIssuePublicationReady = func(ready bool, verification string) error {
 		return e.store.Update(e.record.ID, func(record *localruntime.IssueClaimRecord) error {
 			record.PublicationReady = ready
+			if verification != "" {
+				record.PRVerification = verification
+			}
 			return nil
 		})
 	}

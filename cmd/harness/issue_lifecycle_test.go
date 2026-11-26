@@ -101,6 +101,40 @@ func TestIssueExecutionIdempotenceAndTerminalReceipt(t *testing.T) {
 	}
 }
 
+func TestIssueExecutionClearsVerificationOnlyOnVerifiedCompletion(t *testing.T) {
+	t.Parallel()
+	const requirement = "Verify the submitted review on the draft head."
+	for _, tc := range []struct {
+		state  string
+		passed bool
+		want   string
+	}{
+		{state: "completed", want: requirement},
+		{state: "stopped", passed: true, want: requirement},
+		{state: "completed", passed: true},
+	} {
+		t.Run(fmt.Sprintf("%s/verification_passed=%t", tc.state, tc.passed), func(t *testing.T) {
+			store, record := lifecycleRecord(t)
+			record.PRVerification = requirement
+			if err := store.Save(record); err != nil {
+				t.Fatal(err)
+			}
+			work, _, err := prepareIssueExecution(store, record.Run, localruntime.IssueRecoveryConfig{})
+			if err != nil || work == nil {
+				t.Fatalf("prepare issue execution = %v, %v", work, err)
+			}
+			result := app.Result{PRURL: "https://github.com/acme/repo/pull/42", PRVerificationPassed: tc.passed}
+			if err := work.finish(t.Context(), tc.state, result, nil); err != nil {
+				t.Fatal(err)
+			}
+			got, err := store.Load(record.ID)
+			if err != nil || got.Outcome != tc.state || got.PRVerification != tc.want {
+				t.Fatalf("saved outcome=%q verification=%q error=%v, want %q and %q", got.Outcome, got.PRVerification, err, tc.state, tc.want)
+			}
+		})
+	}
+}
+
 func TestIssueExecutionDiskFullRestoresAgentBudget(t *testing.T) {
 	t.Parallel()
 	store, record := lifecycleRecord(t)

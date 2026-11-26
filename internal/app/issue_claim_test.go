@@ -303,21 +303,26 @@ func TestClaimedIssuePreservesExistingCheckout(t *testing.T) {
 
 func TestClaimedIssueResumesOnlyAcceptedPublication(t *testing.T) {
 	t.Parallel()
+	const verification = "Verify the submitted review on the draft head."
 	for _, tc := range []struct {
 		name            string
 		ready           bool
+		verification    string
 		remoteOnly      bool
 		localCommits    bool
 		agentFails      bool
+		handoff         bool
+		wantAgent       bool
 		wantPublish     bool
 		wantExit        int
 		wantCheckpoints []bool
 	}{
-		{name: "accepted work resumes publication", ready: true, wantPublish: true, wantExit: ExitGit},
-		{name: "accepted local commits resume publication", ready: true, localCommits: true, wantPublish: true, wantExit: ExitGit},
-		{name: "remote commits do not resume publication", ready: true, remoteOnly: true, agentFails: true, wantExit: ExitCodex, wantCheckpoints: []bool{false}},
-		{name: "failed agent leaves partial work unpublished", agentFails: true, wantExit: ExitCodex, wantCheckpoints: []bool{false}},
-		{name: "successful retry makes work publishable", wantPublish: true, wantExit: ExitGit, wantCheckpoints: []bool{false, true}},
+		{name: "accepted work resumes publication", ready: true, verification: verification, wantPublish: true, wantExit: ExitGit},
+		{name: "accepted local commits resume publication", ready: true, verification: verification, localCommits: true, wantPublish: true, wantExit: ExitGit},
+		{name: "legacy readiness needs a handoff", ready: true, wantAgent: true, wantExit: ExitCodex, wantCheckpoints: []bool{false}},
+		{name: "remote commits without verification do not resume publication", ready: true, remoteOnly: true, agentFails: true, wantAgent: true, wantExit: ExitCodex, wantCheckpoints: []bool{false}},
+		{name: "failed agent leaves partial work unpublished", agentFails: true, wantAgent: true, wantExit: ExitCodex, wantCheckpoints: []bool{false}},
+		{name: "successful retry makes work publishable", handoff: true, wantAgent: true, wantPublish: true, wantExit: ExitGit, wantCheckpoints: []bool{false, true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := sampleConfig()
@@ -329,6 +334,9 @@ func TestClaimedIssueResumesOnlyAcceptedPublication(t *testing.T) {
 					agentStarted = true
 					if tc.agentFails {
 						return execx.Result{Stdout: "Failure: Export incomplete.\nError details: Export waits for an upstream approval."}, nil
+					}
+					if tc.handoff {
+						return execx.Result{Stdout: "Draft handoff: " + verification}, nil
 					}
 					return execx.Result{}, nil
 				}
@@ -362,15 +370,16 @@ func TestClaimedIssueResumesOnlyAcceptedPublication(t *testing.T) {
 			h := New(runner)
 			h.ResumeIssueWorkspace = true
 			h.IssuePublicationReady = tc.ready
+			h.IssuePRVerification = tc.verification
 			var checkpoints []bool
-			h.SaveIssuePublicationReady = func(ready bool) error {
+			h.SaveIssuePublicationReady = func(ready bool, _ string) error {
 				checkpoints = append(checkpoints, ready)
 				return nil
 			}
 			h.Workspace = testWorkspaceManager("issue-publication-resume")
 			h.TargetDirOK = func(string) bool { return true }
 			result := h.Run(context.Background(), cfg)
-			if publishing != tc.wantPublish || agentStarted == (tc.ready && !tc.remoteOnly) || result.ExitCode != tc.wantExit {
+			if publishing != tc.wantPublish || agentStarted != tc.wantAgent || result.ExitCode != tc.wantExit {
 				t.Fatalf("publishing=%t agent=%t result=%+v", publishing, agentStarted, result)
 			}
 			if !slices.Equal(checkpoints, tc.wantCheckpoints) {
@@ -391,7 +400,7 @@ func TestIssueConflictAgentRestoresPublicationReadiness(t *testing.T) {
 				return execx.Result{Stdout: "Resolved merge conflicts."}, nil
 			}))
 			var checkpoints []bool
-			h.SaveIssuePublicationReady = func(ready bool) error { checkpoints = append(checkpoints, ready); return nil }
+			h.SaveIssuePublicationReady = func(ready bool, _ string) error { checkpoints = append(checkpoints, ready); return nil }
 			runtime := agentruntime.Default()
 			_, err := h.runCodexCapture(context.Background(), runtime, t.TempDir(), "Resolve conflicts", codexRunOptions{}, "", "off", newAgentInvocationLogMetadata(runtime, "base_sync_conflict", 1, "repo", "repo", "."))
 			want := []bool{false, true}
