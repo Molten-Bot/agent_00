@@ -37,6 +37,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 		filesTruncated      bool
 		patchTruncated      bool
 		reviewStale         bool
+		reviewTruncated     bool
 		queued              bool
 		wantExit            int
 		wantTruncationError string
@@ -51,6 +52,8 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 		{name: "reviewed patch exceeds evidence limit", answer: localSuccess, change: true, patchTruncated: true, wantExit: ExitPR,
 			wantTruncationError: "reviewed patch exceeds the draft verification evidence limit"},
 		{name: "submitted review stale", answer: localSuccess, change: true, reviewStale: true, wantExit: ExitPR},
+		{name: "submitted review body exceeds evidence limit", answer: localSuccess, change: true, reviewTruncated: true, wantExit: ExitPR,
+			wantTruncationError: "submitted review 1 body exceeds the draft verification evidence limit"},
 		{name: "blocked implementation", answer: "Failure: Implementation remains blocked.\nError details: Local tests failed.\nDraft handoff: " + requirement, change: true, wantExit: ExitCodex},
 		{name: "agent execution failed", answer: localSuccess, change: true, agentErr: errors.New("execution failed"), wantExit: ExitCodex},
 		{name: "missing handoff", answer: "Implementation and local checks passed.", change: true, wantExit: ExitCodex},
@@ -176,6 +179,10 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 						review := api.review
 						if tc.reviewStale {
 							review.Head = "older-head"
+						}
+						if tc.reviewTruncated {
+							const evidence = "\nAdditional review evidence."
+							review.Body += strings.Repeat(evidence, maxReviewCommentsChars/len(evidence)+1)
 						}
 						data, err := json.Marshal(review)
 						return execx.Result{Stdout: string(data)}, err

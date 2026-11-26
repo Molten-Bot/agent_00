@@ -117,7 +117,9 @@ func (h Harness) draftVerificationPrompt(ctx context.Context, repo repoWorkspace
 	if !receipt.MatchesSubmittedCleanReview(review) {
 		return "", fmt.Errorf("waiting for submitted review %d to show a clean verdict on the draft head", receipt.ReviewID)
 	}
-	review.Body = truncateForPrompt(review.Body, maxReviewCommentsChars)
+	if len(review.Body) > maxReviewCommentsChars {
+		return "", fmt.Errorf("submitted review %d body exceeds the draft verification evidence limit (%d bytes). Use a shorter submitted review and retry verification", receipt.ReviewID, maxReviewCommentsChars)
+	}
 	reviewJSON, _ := json.Marshal(review)
 
 	filesEvidence := "Unavailable: GitHub did not return a changed-file inventory."
