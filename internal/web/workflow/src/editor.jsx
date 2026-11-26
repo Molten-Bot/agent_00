@@ -346,6 +346,10 @@ function Editor({ defaultComplexity }) {
     openDefinition(null);
     onChanged?.();
   }
+  const selectDefaultRepository = useCallback((repository) => {
+    // Repository discovery can finish while the Library draft is opening.
+    if (!window.pendingWorkflowSchedule && !latest.current.current) setRepo(repository);
+  }, []);
   async function reload() {
     try {
       let d = await api("/api/workflows");
@@ -788,7 +792,7 @@ function Editor({ defaultComplexity }) {
             loading={reposLoading}
             error={reposError}
             onRetry={loadRepos}
-            autoSelect={!dirty && !current}
+            onAutoSelect={current ? undefined : selectDefaultRepository}
             onChange={changeRepository}
           />
           <div className="wf-step-list">

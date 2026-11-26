@@ -1,6 +1,8 @@
 package web
 
 import (
+	"context"
+	"errors"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -11,6 +13,9 @@ func TestLibrarySchedulingMovesToWorkflowInBrowser(t *testing.T) {
 	requireBrowserTooling(t, "Library to Workflow scheduling")
 
 	server := NewServer("", NewBroker())
+	server.ResolveGitHubRepos = func(context.Context) ([]GitHubRepo, error) {
+		return nil, errors.New("repository data is supplied by the browser fixture")
+	}
 	ts := httptest.NewServer(server.Handler())
 	defer ts.Close()
 
