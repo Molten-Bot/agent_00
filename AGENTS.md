@@ -25,6 +25,15 @@
 - Build and run the local harness with `go build -o bin/harness ./cmd/harness` and `./bin/harness serve`.
 - CLI modes are `harness run --config <path-to-json>`, `harness multiplex --config <path-or-dir> [--parallel <n>]`, and `harness serve [--init <path-to-init-json> | --config <path-to-config-json>] [--parallel <n>] [--ui-listen <host:port>] [--ui-automatic]`.
 
+## Workflow Hardening
+
+- Run the app and triage failures by taking prioritized issues through the configured GitHub workflow. Apply its trigger label, such as `ready-for-agent`, and follow each run to a merge or a diagnosed blocker. Start with one worker. Try two once the workflow is repeatable and the host has enough disk and memory for both.
+- If a failure is new or the cause is unclear, spawn one Sol subagent to investigate. Give it the failing stage, expected behavior, relevant commit and check results, and sanitized evidence. Wait for its findings, verify them, then search open and closed GitHub issues for duplicates with `gh issue list --state all --search`. Update an existing ticket when it covers the failure. File a new issue with `gh issue create` when needed. Include the observed failure, reproduction, expected result, and a way to verify the fix. Assign it to the requesting operator and apply the repository's priority label.
+- Prioritize delivery blockers over latency. Record elapsed time for queue admission, implementation, PR publication, CI, review, repair, verification, and merge. Record the terminal outcome and any retry, restart, or manual intervention. When a check or PR head is temporarily unavailable after a push, confirm the current GitHub state before treating it as a code failure.
+- Let the app implement, publish, review, repair, and merge. Use its retry or recovery controls to resume a retained claim or draft and preserve the captured workflow policy. If the app cannot finish a step, explain the blocker before intervening and record which steps the app completed.
+- In a delivery smoke test, use 10 review cycles and the Easy reviewer. Expect real GitHub reviews on each reviewed commit. Verify that the app resolves only findings it confirmed are fixed and merges only after a clean review on the current head, all threads are resolved, required checks pass, and applicable draft verification succeeds. For a disposable repository, run an add-and-remove fixture through the workflow and verify the cleanup restores the original tree.
+- When the app is idle after a merge, fast-forward local main, rebuild, and restart with the matching runtime files so the next run exercises the landed code. Honor requests to stop admitting work and record the final state of any open draft or retained claim for the next session.
+
 ## Architecture
 
 - Keep CLI argument parsing and terminal concerns in `cmd/harness`; keep reusable orchestration in `internal/app`, local runtime configuration and scheduling in `internal/localruntime`, and agent-specific command construction in `internal/agentruntime`.
@@ -62,6 +71,7 @@
 
 - Do not invent release flows. `deploy-vnext` verifies the same build/test commands before publishing Docker `vnext`; `deploy-prod` creates semver `vX.Y.Z` tags through GoReleaser and promotes Docker `latest`.
 - Do not run publishing, tagging, Docker promotion, or credential-affecting commands unless the user explicitly asks for a release operation.
+- For a hardening release gated on P0s, verify those fixes before running `deploy-vnext`. Confirm the build and its versioned Docker Hub tag, then use that tag as the source for `deploy-prod`. Verify the production workflow and the published image.
 
 ## PR Expectations
 
