@@ -28,6 +28,11 @@ func (h Harness) applyWorkflowPRMetadata(ctx context.Context, repo repoWorkspace
 	if !config.ValidGitHubRepository(repository) {
 		return fmt.Errorf("%w: invalid pull request URL %q", ErrWorkflowPRMetadata, repo.PRURL)
 	}
+	if h.SaveWorkflowPRResume != nil {
+		if err := h.SaveWorkflowPRResume(repo.PRURL); err != nil {
+			return fmt.Errorf("%w: persist retry target: %w", ErrWorkflowPRMetadata, err)
+		}
+	}
 	endpoint := "repos/" + repository + "/issues/" + githubutil.PullRequestSelector(repo.PRURL)
 	if policy.PRAssignee != "" {
 		if err := h.addWorkflowPRMetadata(ctx, repo, endpoint+"/assignees", "assignee", "assignees", "[.assignees[].login]", policy.PRAssignee); err != nil {

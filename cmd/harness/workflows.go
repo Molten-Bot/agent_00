@@ -239,12 +239,19 @@ func retryWorkflowTask(ctx context.Context, engine *workflow.Engine, task web.Ta
 	default:
 		return submit(cfg)
 	}
-	if cfg.GitHubIssue == nil && app.IsWorkflowPRMetadataFailure(task.Error) {
-		if task.PRURL == "" {
+	if cfg.GitHubIssue == nil && (cfg.Workflow.ResumePRURL != "" || app.IsWorkflowPRMetadataFailure(task.Error)) {
+		target := cfg.Workflow.ResumePRURL
+		if target == "" {
+			target = task.PRURL
+		}
+		if target == "" {
 			return "", fmt.Errorf("the original pull request is required to retry workflow PR metadata")
 		}
-		policy := *cfg.Workflow
-		policy.ResumePRURL = task.PRURL
+		policy, err := engine.PRMetadataRetryPolicy(*cfg.Workflow)
+		if err != nil {
+			return "", err
+		}
+		policy.ResumePRURL = target
 		cfg.Workflow = &policy
 	}
 	item := workflow.Item{Repository: workflow.CanonicalRepository(cfg.RepoURL)}

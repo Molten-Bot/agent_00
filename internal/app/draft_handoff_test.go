@@ -96,6 +96,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			api := &reviewAPIStub{t: t}
 			var implementations, creates, verifications, ready int
 			var draft, accepted, metadataRetry bool
+			savedResume := ""
 			labels := []string{"existing label"}
 			assignees := []string{"creator"}
 			var savedRequirement string
@@ -109,6 +110,9 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			}
 			runner := issueBranchRunner(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
 				args := strings.Join(cmd.Args, " ")
+				if cmd.Name == "gh" && strings.Contains(args, "--method POST repos/acme/repo/issues/42/") && savedResume != prURL {
+					t.Fatal("metadata mutation preceded saved retry target")
+				}
 				if res, ok, err := api.handle(cmd); ok {
 					return res, err
 				}
@@ -279,6 +283,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				return execx.Result{}, fmt.Errorf("unexpected command %s %s", cmd.Name, args)
 			})
 			h := New(runner)
+			h.SaveWorkflowPRResume = func(url string) error { savedResume = url; return nil }
 			h.Workspace = workspace.Manager{Root: root, NewGUID: func() string { return "issue-workspace" }}
 			if tc.queued {
 				h.IssuePRVerification = requirement

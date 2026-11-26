@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+
+	"github.com/Molten-Bot/agent_00/internal/config"
 )
 
 func IsInputEvent(event string) bool {
@@ -110,4 +112,32 @@ func (e *Engine) dispatch(w Definition, item Item, reason, retryOf string, submi
 		return request, err
 	}
 	return request, submitErr
+}
+
+// PRMetadataRetryPolicy permits routing corrections while retaining every other
+// captured execution setting. A changed review, task, or merge policy is rejected.
+func (e *Engine) PRMetadataRetryPolicy(saved config.WorkflowRunConfig) (config.WorkflowRunConfig, error) {
+	doc, err := e.Store.Load()
+	if err != nil {
+		return saved, err
+	}
+	for _, w := range doc.Workflows {
+		if w.ID != saved.ID {
+			continue
+		}
+		if w.ExecutionPolicyHash() == saved.PolicyHash {
+			return saved, nil
+		}
+		original := w
+		original.Task.PRAssignee = saved.PRAssignee
+		original.Task.PRLabels = saved.PRLabels
+		if original.ExecutionPolicyHash() != saved.PolicyHash {
+			return saved, fmt.Errorf("recovery requires the original workflow policy; only PR assignee and labels may change")
+		}
+		saved.PRAssignee = w.Task.PRAssignee
+		saved.PRLabels = append([]string(nil), w.Task.PRLabels...)
+		saved.PolicyHash = w.ExecutionPolicyHash()
+		return saved, nil
+	}
+	return saved, fmt.Errorf("originating workflow is unavailable")
 }

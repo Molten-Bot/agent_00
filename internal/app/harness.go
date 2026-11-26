@@ -176,6 +176,7 @@ type repoWorkspace struct {
 	RequiredBranchTask          string
 	BaselineHead                string
 	CreateWorkBranch            bool
+	ResumeWorkflowPR            bool
 	IssueClaimBranch            bool
 	Changed                     bool
 	BranchCollisionSuffix       string
@@ -221,6 +222,8 @@ type Harness struct {
 	OnPRTitle func(url, title string)
 	// OnPRCreated reports the URL and title of a newly created pull request.
 	OnPRCreated func(url, title string)
+	// SaveWorkflowPRResume persists the retry target before metadata mutations.
+	SaveWorkflowPRResume func(string) error
 
 	ResumeIssueWorkspace bool
 	// IssueCheckoutComplete records that the preserved checkout finished.
@@ -500,6 +503,7 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		repo.BaseBranch = resumeState.BaseRefName
 		runCfg.BaseBranch = repo.BaseBranch
 		repo.CreateWorkBranch = false
+		repo.ResumeWorkflowPR = true
 		repo.PRVerification = h.IssuePRVerification
 		repo.ReviewRequired = repo.PRVerification != ""
 		if resumeFork != "" {
@@ -999,7 +1003,7 @@ func (h Harness) finalizePullRequestReview(
 		h.logFinalReviewStoppedForMergedPR(*repo, 0, h.FinalReviewPasses)
 		return ExitSuccess, "", nil
 	}
-	if repo.CreateWorkBranch {
+	if repo.CreateWorkBranch || repo.ResumeWorkflowPR {
 		hasNetDiff, diffErr := h.repoHasEffectivePullRequestDiff(ctx, *repo)
 		if diffErr != nil {
 			return ExitGit, "git", diffErr

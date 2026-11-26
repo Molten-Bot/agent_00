@@ -1371,6 +1371,17 @@ func runLocalTask(
 	checkoutComplete := false
 	h.OnCheckout = func() { checkoutComplete = true }
 	if broker != nil {
+		h.SaveWorkflowPRResume = func(url string) error {
+			policy := *runCfg.Workflow
+			policy.ResumePRURL = url
+			saved := runCfg
+			saved.Workflow = &policy
+			body, err := json.Marshal(saved)
+			if err == nil {
+				broker.RecordTaskRunConfig(requestID, body)
+			}
+			return err
+		}
 		h.OnPRTitle = func(url, title string) {
 			broker.RecordTaskPRTitle(requestID, url, title)
 		}

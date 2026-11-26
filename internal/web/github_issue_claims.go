@@ -128,7 +128,7 @@ func (s Server) submitParsedWithIssueClaim(ctx context.Context, body []byte, run
 	if err != nil {
 		return "", err
 	}
-	if !settings.GitHubIssuesEnabled {
+	if !settings.GitHubIssuesEnabled && (run.Workflow == nil || run.GitHubIssue.Claim == nil) {
 		return "", fmt.Errorf("GitHub Issues is disabled")
 	}
 	// Explicit starts use the issue as the execution key; automatic trigger
@@ -833,7 +833,9 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 	}
 	workflowRecovery := !automatic && remote.Claim.ID != "" &&
 		((savedRun == nil && observed.ID != "") || hasUnsubmittedWorkflowRecovery(previous))
-	ownedWorkflowRetry := !automatic && !workflowRecovery && requestedRun == nil && previous.Version == 2 && previous.RequestID != "" &&
+	metadataRetry := app.IsWorkflowPRMetadataFailure(previous.FailureDetail()) ||
+		(savedRun != nil && savedRun.Workflow != nil && savedRun.Workflow.ResumePRURL != "")
+	ownedWorkflowRetry := !automatic && !workflowRecovery && (requestedRun == nil || metadataRetry) && previous.Version == 2 && previous.RequestID != "" &&
 		previous.InstanceID == remote.InstanceID && previous.InstanceID == s.instanceID() &&
 		previous.ID == remote.Claim.ID && savedRun != nil && savedRun.Workflow != nil
 	if !automatic && !workflowRecovery && !ownedWorkflowRetry && !settings.GitHubIssuesEnabled {
@@ -846,6 +848,13 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		if savedRun == nil {
 			savedRun = &observed.Run
 		}
+	}
+	if metadataRetry && !automatic && savedRun != nil && savedRun.Workflow != nil && s.Workflows != nil {
+		policy, policyErr := s.Workflows.PRMetadataRetryPolicy(*savedRun.Workflow)
+		if policyErr != nil {
+			return issueRetryResult{}, http.StatusConflict, policyErr
+		}
+		savedRun.Workflow = &policy
 	}
 	if workflowRecovery || ownedWorkflowRetry {
 		var enabled bool
@@ -876,7 +885,6 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		}
 	}
 	branchRecovery := requiresIssueBranchRecovery(previous)
-	metadataRetry := app.IsWorkflowPRMetadataFailure(previous.FailureDetail())
 	var verificationPRURL string
 	if s.IssueRecovery != nil && remote.Claim.ID != "" {
 		claimedIssue := &config.GitHubIssueConfig{Repository: repository, Number: number, Claim: &remote.Claim}

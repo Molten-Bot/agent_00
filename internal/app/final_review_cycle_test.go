@@ -984,3 +984,48 @@ func TestProcessChangedRepoRejectsEmptyNetDiffWhenFinalReviewFindingsRemain(t *t
 		t.Fatalf("drafted count = %d, want 1 before rejecting empty net diff", runner.drafted)
 	}
 }
+
+func TestMetadataResumeRejectsEmptyNetDiffAfterReviewCycle(t *testing.T) {
+	runner := &finalFindingReviewCycleRunner{t: t, emptyNetDiff: true}
+	h := New(runner)
+	h.FinalReviewPasses = 1
+
+	repoDir := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	repo := &repoWorkspace{
+		URL:                "https://github.com/acme/repo.git",
+		Dir:                repoDir,
+		RelDir:             "repo",
+		Branch:             "feature",
+		BaseBranch:         "main",
+		PRURL:              "https://github.com/acme/repo/pull/7",
+		Changed:            true,
+		CreateWorkBranch:   false,
+		ResumeWorkflowPR:   true,
+		WriteAccessChecked: true,
+		WriteAccessAllowed: true,
+		PushRemote:         publishRemoteOrigin,
+	}
+
+	exitCode, stage, err := h.processChangedRepo(
+		context.Background(),
+		config.Config{Prompt: "Implement the requested behavior.", CommitMessage: "do the work"},
+		repo,
+		agentruntime.Default(),
+		repoDir,
+		codexRunOptions{},
+		"",
+		"",
+		"repo",
+		"codex",
+		false,
+	)
+	if err == nil || exitCode != ExitPR || stage != "review" || !strings.Contains(err.Error(), "no net changes against the base branch") {
+		t.Fatalf("processChangedRepo() = (%d, %q, %v), want empty-net-diff failure", exitCode, stage, err)
+	}
+	if runner.released != 0 {
+		t.Fatalf("released count = %d, want 0 for an empty net diff", runner.released)
+	}
+}

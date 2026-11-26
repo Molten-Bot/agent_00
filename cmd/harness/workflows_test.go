@@ -173,3 +173,31 @@ func TestWorkflowMetadataRetryKeepsOriginalPullRequest(t *testing.T) {
 		t.Fatalf("retry = %q, %v, original policy = %+v", id, err, cfg.Workflow)
 	}
 }
+
+func TestStoppedWorkflowMetadataRetryKeepsPersistedPullRequest(t *testing.T) {
+	t.Parallel()
+	store := &workflow.Store{Path: filepath.Join(t.TempDir(), "workflows.json")}
+	w := workflow.Definition{ID: "input", Name: "Input", Repository: "acme/repo", Trigger: workflow.Trigger{Event: "app.prompt"},
+		Filters: workflow.Filters{Mode: "all"}, Task: workflow.Task{Kind: "implement", IssueLinkMode: "reference", PRAssignee: "maintainer"},
+		Merge: workflow.Merge{Enabled: true, Method: "squash"}}
+	if err := store.Initialize(workflow.Document{Version: workflow.Version, Workflows: []workflow.Definition{w}}); err != nil {
+		t.Fatal(err)
+	}
+	engine := &workflow.Engine{Store: store, StatePath: filepath.Join(t.TempDir(), "state.json")}
+	cfg := config.Config{RepoURL: "https://github.com/acme/repo", Workflow: &config.WorkflowRunConfig{
+		ID: w.ID, EventID: "original", PolicyHash: w.ExecutionPolicyHash(), PRAssignee: w.Task.PRAssignee,
+	}}
+	cfg.Workflow.ResumePRURL = "https://github.com/acme/repo/pull/42"
+	task := web.Task{Status: "stopped", PRURL: "https://github.com/acme/repo/pull/42",
+		Error: "operator stopped task"}
+	id, err := retryWorkflowTask(t.Context(), engine, task, cfg, func(retry config.Config) (string, error) {
+		if retry.Workflow.ResumePRURL != task.PRURL || retry.Workflow.PolicyHash != cfg.Workflow.PolicyHash ||
+			retry.Workflow.EventID == cfg.Workflow.EventID || retry.Workflow.PRAssignee != cfg.Workflow.PRAssignee {
+			t.Fatalf("retry lost target or policy: %+v", retry.Workflow)
+		}
+		return "retry-request", nil
+	})
+	if err != nil || id != "retry-request" || cfg.Workflow.ResumePRURL != task.PRURL {
+		t.Fatalf("retry = %q, %v, original policy = %+v", id, err, cfg.Workflow)
+	}
+}
