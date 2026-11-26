@@ -179,6 +179,20 @@ func (h Harness) draftVerificationPrompt(ctx context.Context, repo repoWorkspace
 			return "", errDraftChecksPending
 		}
 	}
+	commitChecks, err := githubutil.CommitCheckNames(ctx, readGH, targetRepo, receipt.Head)
+	if err != nil {
+		return "", fmt.Errorf("load reviewed head check inventory: %w", err)
+	}
+	missing := false
+	for _, name := range commitChecks {
+		if name != githubutil.ReviewCheckName {
+			observedChecks[name] = true
+			missing = missing || !visibleChecks[name]
+		}
+	}
+	if missing {
+		return "", errDraftChecksPending
+	}
 	// A nonempty rollup must account for checks already seen on this head.
 	// An empty rollup is allowed when the base has no required CI checks.
 	if len(visibleChecks) > 0 {

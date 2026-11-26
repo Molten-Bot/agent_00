@@ -37,6 +37,8 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 		headMoved           bool
 		pendingChecks       int
 		checkRollups        []string
+		checkRuns           string
+		commitStatuses      string
 		requiredChecks      string
 		ruleset             string
 		wantChecksPending   bool
@@ -65,6 +67,11 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			checkRollups: []string{`[{"name":"CI","status":"IN_PROGRESS"}]`, `[{"name":"CI","conclusion":"SUCCESS"}]`}},
 		{name: "successful partial rollup omits previously observed check", answer: localSuccess, change: true, pendingChecks: 1, wantExit: ExitPR, wantChecksPending: true,
 			checkRollups: []string{`[{"name":"CI","conclusion":"SUCCESS"},{"context":"lint","state":"PENDING"}]`, `[{"name":"CI","conclusion":"SUCCESS"}]`}},
+		{name: "successful partial rollup omits optional check run", answer: localSuccess, change: true, wantExit: ExitPR, wantChecksPending: true,
+			checkRuns: `{"check_runs":[{"name":"CI"}]} {"check_runs":[{"name":"lint"}]}`},
+		{name: "optional commit status appears after partial rollup", answer: localSuccess, change: true, pendingChecks: 1,
+			commitStatuses: `{"statuses":[{"context":"lint"}]}`,
+			checkRollups:   []string{`[{"name":"CI","conclusion":"SUCCESS"}]`, `[{"name":"CI","conclusion":"SUCCESS"},{"context":"lint","state":"SUCCESS"}]`}},
 		{name: "required status context appears after partial rollup", answer: localSuccess, change: true, pendingChecks: 1,
 			requiredChecks: `{"contexts":["CI","lint"]}`,
 			checkRollups:   []string{`[{"name":"CI","conclusion":"SUCCESS"}]`, `[{"name":"CI","conclusion":"SUCCESS"},{"context":"lint","state":"SUCCESS"}]`}},
@@ -285,6 +292,16 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 							return execx.Result{Stdout: tc.ruleset}, nil
 						}
 						return execx.Result{Stdout: "[]"}, nil
+					case args == "api --paginate repos/acme/repo/commits/"+api.head+"/check-runs?per_page=100":
+						if tc.checkRuns != "" {
+							return execx.Result{Stdout: tc.checkRuns}, nil
+						}
+						return execx.Result{Stdout: `{"check_runs":[]}`}, nil
+					case args == "api --paginate repos/acme/repo/commits/"+api.head+"/status?per_page=100":
+						if tc.commitStatuses != "" {
+							return execx.Result{Stdout: tc.commitStatuses}, nil
+						}
+						return execx.Result{Stdout: `{"statuses":[]}`}, nil
 					case strings.HasPrefix(args, "pr checks "):
 						return execx.Result{Stdout: "CI\tpass\n"}, nil
 					case strings.HasPrefix(args, "pr view "):
