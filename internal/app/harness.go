@@ -4698,6 +4698,9 @@ func (h Harness) logFinalReviewStoppedForMergedPR(repo repoWorkspace, pass, tota
 }
 
 func finalReviewMode(passes int) string {
+	if passes <= 0 {
+		return "off"
+	}
 	switch passes {
 	case 2:
 		return "low"
@@ -4706,7 +4709,7 @@ func finalReviewMode(passes int) string {
 	case 10:
 		return "high"
 	default:
-		return "off"
+		return "custom"
 	}
 }
 
