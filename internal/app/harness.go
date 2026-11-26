@@ -198,8 +198,7 @@ type repoWorkspace struct {
 	ReviewStoppedOnMerge        bool
 	ReviewInterrupted           bool
 	ReviewReceipt               *githubutil.ReviewReceipt
-	ReviewedDiffPatch           string
-	ReviewedDiffPatchTruncated  bool
+	ReviewedPatch               *draftReviewPatch
 	PendingReviewGate           *githubutil.PendingReviewGate
 	ReviewRequired              bool
 	ReviewSanitize              bool
@@ -987,14 +986,18 @@ func (h Harness) finalizePullRequestReview(
 	if repo.ReviewStoppedOnMerge {
 		repo.ReviewInterrupted = true
 		h.logFinalReviewStoppedForMergedPR(*repo, 0, h.FinalReviewPasses)
-		return ExitSuccess, "", nil
+		return stoppedDraftReview(*repo)
 	}
+	defer func() {
+		repo.ReviewedPatch.remove()
+		repo.ReviewedPatch = nil
+	}()
 	exitCode, stage, err := h.runFinalReviewCycle(
 		ctx, cfg, repo, runtime, codexDir, codexOpts, codexBasePrompt,
 		agentsPath, codexTargetLabel, agentStage, multiRepo,
 	)
 	if repo.ReviewStoppedOnMerge {
-		return ExitSuccess, "", nil
+		return stoppedDraftReview(*repo)
 	}
 	findingsRemain := errors.Is(err, errFinalReviewFindingsRemain)
 	if findingsRemain {
@@ -1012,7 +1015,7 @@ func (h Harness) finalizePullRequestReview(
 	if repo.ReviewStoppedOnMerge {
 		repo.ReviewInterrupted = true
 		h.logFinalReviewStoppedForMergedPR(*repo, 0, h.FinalReviewPasses)
-		return ExitSuccess, "", nil
+		return stoppedDraftReview(*repo)
 	}
 	if repo.CreateWorkBranch || repo.ResumeWorkflowPR {
 		hasNetDiff, diffErr := h.repoHasEffectivePullRequestDiff(ctx, *repo)
@@ -1042,12 +1045,24 @@ func (h Harness) finalizePullRequestReview(
 	if repo.PRVerification != "" {
 		evidence, err := h.waitForDraftVerificationEvidence(ctx, *repo)
 		if err == nil {
+			evidence.commits, err = h.loadDraftPatchCommits(ctx, *repo)
+		}
+		if err == nil {
 			err = h.verifyDraftHandoff(ctx, *repo, runtime, codexOpts, evidence)
+		}
+		if err == nil {
+			var latest draftPatchCommits
+			latest, err = h.loadDraftPatchCommits(ctx, *repo)
+			if err == nil {
+				err = repo.ReviewedPatch.checkCommits(latest)
+			}
 		}
 		if err != nil {
 			repo.ReviewReceipt = nil
+			repo.ReviewInterrupted = errors.Is(err, githubutil.ErrReviewInterrupted)
 			return ExitPR, "pr_verification", err
 		}
+		h.logf("stage=pr_verification status=ok")
 	}
 	if repo.ReviewReceipt.Pass > 1 || repo.PRVerification != "" {
 		if err := h.confirmPublishedReviewHead(ctx, *repo, repo.ReviewReceipt.Head); err != nil {
@@ -4535,6 +4550,12 @@ func (h Harness) runFinalReviewCycle(
 		// A read-only review must not invalidate the accepted implementation.
 		reviewHarness.SaveIssuePublicationReady = nil
 	}
+	var patch *draftReviewPatch
+	defer func() {
+		if patch != repo.ReviewedPatch {
+			patch.remove()
+		}
+	}()
 
 	// Allow one extra pass beyond FinalReviewPasses so a fix applied on the
 	// final configured pass is always confirmed clean by a follow-up review
@@ -4544,6 +4565,8 @@ func (h Harness) runFinalReviewCycle(
 	// error); a redundant bound would leave an unreachable statement after
 	// the loop for Go's terminating-statement check to flag.
 	for pass := 1; ; pass++ {
+		patch.remove()
+		patch = nil
 		reviewMode := finalReviewMode(h.FinalReviewPasses)
 		// The confirmation pass (pass == FinalReviewPasses+1) has no fix-pass
 		// budget of its own, so label it against itself (e.g. "4/4") instead
@@ -4592,6 +4615,7 @@ func (h Harness) runFinalReviewCycle(
 		if err != nil {
 			return ExitPR, "review", err
 		}
+		patch = reviewContext.DraftPatch
 		if err := h.priorReviewFindings(ctx, *repo, reviewContext); err != nil {
 			return ExitPR, "review", h.reviewPublicationError(ctx, repo, pass, passLabelTotal, err)
 		}
@@ -4687,11 +4711,7 @@ func (h Harness) runFinalReviewCycle(
 		if receipt.Clean() {
 			repo.ReviewReceipt = &receipt
 			repo.ReviewSanitize = reviewContext.GitHubTokenEnvSanitized
-			if repo.PRVerification != "" {
-				patch := strings.TrimSpace(reviewContext.Diff)
-				repo.ReviewedDiffPatchTruncated = len(patch) > maxReviewDiffPatchChars
-				repo.ReviewedDiffPatch = truncateForPrompt(patch, maxReviewDiffPatchChars)
-			}
+			repo.ReviewedPatch = patch
 			h.logReviewReceipt(receipt)
 		}
 		h.logf(
@@ -5001,6 +5021,7 @@ type preparedReviewContext struct {
 	Metadata                reviewPRMetadata
 	Prompt                  string
 	Diff                    string
+	DraftPatch              *draftReviewPatch
 	Findings                map[string]githubutil.NativeReviewFinding
 	GitHubTokenEnvSanitized bool
 }
@@ -5067,14 +5088,33 @@ func (h Harness) prepareReviewEvidence(ctx context.Context, repo repoWorkspace, 
 
 	baseRef := remoteTrackingRef(metadata.BaseRefName)
 	headRef := stringsx.FirstNonEmpty(metadata.HeadRefOID, pullRequestTrackingRef(metadata.Number))
+	var draftPatch *draftReviewPatch
+	var patch string
+	if repo.PRVerification != "" {
+		var err error
+		draftPatch, patch, err = h.prepareDraftReviewPatch(ctx, repo, baseRef, metadata.HeadRefOID)
+		if err != nil {
+			return nil, err
+		}
+		baseRef = draftPatch.commits.Base
+	}
+	keepPatch := false
+	defer func() {
+		if !keepPatch {
+			draftPatch.remove()
+		}
+	}()
 
 	diffStatRes, err := h.runCommand(ctx, "review", reviewDiffStatCommand(repo.Dir, baseRef, headRef))
 	if err != nil {
 		return nil, fmt.Errorf("summarize pull request diff: %w", err)
 	}
-	diffPatchRes, err := h.runCommand(ctx, "review", reviewDiffPatchCommand(repo.Dir, baseRef, headRef))
-	if err != nil {
-		return nil, fmt.Errorf("load pull request diff: %w", err)
+	if draftPatch == nil {
+		diffPatchRes, err := h.runCommand(ctx, "review", reviewDiffPatchCommand(repo.Dir, baseRef, headRef))
+		if err != nil {
+			return nil, fmt.Errorf("load pull request diff: %w", err)
+		}
+		patch = diffPatchRes.Stdout
 	}
 
 	metadataJSON, err := json.MarshalIndent(metadata, "", "  ")
@@ -5107,14 +5147,20 @@ func (h Harness) prepareReviewEvidence(ctx context.Context, repo repoWorkspace, 
 	b.WriteString("Local git diff summary:\n```text\n")
 	b.WriteString(truncateForPrompt(stringsx.FirstNonEmpty(joinCommandOutput(diffStatRes), "No diff summary output was returned by git diff --stat --summary."), maxReviewDiffStatChars))
 	b.WriteString("\n```\n\n")
-	b.WriteString("Local git diff patch:\n```diff\n")
-	b.WriteString(truncateForPrompt(stringsx.FirstNonEmpty(diffPatchRes.Stdout, "No diff patch output was returned by git diff."), maxReviewDiffPatchChars))
-	b.WriteString("\n```")
+	if draftPatch != nil && draftPatch.size > maxReviewDiffPatchChars {
+		b.WriteString("Local git diff patch:\n" + draftPatch.reference())
+	} else {
+		b.WriteString("Local git diff patch:\n```diff\n")
+		b.WriteString(truncateForPrompt(stringsx.FirstNonEmpty(patch, "No diff patch output was returned by git diff."), maxReviewDiffPatchChars))
+		b.WriteString("\n```")
+	}
+	keepPatch = true
 	return &preparedReviewContext{
 		Selector:                reviewSelector(reviewCfg),
 		Metadata:                metadata,
 		Prompt:                  strings.TrimSpace(b.String()),
-		Diff:                    diffPatchRes.Stdout,
+		Diff:                    patch,
+		DraftPatch:              draftPatch,
 		GitHubTokenEnvSanitized: gitHubTokenEnvSanitized,
 	}, nil
 }

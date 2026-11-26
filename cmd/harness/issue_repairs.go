@@ -366,14 +366,14 @@ func (q *issueRepairQueue) dependencyBlockReason(record localruntime.IssueRepair
 }
 
 func issueRepairSourceFulfilled(source localruntime.IssueClaimRecord, issues []localruntime.IssueClaimRecord) bool {
-	if source.State == "fulfilled" {
+	if source.Fulfilled() {
 		return true
 	}
 	issue := source.Run.GitHubIssue
 	key := localruntime.IssueExecutionKey(issue)
 	for _, current := range issues {
 		other := current.Run.GitHubIssue
-		if current.State == "fulfilled" && other.Claim.Attempt > issue.Claim.Attempt && localruntime.IssueExecutionKey(other) == key {
+		if current.Fulfilled() && other.Claim.Attempt > issue.Claim.Attempt && localruntime.IssueExecutionKey(other) == key {
 			return true
 		}
 	}
@@ -399,7 +399,7 @@ func (q *issueRepairQueue) persistRecoveredPrerequisiteBlock(issue localruntime.
 		if current.RequestID != issue.RequestID || current.FailureDetail() != issue.FailureDetail() || current.Incident != issue.Incident {
 			return errors.New("source issue claim changed during prerequisite recovery")
 		}
-		if current.Outcome == "error" && current.State != "fulfilled" {
+		if current.Outcome == "error" && !current.Fulfilled() {
 			current.Incident = incident
 			current.RunError = current.FailureDetail()
 			current.NextAttemptAt = time.Time{}
@@ -626,7 +626,7 @@ func retainIssueEvidence(claims *localruntime.IssueClaimStore, repairs *localrun
 	for _, record := range records {
 		key := localruntime.IssueExecutionKey(record.Run.GitHubIssue)
 		last := latest[key]
-		if protectedIssues[key] || last.State != "fulfilled" || last.VerifiedAt.IsZero() || now.Sub(last.VerifiedAt) < 30*24*time.Hour {
+		if protectedIssues[key] || !last.Fulfilled() || last.VerifiedAt.IsZero() || now.Sub(last.VerifiedAt) < 30*24*time.Hour {
 			continue
 		}
 		err := func() error {

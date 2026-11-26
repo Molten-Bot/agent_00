@@ -116,13 +116,21 @@ func (h Harness) publishSubmittedReview(
 		}
 	}
 	receipt.Result, _ = json.Marshal(outcome)
-	identity, _ := json.Marshal(struct {
+	identity := struct {
 		PR, Head, Run string
 		Pass          int
 		Policy        githubutil.ReviewPolicy
-	}{prURL, head, receipt.Run, pass, receipt.Policy})
+		Base          string `json:",omitempty"`
+		PatchSHA256   string `json:",omitempty"`
+	}{PR: prURL, Head: head, Run: receipt.Run, Pass: pass, Policy: receipt.Policy}
+	if patch := review.DraftPatch; patch != nil {
+		// A draft retry can reuse the submitted review only for the same patch.
+		identity.Base = patch.commits.Base
+		identity.PatchSHA256 = fmt.Sprintf("%x", patch.digest)
+	}
+	encodedIdentity, _ := json.Marshal(identity)
 	receipt.Policy.CheckAppID = appID
-	key := fmt.Sprintf("%x", sha256.Sum256(identity))
+	key := fmt.Sprintf("%x", sha256.Sum256(encodedIdentity))
 	receipt.Marker = "<!-- agent00-review " + key + " -->"
 	journal := filepath.Join(runDir, "review-"+key+".pending.json")
 	final := filepath.Join(runDir, "review-"+key+".receipt.json")

@@ -80,6 +80,11 @@ func (r IssueClaimRecord) FailureDetail() string {
 	return r.Error
 }
 
+// Fulfilled excludes older records that reconciled a merge with pending verification.
+func (r IssueClaimRecord) Fulfilled() bool {
+	return r.State == "fulfilled" && r.PRVerification == ""
+}
+
 type IssueClaimStore struct {
 	Root string
 	mu   sync.Mutex
@@ -93,6 +98,7 @@ var issueClaimIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 var ErrIssueOwnershipChanged = errors.New("issue ownership changed; start the issue again to create a new attempt")
 
 const (
+	IssueStateMergedUnverified      = "merged_unverified"
 	IssueIncidentUnmergedDependency = "unmerged_dependency"
 	IssueIncidentOpenDependency     = "open_dependency"
 	IssueIncidentExternalRollout    = "external_rollout_prerequisites"

@@ -826,7 +826,7 @@ func runServer(args []string) int {
 			if err != nil {
 				return err
 			}
-			if record := latestClaimForTask(records, requestID); record.ID != "" && record.State != "fulfilled" {
+			if record := latestClaimForTask(records, requestID); record.ID != "" && !record.Fulfilled() {
 				return fmt.Errorf("unresolved issue evidence is retained; resolve or explicitly abandon the issue before deleting it")
 			}
 			var errs []error

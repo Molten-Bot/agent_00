@@ -26,6 +26,8 @@ type Command struct {
 	Stdin string
 	// StdinFile supplies interactive protocol input instead of a fixed prompt.
 	StdinFile *os.File
+	// StdoutWriter receives raw stdout in place of capturing or streaming it.
+	StdoutWriter io.Writer
 	// Started persists process identity before execution is acknowledged. A
 	// failure terminates the process group. Exited runs after Wait completes.
 	Started     func(int) error
@@ -91,7 +93,10 @@ func runWithStream(ctx context.Context, cmd Command, handler StreamLineHandler) 
 	var stderr bytes.Buffer
 	stdoutEmitter := lineEmitter{stream: "stdout", handler: handler}
 	stderrEmitter := lineEmitter{stream: "stderr", handler: handler}
-	c.Stdout = io.MultiWriter(&stdout, &stdoutEmitter)
+	c.Stdout = cmd.StdoutWriter
+	if c.Stdout == nil {
+		c.Stdout = io.MultiWriter(&stdout, &stdoutEmitter)
+	}
 	c.Stderr = io.MultiWriter(&stderr, &stderrEmitter)
 
 	err := c.Start()
