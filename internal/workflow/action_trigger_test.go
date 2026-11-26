@@ -104,3 +104,43 @@ func TestActionFailurePollsSelectedWorkflowAndDeduplicatesAttempts(t *testing.T)
 		t.Fatalf("missed consecutive failed attempt: %v", submitted)
 	}
 }
+
+func TestActionFailureQueuedWhileBusySurvivesSuccessAndRestart(t *testing.T) {
+	t.Parallel()
+	w := definition("queued")
+	w.Trigger = Trigger{Event: ActionFailedEvent, Value: "build.yml"}
+	w.IncludeBacklog = true
+	e, items, count := testEngine(t, w)
+	*items = []Item{{Repository: w.Repository, Kind: "action", ActionRunID: 42, ActionRunAttempt: 1, ChecksFailed: true}}
+	tick(t, e)
+	runs, _ := e.Runs()
+	first := runs[0].ID
+	(*items)[0].ActionRunAttempt = 2
+	tick(t, e)
+	tick(t, e)
+	if *count != 1 {
+		t.Fatal("overlapping repairs", *count)
+	}
+	(*items)[0].ActionRunAttempt = 3
+	(*items)[0].ChecksFailed = false
+	restarted := &Engine{Store: e.Store, StatePath: e.StatePath, Enabled: e.Enabled, Allowed: e.Allowed, Fetch: e.Fetch, Submit: e.Submit, Status: e.Status}
+	tick(t, restarted)
+	if err := restarted.Complete(first, Outcome{Status: "succeeded"}); err != nil {
+		t.Fatal(err)
+	}
+	tick(t, restarted)
+	tick(t, restarted)
+	if *count != 2 {
+		t.Fatal("lost or duplicated queued attempt", *count)
+	}
+	runs, _ = restarted.Runs()
+	found := false
+	for _, r := range runs {
+		if r.Item.ActionRunAttempt == 2 && r.Status == "running" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("queued failure context was lost", runs)
+	}
+}

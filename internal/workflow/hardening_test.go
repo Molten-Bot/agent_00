@@ -65,7 +65,13 @@ func TestTriggerTransitionsWhileTaskIsRunning(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err = e.Complete(runs[0].ID, Outcome{Status: "succeeded"}); err != nil {
+			activeID := ""
+			for _, run := range runs {
+				if run.Status == "running" {
+					activeID = run.ID
+				}
+			}
+			if err = e.Complete(activeID, Outcome{Status: "succeeded"}); err != nil {
 				t.Fatal(err)
 			}
 			tick(t, e)
