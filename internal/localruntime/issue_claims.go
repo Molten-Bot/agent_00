@@ -99,6 +99,7 @@ var ErrIssueOwnershipChanged = errors.New("issue ownership changed; start the is
 
 const (
 	IssueStateMergedUnverified      = "merged_unverified"
+	IssueChecksPending              = "checks_pending"
 	IssueIncidentUnmergedDependency = "unmerged_dependency"
 	IssueIncidentOpenDependency     = "open_dependency"
 	IssueIncidentExternalRollout    = "external_rollout_prerequisites"
@@ -275,7 +276,7 @@ func readIssueRecord(path string) (IssueClaimRecord, error) {
 	if !issueClaimIDPattern.MatchString(record.ID) || filepath.Base(path) != record.ID+".json" || record.Run.GitHubIssue == nil || record.Run.GitHubIssue.Claim == nil || record.Run.GitHubIssue.Claim.ID != record.ID {
 		return record, fmt.Errorf("invalid persisted issue claim")
 	}
-	if record.ExecutionAgentAttempts != nil && record.Outcome == "" {
+	if record.ExecutionAgentAttempts != nil && (record.Outcome == "" || record.Outcome == IssueChecksPending) {
 		_, err := os.Stat(issueStorageReserve(filepath.Dir(path), record.ID))
 		if errors.Is(err, os.ErrNotExist) {
 			record.AgentAttempts = *record.ExecutionAgentAttempts

@@ -2250,6 +2250,13 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 		t.ExitCode = 0
 		t.TerminalAt = time.Time{}
 	}
+	if strings.HasPrefix(line, "task status=queued ") && fields["action"] == "wait_for_github_checks" {
+		t.Status, t.Stage, t.StageStatus = "pending", "checks", "waiting"
+		t.Error, t.ReviewURL, t.ReviewGate = "", "", ""
+		t.Warning = "Verification will retry automatically."
+		t.ExitCode = 0
+		t.PRURL = stringsx.FirstNonEmpty(taskPRURLFromFields(fields), t.PRURL)
+	}
 
 	if strings.HasPrefix(line, "task status=start") {
 		t.Status = "running"

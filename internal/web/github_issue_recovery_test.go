@@ -17,6 +17,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
+	"github.com/Molten-Bot/agent_00/internal/githubutil"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/workflow"
 )
@@ -827,6 +828,57 @@ func TestLabeledIssueDraftVerificationRetryKeepsWorkflowPolicy(t *testing.T) {
 	}
 }
 
+func TestIssueCheckRecoveryWaitsForRateResetThenResubmitsSameClaim(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	reconcileOrAdmitTestIssue(t.Context(), s)
+	record := completeRecoveryRecord(t, s, localruntime.IssueChecksPending, s.IssueRecovery.Defaults().MaxAttempts)
+	record.State = localruntime.IssueChecksPending
+	record.UnlockPending = false
+	record.PRVerification = "Verify CI and clean review on the draft."
+	record.PRURL = "https://github.com/acme/repo/pull/42"
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	s.GitHubCooldown = &githubutil.Cooldown{Now: func() time.Time { return now }}
+	rate := s.GitHubCooldown.ClassifyFailure(http.StatusTooManyRequests, http.Header{"Retry-After": {"600"}}, "", errors.New("rate limited"))
+	before := f.calls
+	if err := s.ReconcileIssueWork(t.Context()); !errors.Is(err, rate) && !strings.Contains(fmt.Sprint(err), "GitHub API rate limited") {
+		t.Fatalf("reconcile during rate limit = %v", err)
+	}
+	pending := latestRecoveryRecord(t, s)
+	if pending.State != localruntime.IssueChecksPending || !pending.NextAttemptAt.Equal(now.Add(10*time.Minute)) || f.calls != before ||
+		len(f.submissions) != 1 || f.deletes != 0 {
+		t.Fatalf("rate limit changed claim or polled GitHub: %+v, calls=%d submissions=%d deletes=%d", pending, f.calls-before, len(f.submissions), f.deletes)
+	}
+	if err := s.ReconcileIssueWork(t.Context()); err != nil || f.calls != before {
+		t.Fatalf("reconciler ignored retry deadline: calls=%d err=%v", f.calls-before, err)
+	}
+	now = pending.NextAttemptAt
+	expireIssueRetry(t, s, record.ID)
+	submitted := 0
+	s.SubmitLocalPrompt = func(_ context.Context, body []byte) (string, error) {
+		submitted++
+		var run config.Config
+		if err := json.Unmarshal(body, &run); err != nil {
+			return "", err
+		}
+		if *run.GitHubIssue.Claim != *record.Run.GitHubIssue.Claim || run.Workflow.EventID != record.Run.Workflow.EventID ||
+			run.Workflow.PolicyHash != record.Run.Workflow.PolicyHash {
+			t.Fatalf("resumed run changed the claim or activation: %+v", run)
+		}
+		return record.RequestID, nil
+	}
+	if err := s.ReconcileIssueWork(t.Context()); err != nil || submitted != 1 || f.deletes != 0 || len(f.refs) != 1 {
+		t.Fatalf("retry after reset: submissions=%d deletes=%d tags=%d err=%v", submitted, f.deletes, len(f.refs), err)
+	}
+	records, err := s.IssueClaims.List()
+	if err != nil || len(records) != 1 || records[0].RequestID != record.RequestID {
+		t.Fatalf("retry created another claim or task: %+v, %v", records, err)
+	}
+}
+
 func TestIssueRecoveryPreservesFailedVerificationAfterExternalMerge(t *testing.T) {
 	t.Parallel()
 	for _, mode := range []string{"restart", "explicit retry", "legacy fulfilled record"} {
@@ -1187,7 +1239,7 @@ func TestIssueRecoveryBacksOffFailedSuccessorAdmission(t *testing.T) {
 		if got.ID == previous.ID || got.State != "retry_wait" || got.Failures != failures || issueRunFailures(got) != 1 {
 			t.Fatalf("cooldown missing on successor: %+v", got)
 		}
-		wantDelay := issueRetryDelay(got.ID, 1+failures, s.IssueRecovery.Defaults())
+		wantDelay := s.IssueRecovery.Defaults().RetryDelay(got.ID, 1+failures)
 		if got.NextAttemptAt.Before(before.Add(wantDelay)) || got.NextAttemptAt.After(time.Now().Add(wantDelay)) {
 			t.Fatalf("mixed run/admission failures did not increase delay: %+v", got)
 		}

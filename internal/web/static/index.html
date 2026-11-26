@@ -12045,7 +12045,8 @@
       }
 
       const status = normalizedTaskStatus(task.status);
-      if (status !== "completed" && status !== "no_changes" && status !== "merged" && status !== "error" && status !== "invalid" && status !== "duplicate" && status !== "stopped") {
+      const checksWaiting = status === "pending" && task.stage === "checks" && task.stage_status === "waiting";
+      if (!checksWaiting && status !== "completed" && status !== "no_changes" && status !== "merged" && status !== "error" && status !== "invalid" && status !== "duplicate" && status !== "stopped") {
         return;
       }
 
@@ -12060,7 +12061,10 @@
       detail.className = "task-result-detail";
       const prURL = taskPullRequestURL(task);
 
-      if (displayStatus === "warning") {
+      if (checksWaiting) {
+        title.textContent = "Waiting for GitHub checks";
+        detail.textContent = task.warning;
+      } else if (displayStatus === "warning") {
         title.textContent = "Review Warning";
         detail.textContent = String(task.warning || "").trim() || "Pull request needs human review.";
       } else if (task.review_gate) {
@@ -13442,6 +13446,8 @@
         selected.review_url || "",
         selected.status || "",
         selected.stage || "",
+        selected.stage_status || "",
+        selected.warning || "",
         logs.length,
         lastLog?.time || "",
         lastLog?.stream || "",

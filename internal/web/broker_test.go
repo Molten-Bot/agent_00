@@ -53,6 +53,26 @@ func TestDashboardCountsWorkflowDurationOnce(t *testing.T) {
 	}
 }
 
+func TestBrokerShowsCheckWaitOnExistingTask(t *testing.T) {
+	t.Parallel()
+	b := NewBroker()
+	const id = "issue-checks"
+	b.IngestLog("task status=start request_id=" + id + " explicit_terminal=true")
+	b.IngestLog("task status=queued request_id=" + id + " action=wait_for_github_checks pr_url=https://github.com/acme/repo/pull/42")
+	task, ok := b.Task(id)
+	if !ok || task.Status != "pending" || task.Stage != "checks" || task.StageStatus != "waiting" ||
+		task.Warning == "" || task.Error != "" || task.PRURL != "https://github.com/acme/repo/pull/42" {
+		t.Fatalf("check wait was not visible on the existing task: %+v", task)
+	}
+	b.IngestLog("task status=queued request_id=" + id + " action=resume_draft_verification")
+	b.IngestLog("task status=start request_id=" + id + " explicit_terminal=true")
+	b.IngestLog("task status=completed request_id=" + id)
+	tasks := b.TaskList()
+	if len(tasks) != 1 || tasks[0].RequestID != id || tasks[0].Status != "completed" || tasks[0].Warning != "" {
+		t.Fatalf("check recovery created another task or kept stale status: %+v", tasks)
+	}
+}
+
 func TestBrokerTracksTaskLifecycleAndCommandOutput(t *testing.T) {
 	t.Parallel()
 

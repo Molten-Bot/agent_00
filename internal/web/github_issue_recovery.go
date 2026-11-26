@@ -17,7 +17,6 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
 	"github.com/Molten-Bot/agent_00/internal/githubassets"
-	"github.com/Molten-Bot/agent_00/internal/githubutil"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/workflow"
 	"github.com/Molten-Bot/agent_00/internal/workspace"
@@ -416,6 +415,14 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	if cooling && (record.Outcome != "" || !record.UnlockPending) {
 		return nil
 	}
+	if record.Outcome == localruntime.IssueChecksPending {
+		if staleOwner || record.Control != "" || record.State == "blocked" {
+			return nil
+		}
+		lock.Close()
+		lock = nil
+		return s.resumeIssueChecks(ctx, record)
+	}
 	issue := record.Run.GitHubIssue
 	remote, err := s.latestIssueAttempt(ctx, issue.Repository, issue.Number)
 	if err != nil {
@@ -558,7 +565,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	}
 	if record.Outcome != "" && record.NextAttemptAt.IsZero() {
 		record.State = "retry_wait"
-		record.NextAttemptAt = time.Now().Add(issueRetryDelay(record.ID, issueRetryFailures(record), policy))
+		record.NextAttemptAt = time.Now().Add(policy.RetryDelay(record.ID, issueRetryFailures(record)))
 		return s.IssueClaims.Save(record)
 	}
 	if s.IssueReady != nil {
@@ -635,6 +642,33 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	return nil
 }
 
+func (s Server) resumeIssueChecks(ctx context.Context, record localruntime.IssueClaimRecord) error {
+	if record.Run.Workflow != nil {
+		_, enabled, err := s.workflowIssueSettings(record.Run)
+		if err != nil {
+			return s.deferIssueRecord(record, err)
+		}
+		if !enabled {
+			return s.deferIssueRecord(record, fmt.Errorf("check verification paused until the originating workflow is enabled with its original policy"))
+		}
+	}
+	if err := s.ValidateIssueOwnership(ctx, record.Run); err != nil {
+		return s.deferIssueRecord(record, err)
+	}
+	submit := s.issueRetrySubmitter()
+	if submit == nil {
+		return s.deferIssueRecord(record, fmt.Errorf("issue submission is unavailable"))
+	}
+	body, err := json.Marshal(record.Run)
+	if err == nil {
+		_, err = submit(ctx, body)
+	}
+	if err != nil {
+		return s.deferIssueRecord(record, err)
+	}
+	return nil
+}
+
 func (s Server) recordVerifiedIssuePR(record localruntime.IssueClaimRecord, pr issuePullRequest) error {
 	record.PRURL = pr.URL
 	record.PRTitle = strings.TrimSpace(pr.Title)
@@ -682,7 +716,7 @@ func (s Server) ValidateIssueOwnership(ctx context.Context, run config.Config) e
 		return err
 	}
 	if remote.Claim.ID != issue.Claim.ID || remote.InstanceID != s.instanceID() {
-		return fmt.Errorf("issue ownership changed; worker cannot continue")
+		return localruntime.ErrIssueOwnershipChanged
 	}
 	return nil
 }
@@ -712,36 +746,9 @@ func issueRetryFailures(record localruntime.IssueClaimRecord) int {
 	return max(record.AgentAttempts, record.Failures+issueRunFailures(record))
 }
 
-func issueRetryDelay(id string, failures int, policy localruntime.IssueRecoveryConfig) time.Duration {
-	seconds := policy.RetryDelaySeconds
-	for i := 1; i < failures && seconds < policy.MaxBackoffSeconds; i++ {
-		if seconds > policy.MaxBackoffSeconds/5 {
-			seconds = policy.MaxBackoffSeconds
-		} else {
-			seconds *= 5
-		}
-	}
-	seconds = min(seconds, policy.MaxBackoffSeconds)
-	// Stable jitter survives restarts and makes tests deterministic.
-	jitter := 0
-	if len(id) > 0 {
-		jitter = int(id[0]) % max(1, seconds/5)
-	}
-	return time.Duration(min(seconds+jitter, policy.MaxBackoffSeconds)) * time.Second
-}
-
 func (s Server) scheduleIssueRetry(record *localruntime.IssueClaimRecord, cause error) {
 	record.Failures++
-	record.NextAttemptAt = issueRetryDeadline(record.ID, issueRetryFailures(*record), s.IssueRecovery.Defaults(), cause)
-}
-
-func issueRetryDeadline(id string, failures int, policy localruntime.IssueRecoveryConfig, cause error) time.Time {
-	deadline := time.Now().Add(issueRetryDelay(id, failures, policy))
-	var rate *githubutil.RateLimitError
-	if errors.As(cause, &rate) && rate.RetryAt.After(deadline) {
-		return rate.RetryAt
-	}
-	return deadline
+	record.NextAttemptAt = s.IssueRecovery.Defaults().RetryDeadline(time.Now(), record.ID, issueRetryFailures(*record), cause)
 }
 
 func (s Server) deferIssueRecord(record localruntime.IssueClaimRecord, cause error) error {
@@ -755,6 +762,16 @@ func (s Server) deferIssueRecord(record localruntime.IssueClaimRecord, cause err
 			blockStaleIssueClaim(current)
 			return nil
 		}
+		if current.Outcome == localruntime.IssueChecksPending {
+			if current.UpdatedAt.After(record.UpdatedAt) {
+				return nil
+			}
+			current.State = localruntime.IssueChecksPending
+			current.Error = cause.Error()
+			current.Failures++
+			current.NextAttemptAt = s.IssueRecovery.Defaults().RetryDeadline(time.Now(), current.ID, current.Failures, cause)
+			return nil
+		}
 		if errors.Is(cause, errWorkflowIssueRecovery) {
 			blockObservedWorkflowIssue(current)
 			return nil
@@ -763,7 +780,7 @@ func (s Server) deferIssueRecord(record localruntime.IssueClaimRecord, cause err
 			// Remote verification can back off while the storage hold stays visible.
 			current.State = "blocked"
 			current.Error = issueExplicitRetryError(current.Incident)
-			current.NextAttemptAt = issueRetryDeadline(current.ID, issueRetryFailures(*current), s.IssueRecovery.Defaults(), cause)
+			current.NextAttemptAt = s.IssueRecovery.Defaults().RetryDeadline(time.Now(), current.ID, issueRetryFailures(*current), cause)
 			return nil
 		}
 		if errors.Is(cause, app.ErrIssueBranchRecovery) {
@@ -815,7 +832,7 @@ func (s Server) deferIssueUnlock(id string, cause error) error {
 		record.UnlockPending = true
 		record.UnlockFailures++
 		record.UnlockError = cause.Error()
-		record.NextUnlockAt = issueRetryDeadline(record.ID, record.UnlockFailures, s.IssueRecovery.Defaults(), cause)
+		record.NextUnlockAt = s.IssueRecovery.Defaults().RetryDeadline(time.Now(), record.ID, record.UnlockFailures, cause)
 		return nil
 	})
 	return errors.Join(cause, err)

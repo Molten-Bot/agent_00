@@ -350,6 +350,7 @@ func runServer(args []string) int {
 	repairHistory := &issueRepairQueue{store: &localruntime.IssueRepairStore{Root: filepath.Join(filepath.Dir(cfg.RuntimeConfigPath), "issue-repairs")}, logRoot: logRoot}
 	var wakeIssueRecovery func()
 	var verifyIssueOwnership func(context.Context, config.Config) error
+	githubCooldown := &githubutil.Cooldown{}
 	var workflowEngine *workflow.Engine
 	var enqueueLocalRun func(reqCtx context.Context, runCfg config.Config, source string, force bool) (string, error)
 	enqueueLocalRun = func(reqCtx context.Context, runCfg config.Config, source string, force bool) (string, error) {
@@ -455,6 +456,7 @@ func runServer(args []string) int {
 		)
 		if issueWork != nil {
 			requestID = issueWork.record.RequestID
+			issueWork.cooldown = githubCooldown
 		}
 		if repairWork != nil {
 			requestID = repairWork.record.RequestID
@@ -472,7 +474,8 @@ func runServer(args []string) int {
 		}
 		runCtx, cancelRun := context.WithCancelCause(ctx)
 		taskHandle := localTaskController.Register(requestID, cancelRun)
-		if issueWork != nil && runCfg.GitHubIssue.Claim.Attempt > 1 && requestID != "issue-"+issueWork.record.ID {
+		if issueWork != nil && (issueWork.record.Outcome == localruntime.IssueChecksPending ||
+			(runCfg.GitHubIssue.Claim.Attempt > 1 && requestID != "issue-"+issueWork.record.ID)) {
 			daemonLogger("task status=queued request_id=%s action=resume_draft_verification", requestID)
 		}
 		if runConfigJSON, ok := marshalRunConfigJSON(runCfg); ok {
@@ -655,15 +658,26 @@ func runServer(args []string) int {
 				}
 				taskRunner := execx.Runner(runner)
 				if issueWork != nil {
-					ownership := checkLocalIssueOwnership(runCtx, runCfg, requestID, taskHandle, verifyIssueOwnership, daemonLogger)
+					verify := verifyIssueOwnership
+					if verify != nil && issueWork.record.Outcome == localruntime.IssueChecksPending {
+						verify = func(ctx context.Context, cfg config.Config) error {
+							err := verifyIssueOwnership(ctx, cfg)
+							var rate *githubutil.RateLimitError
+							if errors.As(err, &rate) || app.IsTransientGitHubReadError(err) {
+								return fmt.Errorf("%w: %w", app.ErrChecksUnavailable, err)
+							}
+							return err
+						}
+					}
+					ownership := checkLocalIssueOwnership(runCtx, runCfg, requestID, taskHandle, verify, daemonLogger)
 					if ownership.Result.Err != nil {
 						finalState, issueResult = ownership.State, ownership.Result
 						release()
 						return
 					}
 					taskRunner = localruntime.IssueRunner{Runner: runner, Lock: issueWork.lock, Store: issueWork.store, RecordID: issueWork.record.ID, Check: func(checkCtx context.Context) error {
-						if verifyIssueOwnership != nil {
-							return verifyIssueOwnership(checkCtx, runCfg)
+						if verify != nil {
+							return verify(checkCtx, runCfg)
 						}
 						return nil
 					}}
@@ -710,6 +724,14 @@ func runServer(args []string) int {
 				}
 				if outcome.State == "error" && (errors.Is(outcome.Result.Err, app.ErrReviewPending) || errors.Is(outcome.Result.Err, app.ErrReviewHeadChanged)) {
 					reviewOutcome.Status = workflow.OutcomeReviewPending
+				}
+				checksInterrupted := issueWork != nil && issueWork.record.Outcome == localruntime.IssueChecksPending &&
+					outcome.State == "error" && runCtx.Err() != nil
+				if outcome.State == localruntime.IssueChecksPending || checksInterrupted {
+					reviewOutcome = workflow.Outcome{
+						Status: workflow.OutcomeChecksPending, PRURL: stringsx.FirstNonEmpty(outcome.Result.PRURL, issueWork.record.PRURL),
+						Reason: "Waiting for GitHub check verification",
+					}
 				}
 
 				var reviewArchiveErr error
@@ -760,7 +782,6 @@ func runServer(args []string) int {
 		dispatched = true
 		return requestID, nil
 	}
-	githubCooldown := &githubutil.Cooldown{}
 	if strings.TrimSpace(*uiListen) != "" {
 		uiServer := web.NewServer(*uiListen, monitorBroker)
 		uiReady := make(chan error, 1)
@@ -1368,6 +1389,7 @@ func runLocalTask(
 	recordDiskUsage func(string),
 	canRetryWorkspace bool,
 ) localTaskOutcome {
+	taskCtx := ctx
 	logf(
 		"task status=start request_id=%s skill=%s repo=%s repos=%s explicit_terminal=true",
 		requestID,
@@ -1421,7 +1443,7 @@ func runLocalTask(
 	}
 
 	res := h.Run(ctx, runCfg)
-	_, issue := ctx.Value(issueExecutionContextKey{}).(*issueExecution)
+	issueWork, issue := ctx.Value(issueExecutionContextKey{}).(*issueExecution)
 	if ctx.Err() == nil && !issue && res.ExitCode == app.ExitWorkspace && res.WorkspaceDir == "" &&
 		(canRetryWorkspace || workspace.IsDiskFull(res.Err)) {
 		return localTaskOutcome{State: "retry_workspace", Result: res}
@@ -1461,6 +1483,17 @@ func runLocalTask(
 			stopErr,
 		)
 		return localTaskOutcome{State: "stopped", Result: res}
+	}
+	var stepTimeout *localruntime.StepTimeoutError
+	if issue && errors.As(context.Cause(ctx), &stepTimeout) && stepTimeout.Step == "checks" {
+		res.Err = errors.Join(app.ErrChecksUnavailable, res.Err)
+	}
+	if issue && taskCtx.Err() == nil && errors.Is(res.Err, app.ErrChecksUnavailable) {
+		res.PRURL = stringsx.FirstNonEmpty(res.PRURL, issueWork.record.PRURL)
+		if res.PRURL != "" {
+			logf("task status=queued request_id=%s action=wait_for_github_checks pr_url=%s", requestID, res.PRURL)
+			return localTaskOutcome{State: localruntime.IssueChecksPending, Result: res}
+		}
 	}
 	if res.Err != nil {
 		logf(

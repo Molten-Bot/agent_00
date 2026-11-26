@@ -144,7 +144,7 @@ func (h Harness) collectDraftVerificationEvidence(ctx context.Context, repo repo
 		if repo.ReviewSanitize {
 			cmd = commandWithoutGitHubTokenEnv(cmd)
 		}
-		res, err := h.runCommand(ctx, "pr_verification", cmd)
+		res, err := h.runCheckQuery(ctx, "pr_verification", cmd, checkQueryTimeout)
 		return res.Stdout, err
 	}
 	rawMetadata, err := readGH(ctx, "pr", "view", repo.PRURL,

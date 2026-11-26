@@ -84,6 +84,65 @@ func TestPendingReviewRetainsActivationWithoutUsingReviewEvidence(t *testing.T) 
 	}
 }
 
+func TestPendingChecksReserveActivationUntilCurrentHeadIsReviewed(t *testing.T) {
+	t.Parallel()
+	w := definition("pending-checks")
+	w.ReviewCycles, w.Merge.Enabled = 1, true
+	e, _, submitted := testEngine(t, w)
+	state, err := e.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := Item{Repository: w.Repository, Kind: "issue", Number: 1}
+	prURL := "https://github.com/acme/repo/pull/12"
+	old := fixtureReviewReceipt(w, prURL)
+	state.Runs = []Run{{ID: "activation", RequestID: "task", Workflow: w, Item: item, Status: "running", MergeHead: old.Head}}
+	if err := e.save(state); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Complete("activation", Outcome{Status: OutcomeChecksPending, PRURL: prURL, Reason: "Waiting for GitHub check verification"}); err != nil {
+		t.Fatal(err)
+	}
+	inspections, merges := 0, 0
+	e.InspectPR = func(context.Context, string, string) (Item, error) {
+		inspections++
+		return Item{Open: true, ChecksPassed: true, HumanApproved: true, HeadSHA: "new-head"}, nil
+	}
+	e.Merge = func(_ context.Context, run Run) error {
+		merges++
+		if run.ID != "activation" || run.RequestID != "task" || run.MergeHead != "new-head" {
+			t.Fatalf("merge changed activation identity or used stale checks: %+v", run)
+		}
+		return nil
+	}
+	tick(t, e)
+	tick(t, e)
+	state, err = e.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := state.run("activation")
+	if run == nil || run.Status != OutcomeChecksPending || run.MergeHead != "" || !state.busy(item) || inspections != 0 || *submitted != 0 {
+		t.Fatalf("check wait lost activation or allowed polling or dispatch: %+v", run)
+	}
+	if err := e.Complete("activation", Outcome{Status: "succeeded", PRURL: prURL, ReviewReceipt: old}); err != nil {
+		t.Fatal(err)
+	}
+	tick(t, e)
+	if merges != 0 {
+		t.Fatal("review on the earlier head authorized merge")
+	}
+	fresh := fixtureReviewReceipt(w, prURL)
+	fresh.Head = "new-head"
+	if err := e.Complete("activation", Outcome{Status: "succeeded", PRURL: prURL, ReviewReceipt: fresh}); err != nil {
+		t.Fatal(err)
+	}
+	tick(t, e)
+	if merges != 1 || *submitted != 0 {
+		t.Fatalf("same activation did not recover: merges=%d submissions=%d", merges, *submitted)
+	}
+}
+
 func TestPendingReviewRecoversFailedActivation(t *testing.T) {
 	t.Parallel()
 	for _, recorded := range []bool{false, true} {

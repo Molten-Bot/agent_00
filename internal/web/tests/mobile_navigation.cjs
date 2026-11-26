@@ -296,6 +296,26 @@ test('task card distinguishes the titled pull request from the merged pull reque
   assert.equal(await result.locator('.task-result-link').getAttribute('href'), trackedURL);
 });
 
+test('task output shows GitHub check wait and recovery on the same task', async t => {
+  const task = {
+    request_id: 'issue-checks', prompt: 'Update issue implementation', repo: 'example/project',
+    status: 'pending', stage: 'checks', stage_status: 'waiting',
+    warning: 'Verification will retry automatically.', updated_at: new Date().toISOString(),
+    pr_url: 'https://github.com/example/project/pull/42',
+    logs: [{ text: 'Waiting for GitHub checks', stream: 'meta' }],
+  };
+  const { page } = await openPage(t, 'current-work', { width: 1280, height: 900 }, false, [task]);
+  await page.locator('#task-list .task-output-toggle').click();
+  const result = page.locator('#task-fullscreen-result');
+  await result.getByText('Waiting for GitHub checks', { exact: true }).waitFor();
+  await result.getByText(task.warning, { exact: true }).waitFor();
+  await page.evaluate(task => {
+    queueStreamSnapshot(JSON.stringify({ ...state.snapshot, tasks: [{ ...task, status: 'running', stage_status: 'start', warning: '' }] }));
+  }, task);
+  await result.getByText('Waiting for GitHub checks', { exact: true }).waitFor({ state: 'hidden' });
+  assert.equal(await page.locator('#task-list .task[data-request-id="issue-checks"]').count(), 1);
+});
+
 test('open task output updates when review gate and receipt arrive after completion', async t => {
   const task = {
     request_id: 'review-task', prompt: 'Review changes', repo: 'example/project',

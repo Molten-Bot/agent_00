@@ -238,6 +238,9 @@ type Harness struct {
 	IssuePublicationReady bool
 	// IssuePRVerification is the accepted PR-scoped work carried across attempts.
 	IssuePRVerification string
+	// IssueChecksPRURL resumes verification on the already published issue PR.
+	IssueChecksPRURL string
+	GitHubCooldown   *githubutil.Cooldown
 	// SaveIssuePublicationReady checkpoints agent acceptance before publication.
 	SaveIssuePublicationReady func(ready bool, verification string) error
 
@@ -325,6 +328,9 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	if h.Sleep == nil {
 		h.Sleep = sleepWithContext
 	}
+	if h.GitHubCooldown == nil {
+		h.GitHubCooldown = &githubutil.Cooldown{}
+	}
 	h.logf(
 		"stage=config status=ok review_mode=%s review_total=%d",
 		finalReviewMode(h.FinalReviewPasses),
@@ -371,7 +377,11 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	h.logf("stage=preflight status=ok")
 
 	h.logf("stage=auth status=start")
-	if _, err := h.runCommand(ctx, "auth", authCommand()); err != nil {
+	if h.IssueChecksPRURL != "" {
+		if _, err := h.runCheckQuery(ctx, "auth", authCommand(), checkQueryTimeout); err != nil {
+			return h.fail(ExitAuth, "auth", err, "")
+		}
+	} else if _, err := h.runCommand(ctx, "auth", authCommand()); err != nil {
 		return h.fail(ExitAuth, "auth", err, "")
 	}
 	if shouldSetupGitHubAuthForRepos(cfg.RepoList()) || hasGitHubAuthToken() {
@@ -410,14 +420,18 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	runCfg := cfg
 	reviewRun := runCfg.Review != nil
 	feedbackPRURL := ""
-	resumePR := runCfg.Workflow != nil && runCfg.Workflow.ResumePRURL != ""
+	resumeURL := h.IssueChecksPRURL
+	if resumeURL == "" && runCfg.Workflow != nil {
+		resumeURL = runCfg.Workflow.ResumePRURL
+	}
+	resumePR := resumeURL != ""
 	var resumeState prStateView
 	var resumeFork string
 	if resumePR {
 		var err error
-		resumeState, err = h.loadWorkflowPRToResume(ctx, runCfg)
+		resumeState, err = h.loadWorkflowPRToResume(ctx, runCfg, resumeURL)
 		if err != nil {
-			return h.failWithRepos(ExitPR, "pr", err, runDir, []repoWorkspace{{PRURL: runCfg.Workflow.ResumePRURL}})
+			return h.failWithRepos(ExitPR, "pr", err, runDir, []repoWorkspace{{PRURL: resumeURL}})
 		}
 		feedbackPRURL = resumeState.URL
 		// The exact PR head now pins publication. Fork retries first clone the
@@ -431,8 +445,10 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		if h.OnPRTitle != nil {
 			h.OnPRTitle(resumeState.URL, resumeState.Title)
 		}
-		if err := h.applyWorkflowPRMetadata(ctx, repoWorkspace{PRURL: feedbackPRURL}, runCfg.Workflow); err != nil {
-			return h.failWithRepos(ExitPR, "pr", err, runDir, []repoWorkspace{{PRURL: feedbackPRURL}})
+		if h.IssueChecksPRURL == "" {
+			if err := h.applyWorkflowPRMetadata(ctx, repoWorkspace{PRURL: feedbackPRURL}, runCfg.Workflow); err != nil {
+				return h.failWithRepos(ExitPR, "pr", err, runDir, []repoWorkspace{{PRURL: feedbackPRURL}})
+			}
 		}
 	} else if workflowRepair || isFreeTextPRFeedbackRun(runCfg) {
 		var err error
@@ -498,7 +514,10 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		if err := h.validateEnforcedNonDefaultBranch(ctx, repos[0]); err != nil {
 			return h.fail(ExitGit, "git", err, runDir)
 		}
-		if _, err := h.runCommand(ctx, "git", fetchBaseBranchCommand(repos[0].Dir, issueClaim.BaseBranch)); err != nil {
+		if res, err := h.runCommand(ctx, "git", fetchBaseBranchCommand(repos[0].Dir, issueClaim.BaseBranch)); err != nil {
+			if h.IssueChecksPRURL != "" && IsTransientGitHubReadError(fmt.Errorf("%w: %s", err, res.Stderr)) {
+				return h.failWithRepos(ExitPR, "checks", fmt.Errorf("%w: fetch the PR base: %w", ErrChecksUnavailable, err), runDir, repos)
+			}
 			return h.fail(ExitGit, "git", err, runDir)
 		}
 	}
@@ -519,6 +538,11 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		if resumeFork != "" {
 			if err := h.checkoutWorkflowPRFork(ctx, repo, resumeState, resumeFork); err != nil {
 				return h.failWithRepos(ExitGit, "git", err, runDir, repos)
+			}
+		}
+		if h.IssueChecksPRURL != "" {
+			if err := h.syncChecksResumeHead(ctx, *repo, resumeState.HeadRefOID); err != nil {
+				return h.failWithRepos(ExitPR, "checks", err, runDir, repos)
 			}
 		}
 	}
@@ -574,7 +598,7 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	}
 	if !reviewRun {
 		for i := range repos {
-			if resumePR && resumeFork != "" {
+			if h.IssueChecksPRURL != "" || (resumePR && resumeFork != "") {
 				continue
 			}
 			if err := h.preparePublishWorkflow(ctx, &repos[i]); err != nil {
@@ -1315,9 +1339,31 @@ func (h Harness) checkPublishedPullRequest(
 	codexOpts codexRunOptions,
 	codexBasePrompt, agentsPath, codexTargetLabel, agentStage string,
 	multiRepo bool,
-) (int, string, error) {
+) (exitCode int, stage string, resultErr error) {
 	preserveIssueTitle := cfg.GitHubIssue != nil
+	var checkHead string
+	// A watch follows a PR number, so bracket its result with reads of the
+	// published commit. Review only starts once checks are tied to that head.
+	if repo.IssueClaimBranch {
+		defer func() {
+			if resultErr == nil {
+				if err := h.confirmCurrentRequiredChecks(ctx, *repo, checkHead); err != nil {
+					exitCode, stage, resultErr = ExitPR, "checks", err
+				}
+			}
+		}()
+	}
 	for attempt := 0; ; attempt++ {
+		if repo.IssueClaimBranch {
+			var err error
+			checkHead, err = h.currentHead(ctx, *repo)
+			if err != nil {
+				return ExitGit, "git", err
+			}
+			if err := h.requireCheckHead(ctx, *repo, checkHead); err != nil {
+				return ExitPR, "checks", err
+			}
+		}
 		remainingTitlePropagationRetries := 0
 	checkPR:
 		var (
@@ -1327,9 +1373,16 @@ func (h Harness) checkPublishedPullRequest(
 		)
 		for noReportRetry := 0; ; noReportRetry++ {
 			requiredChecksOnly := false
+			confirmedFailure := false
 			h.logf("stage=checks status=start repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
 			checkRes, checkErr = h.runPRChecksWatch(ctx, repo.Dir, repo.PRURL)
+			if errors.Is(checkErr, ErrChecksUnavailable) || ctx.Err() != nil {
+				return ExitPR, "checks", checkErr
+			}
 			if isGitHubAuthFailure(checkRes, checkErr) {
+				if repo.IssueClaimBranch {
+					return ExitPR, "checks", fmt.Errorf("authenticate to read PR checks: %w", checkErr)
+				}
 				h.logf(
 					"stage=checks status=warn action=watch_skipped reason=github_auth_unavailable repo=%s repo_dir=%s pr_url=%s attempt=%d err=%q",
 					repo.URL,
@@ -1369,7 +1422,11 @@ func (h Harness) checkPublishedPullRequest(
 						return ExitSuccess, "", nil
 					}
 					checkErr = errors.New("checks failed after watch timeout")
+					confirmedFailure = true
 				}
+			}
+			if errors.Is(checkErr, ErrChecksUnavailable) {
+				return ExitPR, "checks", checkErr
 			}
 			if checkErr != nil && isNoRequiredChecksReported(checkRes, checkErr) {
 				h.logf(
@@ -1394,6 +1451,9 @@ func (h Harness) checkPublishedPullRequest(
 						return ExitSuccess, "", nil
 					}
 				} else {
+					if errors.Is(requiredErr, ErrChecksUnavailable) {
+						return ExitPR, "checks", requiredErr
+					}
 					h.logf(
 						"stage=checks status=warn action=required_status_checks reason=query_failed repo=%s repo_dir=%s pr_url=%s attempt=%d err=%q",
 						repo.URL,
@@ -1405,7 +1465,13 @@ func (h Harness) checkPublishedPullRequest(
 				}
 				requiredChecksOnly = false
 				checkRes, checkErr = h.runPRChecksAnyWatch(ctx, repo.Dir, repo.PRURL)
+				if errors.Is(checkErr, ErrChecksUnavailable) || ctx.Err() != nil {
+					return ExitPR, "checks", checkErr
+				}
 				if isGitHubAuthFailure(checkRes, checkErr) {
+					if repo.IssueClaimBranch {
+						return ExitPR, "checks", fmt.Errorf("authenticate to read PR checks: %w", checkErr)
+					}
 					h.logf(
 						"stage=checks status=warn action=watch_skipped reason=github_auth_unavailable repo=%s repo_dir=%s pr_url=%s attempt=%d err=%q",
 						repo.URL,
@@ -1445,8 +1511,12 @@ func (h Harness) checkPublishedPullRequest(
 							return ExitSuccess, "", nil
 						}
 						checkErr = errors.New("checks failed after watch timeout")
+						confirmedFailure = true
 					}
 				}
+			}
+			if errors.Is(checkErr, ErrChecksUnavailable) {
+				return ExitPR, "checks", checkErr
 			}
 			if checkErr == nil {
 				h.logf("stage=checks status=ok repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
@@ -1472,6 +1542,9 @@ func (h Harness) checkPublishedPullRequest(
 						return ExitSuccess, "", nil
 					}
 				} else {
+					if errors.Is(reconcileErr, ErrChecksUnavailable) {
+						return ExitPR, "checks", reconcileErr
+					}
 					h.logf(
 						"stage=checks status=warn action=latest_snapshot reason=query_failed repo=%s repo_dir=%s pr_url=%s attempt=%d err=%q",
 						repo.URL,
@@ -1502,7 +1575,7 @@ func (h Harness) checkPublishedPullRequest(
 					continue
 				}
 			}
-			if noChecksReported && noReportRetry == 0 {
+			if noChecksReported && noReportRetry == 0 && h.IssueChecksPRURL == "" {
 				h.logf(
 					"stage=checks status=start action=workflow_dispatch reason=no_checks_reported repo=%s repo_dir=%s branch=%s workflow=%s attempt=%d",
 					repo.URL,
@@ -1548,6 +1621,9 @@ func (h Harness) checkPublishedPullRequest(
 						return ExitSuccess, "", nil
 					}
 				} else {
+					if errors.Is(requiredErr, ErrChecksUnavailable) {
+						return ExitPR, "checks", requiredErr
+					}
 					h.logf(
 						"stage=checks status=warn action=required_status_checks reason=query_failed repo=%s repo_dir=%s pr_url=%s attempt=%d err=%q",
 						repo.URL,
@@ -1572,6 +1648,9 @@ func (h Harness) checkPublishedPullRequest(
 						return ExitSuccess, "", nil
 					}
 				} else {
+					if errors.Is(reconcileErr, ErrChecksUnavailable) {
+						return ExitPR, "checks", reconcileErr
+					}
 					h.logf(
 						"stage=checks status=warn action=workflow_dispatch_snapshot reason=query_failed repo=%s repo_dir=%s pr_url=%s attempt=%d err=%q",
 						repo.URL,
@@ -1583,6 +1662,15 @@ func (h Harness) checkPublishedPullRequest(
 				}
 			}
 			if noReportRetry >= maxPRChecksNoReportRetries || !noChecksReported {
+				if repo.IssueClaimBranch && !confirmedFailure {
+					snapshot, _ := latestCheckSnapshotFromText(checkRes.Stdout)
+					if !snapshot.HasFailures {
+						if noChecksReported || strings.Contains(checkErr.Error(), "exit status 8") {
+							return ExitPR, "checks", fmt.Errorf("%w: current check results are pending or missing", ErrChecksUnavailable)
+						}
+						return ExitPR, "checks", commandErrorWithDetails("read PR checks", checkErr, checkRes, maxGitErrorDetailChars)
+					}
+				}
 				break
 			}
 
@@ -1600,6 +1688,11 @@ func (h Harness) checkPublishedPullRequest(
 			}
 		}
 
+		if repo.IssueClaimBranch {
+			if err := h.requireCheckHead(ctx, *repo, checkHead); err != nil {
+				return ExitPR, "checks", err
+			}
+		}
 		h.logf("stage=checks status=failed repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
 		if remainingTitlePropagationRetries > 0 {
 			remainingTitlePropagationRetries--
@@ -1755,14 +1848,15 @@ func (h Harness) checkPublishedPullRequest(
 }
 
 type prStateView struct {
-	URL            string `json:"url"`
-	Title          string `json:"title"`
-	State          string `json:"state"`
-	MergedAt       string `json:"mergedAt"`
-	BaseRefName    string `json:"baseRefName"`
-	HeadRefName    string `json:"headRefName"`
-	HeadRefOID     string `json:"headRefOid"`
-	HeadRepository struct {
+	StatusCheckRollup []githubutil.StatusCheck `json:"statusCheckRollup"`
+	URL               string                   `json:"url"`
+	Title             string                   `json:"title"`
+	State             string                   `json:"state"`
+	MergedAt          string                   `json:"mergedAt"`
+	BaseRefName       string                   `json:"baseRefName"`
+	HeadRefName       string                   `json:"headRefName"`
+	HeadRefOID        string                   `json:"headRefOid"`
+	HeadRepository    struct {
 		Name          string `json:"name"`
 		NameWithOwner string `json:"nameWithOwner"`
 	} `json:"headRepository"`
@@ -3236,7 +3330,7 @@ func (h Harness) reportRecoveredPRTitle(ctx context.Context, repoDir, prURL stri
 			return
 		}
 		err = commandErrorWithDetails("look up pull request title", err, res, maxGitErrorDetailChars)
-		if ctx.Err() == nil && attempt < maxPRCreateAttempts && isTransientGitHubCLIError(err) {
+		if ctx.Err() == nil && attempt < maxPRCreateAttempts && IsTransientGitHubReadError(err) {
 			err = h.Sleep(ctx, prCreateRetryDelay)
 			if err == nil {
 				continue
@@ -5809,12 +5903,18 @@ func repoDirSlug(repoURL string) string {
 }
 
 func (h Harness) fail(exitCode int, stage string, err error, runDir string) Result {
-	h.logf("stage=%s status=error err=%q", stage, err)
-	return Result{ExitCode: exitCode, Err: fmt.Errorf("%s: %w", stage, err), WorkspaceDir: runDir}
+	return h.failWithRepos(exitCode, stage, err, runDir, nil)
 }
 
 func (h Harness) failWithRepos(exitCode int, stage string, err error, runDir string, repos []repoWorkspace) Result {
-	h.logf("stage=%s status=error err=%q", stage, err)
+	status := "error"
+	if errors.Is(err, ErrChecksUnavailable) {
+		status = "waiting"
+	}
+	h.logf("stage=%s status=%s err=%q", stage, status, err)
+	if repos == nil {
+		return Result{ExitCode: exitCode, Err: fmt.Errorf("%s: %w", stage, err), WorkspaceDir: runDir}
+	}
 	return buildFailureResult(exitCode, stage, err, runDir, repos)
 }
 
@@ -5858,7 +5958,10 @@ func (h Harness) runCommandUnchecked(ctx context.Context, phase string, cmd exec
 
 	var res execx.Result
 	var err error
-	if streamRunner, ok := h.Runner.(execx.StreamRunner); ok {
+	// gh api --include can emit sensitive HTTP headers. The GitHub cooldown
+	// reads them from the buffered response and returns only the body.
+	includesHeaders := cmd.Name == "gh" && len(cmd.Args) >= 2 && cmd.Args[0] == "api" && cmd.Args[1] == "--include"
+	if streamRunner, ok := h.Runner.(execx.StreamRunner); ok && !includesHeaders {
 		var stdoutBuf strings.Builder
 		var stderrBuf strings.Builder
 		streamOnLine := func(stream, line string) {
@@ -5877,7 +5980,11 @@ func (h Harness) runCommandUnchecked(ctx context.Context, phase string, cmd exec
 		res.Stderr = mergeStreamedOutput(res.Stderr, stderrBuf.String())
 	} else {
 		res, err = h.Runner.Run(ctx, cmd)
-		emitBufferedOutput(res, onLine)
+		output := res
+		if includesHeaders {
+			output.Stdout = ""
+		}
+		emitBufferedOutput(output, onLine)
 	}
 
 	if err != nil {
@@ -5925,11 +6032,11 @@ func (h Harness) runPRChecksAnyWatch(ctx context.Context, repoDir, prURL string)
 func (h Harness) runPRChecksWatchCommand(ctx context.Context, cmd execx.Command) (execx.Result, error) {
 	timeout := h.prChecksWatchTimeout()
 	if timeout <= 0 {
-		return h.runCommand(ctx, "checks", cmd)
+		return h.runCheckQuery(ctx, "checks", cmd, 0)
 	}
 	watchCtx, cancel := context.WithTimeoutCause(ctx, timeout, errPRChecksWatchTimeout)
 	defer cancel()
-	res, err := h.runCommand(watchCtx, "checks", cmd)
+	res, err := h.runCheckQuery(watchCtx, "checks", cmd, 0)
 	if errors.Is(context.Cause(watchCtx), errPRChecksWatchTimeout) {
 		return res, errPRChecksWatchTimeout
 	}
@@ -6109,7 +6216,8 @@ func shouldRetryPRCreate(res execx.Result, err error) bool {
 	return false
 }
 
-func isTransientGitHubCLIError(err error) bool {
+// IsTransientGitHubReadError recognizes temporary GitHub CLI failures.
+func IsTransientGitHubReadError(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -6135,6 +6243,13 @@ func isTransientGitHubCLIError(err error) bool {
 		"failed to lookup address information",
 		"error connecting to",
 		"check your internet connection",
+		"connection refused",
+		"unexpected eof",
+		"no such host",
+		"service unavailable",
+		"bad gateway",
+		"gateway timeout",
+		"something went wrong while executing your query",
 	}
 	for _, marker := range transientMarkers {
 		if strings.Contains(text, marker) {
@@ -9496,9 +9611,10 @@ func prLookupAnyByHeadWithRepoCommand(repoDir, headRef, repo string) execx.Comma
 	return prLookupByHeadStateCommand(repoDir, "all", headRef, repo)
 }
 
-func prStateViewCommand(repoDir, prURL string) execx.Command {
+func prStateViewCommand(repoDir, prURL string, extraFields ...string) execx.Command {
 	selector := githubutil.PullRequestSelector(prURL)
-	args := []string{"pr", "view", selector, "--json", "url,title,state,mergedAt,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner"}
+	fields := "url,title,state,mergedAt,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner"
+	args := []string{"pr", "view", selector, "--json", strings.Join(append([]string{fields}, extraFields...), ",")}
 	if repo := githubutil.PullRequestRepository(prURL); repo != "" {
 		args = append(args, "--repo", repo)
 	}
@@ -9805,18 +9921,21 @@ func (h Harness) reconcileChecksAfterFailure(ctx context.Context, repo repoWorks
 
 func (h Harness) latestChecksAreAllPassing(ctx context.Context, repo repoWorkspace, requiredOnly bool) (bool, string, error) {
 	snapshot, err := h.latestChecks(ctx, repo, requiredOnly)
-	if err != nil {
-		return false, "", err
+	if err == nil && repo.IssueClaimBranch && !snapshot.AllPassing && !snapshot.HasFailures {
+		err = fmt.Errorf("%w: current check results are pending or missing", ErrChecksUnavailable)
 	}
-	return snapshot.AllPassing, snapshot.Summary, nil
+	return snapshot.AllPassing, snapshot.Summary, err
 }
 
 func (h Harness) latestChecks(ctx context.Context, repo repoWorkspace, requiredOnly bool) (latestChecksSnapshot, error) {
-	res, err := h.runCommand(ctx, "checks", prChecksJSONCommand(repo.Dir, repo.PRURL, requiredOnly))
+	res, err := h.runCheckQuery(ctx, "checks", prChecksJSONCommand(repo.Dir, repo.PRURL, requiredOnly), checkQueryTimeout)
 	if isUnsupportedPRChecksJSON(res, err) {
 		// Older gh versions emit only usage text when --json is unsupported.
 		// Query again without it; never treat the failed query as a snapshot.
-		res, err = h.runCommand(ctx, "checks", prChecksTextCommand(repo.Dir, repo.PRURL, requiredOnly))
+		res, err = h.runCheckQuery(ctx, "checks", prChecksTextCommand(repo.Dir, repo.PRURL, requiredOnly), checkQueryTimeout)
+		if errors.Is(err, ErrChecksUnavailable) {
+			return latestChecksSnapshot{}, err
+		}
 		snapshot, parseErr := latestCheckSnapshotFromText(res.Stdout)
 		if err != nil {
 			// gh also exits nonzero for failed or pending checks. Such output
@@ -9992,7 +10111,10 @@ func (h Harness) configuredRequiredStatusChecks(ctx context.Context, repoDir, ta
 	if sanitized {
 		cmd = commandWithoutGitHubTokenEnv(cmd)
 	}
-	res, err := h.runCommand(ctx, "checks", cmd)
+	res, err := h.runCheckQuery(ctx, "checks", cmd, checkQueryTimeout)
+	if errors.Is(err, ErrChecksUnavailable) {
+		return nil, err
+	}
 	if isRequiredStatusChecksNotConfigured(res, err) {
 		return nil, nil
 	}
@@ -10012,7 +10134,7 @@ func (h Harness) reconcileNoChecksWithWorkflowDispatch(ctx context.Context, repo
 		return false, "", nil
 	}
 
-	res, err := h.runCommand(ctx, "checks", workflowDispatchRunsCommand(repo.Dir, repo.Branch))
+	res, err := h.runCheckQuery(ctx, "checks", workflowDispatchRunsCommand(repo.Dir, repo.Branch), checkQueryTimeout)
 	if err != nil {
 		return false, "", err
 	}
