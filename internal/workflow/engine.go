@@ -511,6 +511,12 @@ func (e *Engine) Tick(ctx context.Context) error {
 			reserved := false
 			err := e.transaction(func(current *State) error {
 				if current.busy(i) {
+					// Persist the highest observed attempt even when another repair
+					// for this run is active. A later successful rerun must not hide it.
+					if action {
+						current.Observations[obsKey] = old
+						return nil
+					}
 					return errJournalUnchanged
 				}
 				current.Observations[obsKey] = old

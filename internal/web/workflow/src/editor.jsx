@@ -741,7 +741,7 @@ function Editor({ defaultComplexity }) {
             loading={reposLoading}
             error={reposError}
             onRetry={loadRepos}
-            autoSelect={!dirty}
+            autoSelect={!dirty && !current}
             onChange={changeRepository}
           />
           <div className="wf-step-list">
