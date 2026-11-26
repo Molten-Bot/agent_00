@@ -899,12 +899,16 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 					}
 					return issueRetryResult{}, status, err
 				}
-				if err := s.recordVerifiedIssuePR(previous, pr); err != nil {
-					return issueRetryResult{}, 503, err
+				if !pr.resumesVerification(previous) {
+					if err := s.recordVerifiedIssuePR(previous, pr); err != nil {
+						return issueRetryResult{}, 503, err
+					}
+					return issueRetryResult{PRURL: pr.URL}, http.StatusOK, nil
 				}
-				return issueRetryResult{PRURL: pr.URL}, http.StatusOK, nil
+				verificationPRURL = pr.URL
+			} else {
+				return issueRetryResult{}, 409, fmt.Errorf("issue already has an open or merged PR")
 			}
-			return issueRetryResult{}, 409, fmt.Errorf("issue already has an open or merged PR")
 		}
 	}
 	issue, err := s.fetchGitHubIssue(ctx, repository, number)

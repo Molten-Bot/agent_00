@@ -31,6 +31,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 		retry        bool
 		findings     bool
 		headMoved    bool
+		queued       bool
 		wantExit     int
 	}{
 		{name: "publish and verify", answer: localSuccess, change: true},
@@ -39,6 +40,10 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 		{name: "head changed before verification", answer: localSuccess, change: true, headMoved: true, wantExit: ExitPR},
 		{name: "blocked implementation", answer: "Failure: Implementation remains blocked.\nError details: Local tests failed.\nDraft handoff: " + requirement, change: true, wantExit: ExitCodex},
 		{name: "agent execution failed", answer: localSuccess, change: true, agentErr: errors.New("execution failed"), wantExit: ExitCodex},
+		{name: "missing handoff", answer: "Implementation and local checks passed.", change: true, wantExit: ExitCodex},
+		{name: "missing handoff with queued verification", answer: "Implementation and local checks passed.", change: true, queued: true, wantExit: ExitCodex},
+		{name: "handoff is not final", answer: localSuccess + "\nImplementation complete.", change: true, wantExit: ExitCodex},
+		{name: "empty handoff", answer: "Draft handoff:", change: true, wantExit: ExitCodex},
 		{name: "no change", answer: "No changes needed."},
 		{name: "handoff without changes", answer: localSuccess},
 	} {
@@ -166,6 +171,10 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			})
 			h := New(runner)
 			h.Workspace = workspace.Manager{Root: root, NewGUID: func() string { return "issue-workspace" }}
+			if tc.queued {
+				h.IssuePRVerification = requirement
+				savedRequirement = requirement
+			}
 			h.SaveIssuePublicationReady = func(ready bool, verification string) error {
 				accepted = ready
 				if verification != "" {
@@ -187,7 +196,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				}
 				return
 			}
-			if tc.wantExit != ExitSuccess && (!draft || ready != 0 || result.ReviewReceipt != nil) {
+			if tc.wantExit != ExitSuccess && (!draft || ready != 0 || result.ReviewReceipt != nil || result.PRVerificationPassed) {
 				t.Fatalf("failed verification or review released the draft: %+v", result)
 			}
 			if tc.findings || tc.headMoved {
@@ -206,7 +215,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				result = h.Run(t.Context(), cfg)
 				wantVerifications++
 			}
-			if result.Err != nil || result.PRURL != prURL || !result.ReviewRequired || result.ReviewReceipt == nil ||
+			if result.Err != nil || result.PRURL != prURL || !result.ReviewRequired || result.ReviewReceipt == nil || !result.PRVerificationPassed ||
 				implementations != 1 || creates != 1 || api.posts != 1 || verifications != wantVerifications || ready != 1 || draft {
 				t.Fatalf("implementation/create/review/verify/ready = %d/%d/%d/%d/%d, draft=%t, result=%+v",
 					implementations, creates, api.posts, verifications, ready, draft, result)

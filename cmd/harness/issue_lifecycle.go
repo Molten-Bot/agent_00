@@ -140,6 +140,8 @@ func (e *issueExecution) finish(ctx context.Context, state string, result app.Re
 		}
 		if state != "completed" {
 			record.Incident = "missing_pr"
+		} else if result.PRVerificationPassed {
+			record.PRVerification = ""
 		}
 		record.NoChangeEvidence = result.NoChangeEvidence
 		if state == "interrupted" && errors.Is(context.Cause(ctx), context.Canceled) {

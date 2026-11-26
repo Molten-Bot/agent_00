@@ -12,8 +12,9 @@ import (
 const (
 	draftHandoffPrefix       = "Draft handoff:"
 	maxPRVerificationLength  = 4096
-	draftHandoffInstructions = "\n\nIf implementation and all applicable local checks are complete and only verification requiring a live pull request remains, " +
-		"report the implementation and local results, then end your final response with one plain-text line of the form `Draft handoff: <specific PR evidence to verify and what must pass>`. " +
+	draftHandoffInstructions = "\n\nFor a claimed issue with changes, complete implementation and all applicable local checks before handing off. " +
+		"Report the implementation and local results, then end your final response with one plain-text line of the form `Draft handoff: <specific PR evidence to verify and what must pass>`. " +
+		"If local checks cover all implementation criteria, require a submitted clean review for the published head and passing results for any configured PR checks. " +
 		"The harness will publish the changes as a draft and verify them after GitHub review, before marking the PR ready. " +
 		"Use this handoff only for verification the harness can perform on a draft. Report incomplete work, failed local checks, and external blockers using the failure format."
 )

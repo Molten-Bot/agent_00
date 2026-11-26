@@ -146,6 +146,9 @@ type Result struct {
 	NoChanges         bool
 	NoChangeEvidence  bool
 	RepoResults       []RepoResult
+
+	// PRVerificationPassed records that the draft verifier completed successfully.
+	PRVerificationPassed bool
 }
 
 // RepoResult captures outcome details for one repository in a run.
@@ -191,6 +194,7 @@ type repoWorkspace struct {
 	ReviewRequired              bool
 	ReviewSanitize              bool
 	PRVerification              string
+	PRVerificationPassed        bool
 }
 
 type codexRunOptions = agentruntime.RunOptions
@@ -544,7 +548,8 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 			return h.fail(ExitGit, "git", err, runDir)
 		}
 		hasPendingWork := publicationPending
-		publicationPending = h.IssuePublicationReady && (localPublicationPending || (verification != "" && hasPendingWork))
+		publicationPending = h.IssuePublicationReady && (!allowDraftHandoff || verification != "") &&
+			(localPublicationPending || (verification != "" && hasPendingWork))
 		if issueClaim.Attempt > 1 && !hasPendingWork {
 			// A dependency may have merged since the issue branch was reserved.
 			// Incorporate the fetched base before the agent tests the branch.
@@ -644,6 +649,7 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	initialAgentInvocation := newAgentInvocationLogMetadata(runtime, invocationMode, 1, initialRepo, initialRepoDir, codexTargetLabel)
 
 	var agentRes execx.Result
+	var draftHandoffReported bool
 	h.logf("stage=%s status=start target=%s%s", agentStage, codexTargetLabel, initialAgentInvocation.logFieldsSuffix())
 	codexStart := time.Now()
 	if !publicationPending {
@@ -665,6 +671,7 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		agentRes, err = initialHarness.runCodexCapture(ctx, runtime, codexDir, initialPrompt, codexOpts, agentsPath, agentResponseMode, initialAgentInvocation)
 		if err == nil && allowDraftHandoff {
 			if request, ok := draftHandoffRequest(agentRes.Stdout); ok {
+				draftHandoffReported = true
 				if request != "" && !slices.Contains(strings.Split(verification, "\n"), request) {
 					verification = strings.TrimSpace(verification + "\n" + request)
 				}
@@ -740,16 +747,17 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		return res
 	}
 	if allowDraftHandoff && changedCount > 0 {
+		if !publicationPending && !draftHandoffReported {
+			return h.fail(ExitCodex, agentStage, fmt.Errorf("claimed issue changes require a final Draft handoff line with a PR verification request"), runDir)
+		}
 		if !publicationPending && h.SaveIssuePublicationReady != nil {
 			if err := h.SaveIssuePublicationReady(true, verification); err != nil {
 				return h.fail(ExitCodex, agentStage, fmt.Errorf("record issue publication readiness: %w", err), runDir)
 			}
 		}
-		if verification != "" {
-			repos[0].PRVerification = verification
-			repos[0].ReviewRequired = true
-			h.logf("stage=pr status=ok action=accept_draft_handoff")
-		}
+		repos[0].PRVerification = verification
+		repos[0].ReviewRequired = true
+		h.logf("stage=pr status=ok action=accept_draft_handoff")
 	}
 	noChangePRsRepaired := false
 	verifyNoChangePRs := func() (int, string, error) {
@@ -952,6 +960,7 @@ func (h Harness) finalizePullRequestReview(
 	if err := h.completeCleanReviewGate(ctx, cfg, repo, !cfg.Draft); err != nil {
 		return ExitPR, "review", h.reviewPublicationError(ctx, repo, 0, h.FinalReviewPasses, err)
 	}
+	repo.PRVerificationPassed = repo.PRVerification != ""
 	return exitCode, stage, err
 }
 
@@ -4279,6 +4288,7 @@ func buildResult(runDir string, repos []repoWorkspace, noChanges bool) Result {
 			res.PendingReviewGate = repo.PendingReviewGate
 			res.ReviewRequired = repo.ReviewRequired
 			res.ReviewInterrupted = repo.ReviewInterrupted
+			res.PRVerificationPassed = repo.PRVerificationPassed
 		}
 	}
 	if res.Branch == "" && len(repos) > 0 {

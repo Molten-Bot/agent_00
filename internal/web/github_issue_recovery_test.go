@@ -774,6 +774,15 @@ func TestIssueRecoveryRetriesUnlockAndAdmissionAfterRestart(t *testing.T) {
 
 func TestLabeledIssueDraftVerificationRetryKeepsWorkflowPolicy(t *testing.T) {
 	t.Parallel()
+	for _, outcome := range []string{"error", "completed"} {
+		t.Run(outcome, func(t *testing.T) {
+			testLabeledIssueDraftVerificationRetry(t, outcome)
+		})
+	}
+}
+
+func testLabeledIssueDraftVerificationRetry(t *testing.T, outcome string) {
+	t.Helper()
 	s, f := recoveryServer(t)
 	engine := s.Workflows
 	doc, err := engine.Store.Load()
@@ -799,17 +808,20 @@ func TestLabeledIssueDraftVerificationRetryKeepsWorkflowPolicy(t *testing.T) {
 	if err := engine.Tick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	previous := completeRecoveryRecord(t, s, "error", 1)
+	previous := completeRecoveryRecord(t, s, outcome, 1)
 	previous.PublicationReady, previous.CheckoutComplete = true, true
 	previous.PRVerification = "Verify CI and the submitted review on the published head."
-	previous.RunError = "pr_verification: draft verification did not pass"
+	const verificationFailure = "pr_verification: draft verification did not pass"
+	if outcome == "error" {
+		previous.RunError = verificationFailure
+	}
 	if err := s.IssueClaims.Save(previous); err != nil {
 		t.Fatal(err)
 	}
 	const prURL = "https://github.com/acme/repo/pull/42"
 	f.prs = recoveryPR("open", "null", previous.Run.GitHubIssue.Claim.Branch, "main")
 	f.closingPRURL = prURL
-	if err := engine.Complete(previous.Run.Workflow.EventID, workflow.Outcome{Status: "failed", PRURL: prURL, Reason: previous.RunError, ReviewRequired: true}); err != nil {
+	if err := engine.Complete(previous.Run.Workflow.EventID, workflow.Outcome{Status: "failed", PRURL: prURL, Reason: verificationFailure, ReviewRequired: true}); err != nil {
 		t.Fatal(err)
 	}
 	merges := 0
@@ -1341,11 +1353,22 @@ func TestIssueRecoveryBlocksReservedBranchConflictsAcrossRestart(t *testing.T) {
 
 func TestIssueRecoveryVerifiesReopenedPRBeforeCheckout(t *testing.T) {
 	t.Parallel()
+	t.Run("no pending verification", func(t *testing.T) {
+		testIssueRecoveryReopenedPR(t, "")
+	})
+	t.Run("pending verification", func(t *testing.T) {
+		testIssueRecoveryReopenedPR(t, "Verify CI on the published head.")
+	})
+}
+
+func testIssueRecoveryReopenedPR(t *testing.T, verification string) {
+	t.Helper()
 	s, f := recoveryServer(t)
 	reconcileOrAdmitTestIssue(t.Context(), s)
 	record := completeRecoveryRecord(t, s, "error", 0)
 	record.Incident = localruntime.IssueIncidentBranchRecovery
 	record.ExitCode = app.ExitClone
+	record.PRVerification = verification
 	record.WorkspaceDir = t.TempDir()
 	if err := s.IssueClaims.Save(record); err != nil {
 		t.Fatal(err)
@@ -1364,7 +1387,16 @@ func TestIssueRecoveryVerifiesReopenedPRBeforeCheckout(t *testing.T) {
 		t.Fatalf("PR head mismatch: status=%d body=%s", response.Code, response.Body.String())
 	}
 	f.prs = openPR
-	if response := retryIssue(t, s, record.ID, true); response.Code != http.StatusOK ||
+	response := retryIssue(t, s, record.ID, true)
+	if verification != "" {
+		got := latestRecoveryRecord(t, s)
+		if response.Code != http.StatusAccepted || len(f.submissions) != 2 || got.ID == record.ID ||
+			got.PRVerification != verification || got.State == "fulfilled" {
+			t.Fatalf("reopened PR needs verification: status=%d body=%s record=%+v", response.Code, response.Body.String(), got)
+		}
+		return
+	}
+	if response.Code != http.StatusOK ||
 		!strings.Contains(response.Body.String(), `"prUrl":"https://github.com/acme/repo/pull/42"`) {
 		t.Fatalf("reopened PR: status=%d body=%s", response.Code, response.Body.String())
 	}

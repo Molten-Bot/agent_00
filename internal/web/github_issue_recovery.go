@@ -811,7 +811,7 @@ type issuePullRequest struct {
 }
 
 func (pr issuePullRequest) resumesVerification(record localruntime.IssueClaimRecord) bool {
-	return pr.URL != "" && !pr.Closed && !pr.Merged && record.PRVerification != "" && record.Outcome != "completed" &&
+	return pr.URL != "" && !pr.Closed && !pr.Merged && record.PRVerification != "" &&
 		pr.BaseBranch == record.Run.GitHubIssue.Claim.BaseBranch
 }
 
