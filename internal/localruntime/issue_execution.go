@@ -14,6 +14,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/githubutil"
 )
 
 type IssueRecoveryConfig struct {
@@ -37,6 +38,33 @@ func (c IssueRecoveryConfig) Defaults() IssueRecoveryConfig {
 		c.MaxBackoffSeconds = 3600
 	}
 	return c
+}
+
+func (c IssueRecoveryConfig) RetryDeadline(now time.Time, id string, failures int, cause error) time.Time {
+	deadline := now.Add(c.RetryDelay(id, failures))
+	var rate *githubutil.RateLimitError
+	if errors.As(cause, &rate) && rate.RetryAt.After(deadline) {
+		return rate.RetryAt
+	}
+	return deadline
+}
+
+func (c IssueRecoveryConfig) RetryDelay(id string, failures int) time.Duration {
+	seconds := c.RetryDelaySeconds
+	for i := 1; i < failures && seconds < c.MaxBackoffSeconds; i++ {
+		if seconds > c.MaxBackoffSeconds/5 {
+			seconds = c.MaxBackoffSeconds
+		} else {
+			seconds *= 5
+		}
+	}
+	seconds = min(seconds, c.MaxBackoffSeconds)
+	// Stable jitter survives restarts and makes tests deterministic.
+	jitter := 0
+	if len(id) > 0 {
+		jitter = int(id[0]) % max(1, seconds/5)
+	}
+	return time.Duration(min(seconds+jitter, c.MaxBackoffSeconds)) * time.Second
 }
 
 func IssueExecutionKey(issue *config.GitHubIssueConfig) string {
@@ -204,6 +232,15 @@ func (r IssueRunner) check(ctx context.Context, cmd execx.Command) error {
 	return nil
 }
 
+type StepTimeoutError struct {
+	Step    string
+	Timeout time.Duration
+}
+
+func (e *StepTimeoutError) Error() string {
+	return fmt.Sprintf("workflow step %s exceeded %s", e.Step, e.Timeout)
+}
+
 // StepWatchdog resets only on a different semantic workflow step. Output and
 // heartbeats never reset it. A generation prevents a racing old timer from
 // canceling a task that has already advanced.
@@ -236,7 +273,7 @@ func (w *StepWatchdog) Advance(step string) bool {
 		w.mu.Lock()
 		defer w.mu.Unlock()
 		if !w.closed && generation == w.generation {
-			w.cancel(fmt.Errorf("workflow step %s exceeded %s", step, w.timeout))
+			w.cancel(&StepTimeoutError{Step: step, Timeout: w.timeout})
 		}
 	})
 	return true

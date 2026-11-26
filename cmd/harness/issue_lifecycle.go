@@ -10,6 +10,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/app"
 	"github.com/Molten-Bot/agent_00/internal/config"
+	"github.com/Molten-Bot/agent_00/internal/githubutil"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/workflow"
 	"github.com/Molten-Bot/agent_00/internal/workspace"
@@ -17,10 +18,11 @@ import (
 
 type issueExecutionContextKey struct{}
 type issueExecution struct {
-	store  *localruntime.IssueClaimStore
-	record localruntime.IssueClaimRecord
-	lock   *os.File
-	policy localruntime.IssueRecoveryConfig
+	store    *localruntime.IssueClaimStore
+	record   localruntime.IssueClaimRecord
+	lock     *os.File
+	policy   localruntime.IssueRecoveryConfig
+	cooldown *githubutil.Cooldown
 }
 
 func checkLocalIssueOwnership(ctx context.Context, run config.Config, requestID string, task *localTaskHandle, verify func(context.Context, config.Config) error, logf func(string, ...any)) localTaskOutcome {
@@ -35,6 +37,10 @@ func checkLocalIssueOwnership(ctx context.Context, run config.Config, requestID 
 	if task.IsStopped() {
 		logf("task status=stopped request_id=%s err=%q", requestID, errTaskStoppedByOperator)
 		return localTaskOutcome{State: "stopped", Result: result}
+	}
+	if ctx.Err() == nil && errors.Is(err, app.ErrChecksUnavailable) {
+		logf("task status=queued request_id=%s action=wait_for_github_checks", requestID)
+		return localTaskOutcome{State: localruntime.IssueChecksPending, Result: result}
 	}
 	logf("task status=error request_id=%s err=%q", requestID, err)
 	return localTaskOutcome{State: "error", Result: result}
@@ -74,7 +80,7 @@ func prepareIssueExecution(store *localruntime.IssueClaimStore, run config.Confi
 		lock.Close()
 		return nil, "", fmt.Errorf("issue is %s; explicit resume required", record.Control)
 	}
-	if record.Outcome != "" {
+	if record.Outcome != "" && (record.Outcome != localruntime.IssueChecksPending || time.Now().Before(record.NextAttemptAt)) {
 		lock.Close()
 		return nil, record.RequestID, nil
 	}
@@ -171,6 +177,19 @@ func (e *issueExecution) finish(ctx context.Context, state string, result app.Re
 		if errors.Is(result.Err, app.ErrIssueBranchRecovery) {
 			record.Incident = localruntime.IssueIncidentBranchRecovery
 		}
+		waiting := state == localruntime.IssueChecksPending ||
+			(state == "interrupted" && e.record.Outcome == localruntime.IssueChecksPending)
+		if waiting {
+			record.Outcome, record.State = localruntime.IssueChecksPending, localruntime.IssueChecksPending
+			record.Incident = ""
+			record.UnlockPending = false
+			if result.PRURL != "" {
+				record.PRURL = result.PRURL
+			}
+			record.Failures++
+			record.NextAttemptAt = e.policy.RetryDeadline(stoppedAt, record.ID, record.Failures, result.Err)
+			record.Error = fmt.Sprintf("Waiting for GitHub check verification. Retry after %s.", record.NextAttemptAt.UTC().Format(time.RFC3339))
+		}
 		if journalErr != nil || ((state == "error" || state == "interrupted") &&
 			(workspace.IsDiskFull(result.Err) || errors.Is(result.Err, workspace.ErrUnsuitableStorage))) {
 			record.Incident = localruntime.IssueIncidentWorkspaceStorage
@@ -220,6 +239,10 @@ func (e *issueExecution) configure(ctx context.Context, h *app.Harness) (context
 	h.IssueCheckoutComplete = e.record.CheckoutComplete
 	h.IssuePublicationReady = e.record.PublicationReady
 	h.IssuePRVerification = e.record.PRVerification
+	h.GitHubCooldown = e.cooldown
+	if e.record.Outcome == localruntime.IssueChecksPending {
+		h.IssueChecksPRURL = e.record.PRURL
+	}
 	onCheckout := h.OnCheckout
 	h.OnCheckout = func() {
 		if onCheckout != nil {

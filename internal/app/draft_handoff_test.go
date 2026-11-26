@@ -146,6 +146,8 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 		headMovedAfterEvidence bool
 		publishedHeadMoved     bool
 		pendingChecks          int
+		watchOutages           int
+		evidenceOutage         bool
 		checkRollups           []string
 		checkRuns              string
 		commitStatuses         string
@@ -169,6 +171,9 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 	}{
 		{name: "verify private draft from supplied evidence", answer: localSuccess, change: true, requiredChecks: `{"contexts":["CI"]}`},
 		{name: "verify standard handoff from supplied evidence", answer: "Draft handoff: " + draftHandoffStandard, change: true},
+		{name: "checks watch recovers within the same run", answer: localSuccess, change: true, watchOutages: 1},
+		{name: "checks resume on the published draft", answer: localSuccess, change: true, watchOutages: 3, wantExit: ExitPR},
+		{name: "draft evidence resumes with a fresh review on the new head", answer: localSuccess, change: true, evidenceOutage: true, wantExit: ExitPR},
 		{name: "standard handoff requires a passing verdict", answer: "Draft handoff: " + draftHandoffStandard, change: true, verifierBlocked: true, wantExit: ExitPR},
 		{name: "missing current-head checks", answer: localSuccess, change: true, checkRollups: []string{"null", "null"}, wantExit: ExitPR,
 			wantEvidenceError: "missing or invalid check results for the current draft head"},
@@ -260,6 +265,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			api := &reviewAPIStub{t: t}
 			wantRequirement, _ := draftHandoffRequest(tc.answer)
 			var implementations, creates, verifications, ready, evidenceReads, waits int
+			var watchReads, evidenceOutages int
 			var draft, accepted, metadataRetry bool
 			savedResume := ""
 			labels := []string{"existing label"}
@@ -277,6 +283,9 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				})
 			}
 			runner := issueBranchRunner(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+				if len(cmd.Args) > 1 && cmd.Name == "gh" && cmd.Args[0] == "api" && cmd.Args[1] == "--include" {
+					cmd.Args = append([]string{"api"}, cmd.Args[2:]...)
+				}
 				args := strings.Join(cmd.Args, " ")
 				if cmd.Name == "gh" && strings.Contains(args, "--method POST repos/acme/repo/issues/42/") && savedResume != prURL {
 					t.Fatal("metadata mutation preceded saved retry target")
@@ -471,15 +480,20 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 						draft = slices.Contains(cmd.Args, "--undo")
 						return execx.Result{}, nil
 					case args == "api repos/acme/repo/branches/main/protection/required_status_checks":
+						if api.posts == 0 {
+							return execx.Result{Stdout: `{"contexts":["CI"]}`}, nil
+						}
 						if tc.requiredChecks != "" {
 							return execx.Result{Stdout: tc.requiredChecks}, nil
 						}
 						return execx.Result{Stderr: "Branch not protected"}, errors.New("exit status 1")
 					case args == "api --paginate repos/acme/repo/rules/branches/main?per_page=100":
-						if tc.ruleset != "" {
+						if tc.ruleset != "" && api.posts > 0 {
 							return execx.Result{Stdout: tc.ruleset}, nil
 						}
 						return execx.Result{Stdout: "[]"}, nil
+					case strings.HasPrefix(args, "api graphql -f id=PR_id "):
+						return execx.Result{Stdout: checkRollupPageJSON(branch, api.head, api.head, `[{"name":"CI","conclusion":"SUCCESS","isRequired":true}]`, false, "")}, nil
 					case args == "api --paginate repos/acme/repo/commits/"+api.head+"/check-runs?per_page=100":
 						if tc.checkRuns != "" {
 							return execx.Result{Stdout: tc.checkRuns}, nil
@@ -491,12 +505,20 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 						}
 						return execx.Result{Stdout: `{"statuses":[]}`}, nil
 					case strings.HasPrefix(args, "pr checks "):
+						watchReads++
+						if watchReads <= tc.watchOutages {
+							return execx.Result{Stderr: "HTTP 503: service unavailable"}, errors.New("exit status 1")
+						}
 						return execx.Result{Stdout: "CI\tpass\n"}, nil
 					case strings.HasPrefix(args, "pr view "):
 						head := api.head
 						fileEvidence := ""
 						rollup := `[{"name":"CI","conclusion":"SUCCESS"}]`
 						if strings.Contains(args, "statusCheckRollup") && strings.Contains(args, "changedFiles,files") {
+							if tc.evidenceOutage && evidenceOutages < 3 {
+								evidenceOutages++
+								return execx.Result{Stderr: "Post https://api.github.com/graphql: unexpected EOF"}, errors.New("exit status 1")
+							}
 							if !hasGitHubCredential(cmd) {
 								return execx.Result{}, errors.New("private draft file metadata requires authentication")
 							}
@@ -529,7 +551,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 							}
 							fileEvidence = fmt.Sprintf(`,"changedFiles":%d,"files":[%s]`, fileCount, strings.Join(files, ","))
 						}
-						return execx.Result{Stdout: fmt.Sprintf(`{"number":42,"url":%q,"state":"OPEN","mergeable":"MERGEABLE","baseRefName":"main","headRefName":%q,"headRefOid":%q,"isDraft":%t,"statusCheckRollup":%s%s}`, prURL, branch, head, draft, rollup, fileEvidence)}, nil
+						return execx.Result{Stdout: fmt.Sprintf(`{"id":"PR_id","number":42,"url":%q,"state":"OPEN","mergeable":"MERGEABLE","baseRefName":"main","headRefName":%q,"headRefOid":%q,"isDraft":%t,"statusCheckRollup":%s%s}`, prURL, branch, head, draft, rollup, fileEvidence)}, nil
 					case strings.Contains(args, "api repos/acme/repo/pulls?") && creates > 0:
 						return execx.Result{Stdout: fmt.Sprintf(`[{"html_url":%q,"title":"Issue","state":"open","head":{"ref":%q,"repo":{"full_name":"acme/repo"}},"base":{"ref":"main"}}]`, prURL, branch)}, nil
 					case strings.HasPrefix(args, "api "):
@@ -577,6 +599,17 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			}
 			if tc.wantExit != ExitSuccess && (!draft || ready != 0 || result.ReviewReceipt != nil || result.PRVerificationPassed) {
 				t.Fatalf("failed verification or review released the draft: %+v", result)
+			}
+			checksRetry := tc.watchOutages == 3 || tc.evidenceOutage
+			if checksRetry {
+				wantPosts := 0
+				if tc.evidenceOutage {
+					wantPosts = 1
+				}
+				if !errors.Is(result.Err, ErrChecksUnavailable) || result.PRURL != prURL || waits != 2 || api.posts != wantPosts || verifications != 0 {
+					t.Fatalf("check query exhaustion did not retain the draft: waits=%d reviews=%d verifier=%d result=%+v", waits, api.posts, verifications, result)
+				}
+				h.IssueChecksPRURL = result.PRURL
 			}
 			if tc.verifierBlocked {
 				if creates != 1 || api.posts != 1 || verifications != 1 || !strings.Contains(fmt.Sprint(result.Err), "The patch conflicts with the changed-file inventory") {
@@ -640,6 +673,8 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				if !tc.headMoved {
 					return
 				}
+			}
+			if tc.headMoved || tc.evidenceOutage {
 				// Advance the real branch before recovery. The earlier clean review
 				// must not be replayed against the new remote commit.
 				git(seed, "fetch", remote, branch)
@@ -653,7 +688,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				git(remote, "update-ref", "refs/pull/42/head", api.head)
 			}
 			wantReviews := 1
-			if tc.headMoved {
+			if tc.headMoved || tc.evidenceOutage {
 				wantReviews = 2
 			}
 			wantVerifications := 1
@@ -665,16 +700,21 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				cfg.Workflow.ResumePRURL = result.PRURL
 				metadataRetry = true
 			}
-			if tc.retry || metadataRetry || tc.headMoved {
+			if tc.retry || metadataRetry || tc.headMoved || checksRetry {
 				h.ResumeIssueWorkspace = true
 				h.IssueCheckoutComplete = true
 				h.IssuePublicationReady = accepted
 				h.IssuePRVerification = savedRequirement
-				cfg.GitHubIssue.Claim.Attempt++
+				if !checksRetry {
+					cfg.GitHubIssue.Claim.Attempt++
+				}
 				result = h.Run(t.Context(), cfg)
 				if tc.retry {
 					wantVerifications++
 				}
+			}
+			if tc.watchOutages == 1 && (watchReads != 2 || waits != 1) {
+				t.Fatalf("watch reads = %d, waits = %d, want 2 reads and 1 wait", watchReads, waits)
 			}
 			if metadataRetry && (!slices.Equal(labels, []string{"existing label", "tracking", "priority, high"}) ||
 				!slices.Equal(assignees, []string{"creator", "maintainer"})) {

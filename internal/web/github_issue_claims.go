@@ -580,7 +580,7 @@ func (s Server) latestIssueAttempt(ctx context.Context, repository string, numbe
 	prefix := "refs/tags/" + issueAttemptPrefix(number)
 	result, err := s.runIssueGH(ctx, execx.Command{Name: "gh", Args: []string{"api", "repos/" + repository + "/git/matching-refs/tags/" + issueAttemptPrefix(number)}})
 	if err != nil {
-		return issueAttemptMetadata{}, err
+		return issueAttemptMetadata{}, fmt.Errorf("read issue claim references: %w: %s", err, strings.TrimSpace(result.Stderr))
 	}
 	var refs []struct {
 		Ref    string
@@ -609,7 +609,7 @@ func (s Server) latestIssueAttempt(ctx context.Context, repository string, numbe
 	}
 	result, err = s.runIssueGH(ctx, execx.Command{Name: "gh", Args: []string{"api", "repos/" + repository + "/git/tags/" + sha}})
 	if err != nil {
-		return issueAttemptMetadata{}, err
+		return issueAttemptMetadata{}, fmt.Errorf("read issue claim tag: %w: %s", err, strings.TrimSpace(result.Stderr))
 	}
 	var tag struct{ Message string }
 	if err = json.Unmarshal([]byte(result.Stdout), &tag); err != nil {

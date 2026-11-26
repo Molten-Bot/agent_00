@@ -73,8 +73,7 @@ func (h Harness) addWorkflowPRMetadata(ctx context.Context, repo repoWorkspace, 
 	return nil
 }
 
-func (h Harness) loadWorkflowPRToResume(ctx context.Context, cfg config.Config) (prStateView, error) {
-	target := cfg.Workflow.ResumePRURL
+func (h Harness) loadWorkflowPRToResume(ctx context.Context, cfg config.Config, target string) (prStateView, error) {
 	repos := cfg.RepoList()
 	if len(repos) != 1 {
 		return prStateView{}, fmt.Errorf("PR metadata retry requires one repository")
@@ -84,7 +83,11 @@ func (h Harness) loadWorkflowPRToResume(ctx context.Context, cfg config.Config) 
 	if !ok || !strings.EqualFold(repository, ref.owner+"/"+ref.name) {
 		return prStateView{}, fmt.Errorf("PR metadata retry target must belong to the configured repository")
 	}
-	state, err := h.loadPullRequestState(ctx, "", target)
+	loadState := h.loadPullRequestState
+	if h.IssueChecksPRURL != "" {
+		loadState = h.loadCheckPRState
+	}
+	state, err := loadState(ctx, "", target)
 	if err != nil {
 		return prStateView{}, err
 	}

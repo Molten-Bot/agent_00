@@ -3922,7 +3922,7 @@ func TestRunTreatsChecksWatchTimeoutWithPendingChecksAsFailure(t *testing.T) {
 	}
 }
 
-func TestRunTreatsChecksWatchTimeoutSnapshotQueryFailureAsFailure(t *testing.T) {
+func TestRunTreatsChecksWatchTimeoutSnapshotQueryFailureAsUnavailable(t *testing.T) {
 	t.Parallel()
 
 	cfg := sampleConfig()
@@ -3934,7 +3934,7 @@ func TestRunTreatsChecksWatchTimeoutSnapshotQueryFailureAsFailure(t *testing.T) 
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
 	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/42"
-	checkSummary := "No check output was provided by gh."
+	snapshotErr := errors.New("checks snapshot unavailable")
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -3951,9 +3951,7 @@ func TestRunTreatsChecksWatchTimeoutSnapshotQueryFailureAsFailure(t *testing.T) 
 		{cmd: pushCommand(repoDir, branch)},
 		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stdout: prURL + "\n"}},
 		{cmd: prChecksCommand(repoDir, prURL), err: errPRChecksWatchTimeout},
-		{cmd: prChecksJSONCommand(repoDir, prURL, true), err: errors.New("checks snapshot unavailable")},
-		{cmd: codexCommand(targetDir, remediationPrompt(withAgentsPrompt(cfg.Prompt, agentsPath), prURL, checkSummary, 1, false))},
-		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "\n"}},
+		{cmd: prChecksJSONCommand(repoDir, prURL, true), err: snapshotErr},
 	}}
 
 	var logs []string
@@ -3972,8 +3970,8 @@ func TestRunTreatsChecksWatchTimeoutSnapshotQueryFailureAsFailure(t *testing.T) 
 	if res.ExitCode != ExitPR {
 		t.Fatalf("ExitCode = %d, want %d", res.ExitCode, ExitPR)
 	}
-	if !strings.Contains(res.Err.Error(), "no remediation changes") {
-		t.Fatalf("error = %v", res.Err)
+	if !errors.Is(res.Err, ErrChecksUnavailable) || !errors.Is(res.Err, snapshotErr) {
+		t.Fatalf("error = %v, want retryable snapshot error", res.Err)
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
@@ -3982,12 +3980,13 @@ func TestRunTreatsChecksWatchTimeoutSnapshotQueryFailureAsFailure(t *testing.T) 
 	if !strings.Contains(joinedLogs, "stage=checks status=warn action=watch_timeout_snapshot reason=query_failed") {
 		t.Fatalf("logs missing snapshot query failure:\n%s", joinedLogs)
 	}
-	if strings.Contains(joinedLogs, "stage=checks status=ok reason=watch_timeout") {
-		t.Fatalf("logs unexpectedly marked watch timeout ok:\n%s", joinedLogs)
+	if strings.Contains(joinedLogs, "stage=checks status=ok reason=watch_timeout") ||
+		strings.Contains(joinedLogs, "stage=checks status=failed") {
+		t.Fatalf("logs unexpectedly recorded a check result:\n%s", joinedLogs)
 	}
 }
 
-func TestRunTreatsAnyChecksWatchTimeoutSnapshotQueryFailureAsFailure(t *testing.T) {
+func TestRunTreatsAnyChecksWatchTimeoutSnapshotQueryFailureAsUnavailable(t *testing.T) {
 	t.Parallel()
 
 	cfg := sampleConfig()
@@ -4000,7 +3999,7 @@ func TestRunTreatsAnyChecksWatchTimeoutSnapshotQueryFailureAsFailure(t *testing.
 	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/42"
 	noRequired := "no required checks reported on the 'agent00-build-api' branch"
-	checkSummary := "No check output was provided by gh."
+	snapshotErr := errors.New("checks snapshot unavailable")
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -4019,9 +4018,7 @@ func TestRunTreatsAnyChecksWatchTimeoutSnapshotQueryFailureAsFailure(t *testing.
 		{cmd: prChecksCommand(repoDir, prURL), res: execx.Result{Stderr: noRequired + "\n"}, err: errors.New("checks unavailable")},
 		{cmd: requiredStatusChecksCommand(repoDir, "acme/repo", "main"), res: execx.Result{Stdout: `{"contexts":["test"],"checks":[]}`}},
 		{cmd: prChecksAnyCommand(repoDir, prURL), err: errPRChecksWatchTimeout},
-		{cmd: prChecksJSONCommand(repoDir, prURL, false), err: errors.New("checks snapshot unavailable")},
-		{cmd: codexCommand(targetDir, remediationPrompt(withAgentsPrompt(cfg.Prompt, agentsPath), prURL, checkSummary, 1, false))},
-		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "\n"}},
+		{cmd: prChecksJSONCommand(repoDir, prURL, false), err: snapshotErr},
 	}}
 
 	var logs []string
@@ -4040,8 +4037,8 @@ func TestRunTreatsAnyChecksWatchTimeoutSnapshotQueryFailureAsFailure(t *testing.
 	if res.ExitCode != ExitPR {
 		t.Fatalf("ExitCode = %d, want %d", res.ExitCode, ExitPR)
 	}
-	if !strings.Contains(res.Err.Error(), "no remediation changes") {
-		t.Fatalf("error = %v", res.Err)
+	if !errors.Is(res.Err, ErrChecksUnavailable) || !errors.Is(res.Err, snapshotErr) {
+		t.Fatalf("error = %v, want retryable snapshot error", res.Err)
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
@@ -4050,8 +4047,9 @@ func TestRunTreatsAnyChecksWatchTimeoutSnapshotQueryFailureAsFailure(t *testing.
 	if !strings.Contains(joinedLogs, "stage=checks status=warn action=watch_timeout_snapshot reason=query_failed") {
 		t.Fatalf("logs missing snapshot query failure:\n%s", joinedLogs)
 	}
-	if strings.Contains(joinedLogs, "stage=checks status=ok reason=watch_timeout") {
-		t.Fatalf("logs unexpectedly marked watch timeout ok:\n%s", joinedLogs)
+	if strings.Contains(joinedLogs, "stage=checks status=ok reason=watch_timeout") ||
+		strings.Contains(joinedLogs, "stage=checks status=failed") {
+		t.Fatalf("logs unexpectedly recorded a check result:\n%s", joinedLogs)
 	}
 }
 

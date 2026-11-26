@@ -133,10 +133,10 @@ func (c *Cooldown) Run(ctx context.Context, runner execx.Runner, cmd execx.Comma
 		// terminates gh. Keep both causes for diagnostics and retry decisions.
 		err = fmt.Errorf("%w: %w", contextErr, err)
 	}
-	message := strings.ToLower(result.Stderr)
-	if message == "" {
-		message = strings.ToLower(err.Error())
+	if status == 0 {
+		_, headers, status = splitResponse(result.Stderr)
 	}
+	message := strings.ToLower(result.Stderr + "\n" + err.Error())
 	return result, c.ClassifyFailure(status, headers, message, err)
 }
 
@@ -145,7 +145,8 @@ func (c *Cooldown) Run(ctx context.Context, runner execx.Runner, cmd execx.Comma
 func (c *Cooldown) ClassifyFailure(status int, headers http.Header, message string, cause error) error {
 	limited := status == 429 || (status == 403 && (headers.Get("Retry-After") != "" || headers.Get("X-RateLimit-Remaining") == "0")) ||
 		strings.Contains(message, "rate limit exceeded") || strings.Contains(message, "rate limit already exceeded") ||
-		strings.Contains(message, "secondary rate limit") || strings.Contains(message, "http 429")
+		strings.Contains(message, "secondary rate limit") || strings.Contains(message, "http 429") ||
+		strings.Contains(message, "429 too many requests")
 	if !limited {
 		return cause
 	}

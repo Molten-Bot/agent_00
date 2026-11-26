@@ -16,6 +16,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
+	"github.com/Molten-Bot/agent_00/internal/githubutil"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/web"
 )
@@ -132,6 +133,60 @@ func TestIssueExecutionClearsVerificationOnlyOnVerifiedCompletion(t *testing.T) 
 				t.Fatalf("saved outcome=%q verification=%q error=%v, want %q and %q", got.Outcome, got.PRVerification, err, tc.state, tc.want)
 			}
 		})
+	}
+}
+
+func TestIssueCheckWaitResumesSameClaimAndPreservesBackoff(t *testing.T) {
+	t.Parallel()
+	store, record := lifecycleRecord(t)
+	record.WorkspaceDir = filepath.Join(filepath.Dir(store.Root), "issue-workspaces", record.ID)
+	record.CheckoutComplete, record.PublicationReady, record.AgentAttempts = true, true, 3
+	record.PRVerification = "Verify CI and clean review on this draft."
+	record.Run.Workflow = &config.WorkflowRunConfig{ID: "issues", EventID: "activation", PolicyHash: "policy"}
+	if err := store.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	policy := localruntime.IssueRecoveryConfig{RetryDelaySeconds: 2, MaxBackoffSeconds: 5}.Defaults()
+	work, _, err := prepareIssueExecution(store, record.Run, policy)
+	if err != nil || work == nil {
+		t.Fatalf("prepare issue execution = %v, %v", work, err)
+	}
+	prURL := "https://github.com/acme/repo/pull/42"
+	reset := time.Now().UTC().Add(10 * time.Minute)
+	rate := &githubutil.RateLimitError{RetryAt: reset}
+	if err := work.finish(t.Context(), localruntime.IssueChecksPending, app.Result{PRURL: prURL, Err: errors.Join(app.ErrChecksUnavailable, rate)}, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Load(record.ID)
+	if err != nil || got.Outcome != localruntime.IssueChecksPending || got.UnlockPending || !got.LabelAdded ||
+		got.PRURL != prURL || !got.NextAttemptAt.Equal(reset) || got.AgentAttempts != record.AgentAttempts || got.PRVerification != record.PRVerification {
+		t.Fatalf("waiting issue receipt = %+v, %v", got, err)
+	}
+	if next, request, err := prepareIssueExecution(store, record.Run, policy); err != nil || next != nil || request != record.RequestID {
+		t.Fatalf("early retry = %v, %q, %v", next, request, err)
+	}
+	got.NextAttemptAt = time.Now().Add(-time.Second)
+	if err := store.Save(got); err != nil {
+		t.Fatal(err)
+	}
+	next, _, err := prepareIssueExecution(store, record.Run, policy)
+	if err != nil || next == nil {
+		t.Fatalf("resume issue execution = %v, %v", next, err)
+	}
+	h := app.Harness{}
+	ctx, done := next.configure(t.Context(), &h)
+	defer done()
+	if h.IssueChecksPRURL != prURL || !h.IssueCheckoutComplete || next.record.Run.Workflow.EventID != record.Run.Workflow.EventID ||
+		next.record.RequestID != record.RequestID || next.record.ID != record.ID {
+		t.Fatalf("retry lost issue, task, workflow or PR identity: %+v", next.record)
+	}
+	if err := next.finish(ctx, localruntime.IssueChecksPending, app.Result{Err: app.ErrChecksUnavailable}, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err = store.Load(record.ID)
+	if err != nil || got.NextAttemptAt.Sub(got.StoppedAt) != 5*time.Second || got.UnlockPending ||
+		got.AgentAttempts != record.AgentAttempts || got.PRURL != prURL {
+		t.Fatalf("persistent failure did not use bounded backoff: %+v, %v", got, err)
 	}
 }
 

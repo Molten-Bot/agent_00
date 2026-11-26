@@ -186,6 +186,9 @@ type State struct {
 // OutcomeReviewPending retains an activation while allowing fresh review work.
 const OutcomeReviewPending = "review_pending"
 
+// OutcomeChecksPending reserves the existing activation until its worker resumes.
+const OutcomeChecksPending = "check_verification_pending"
+
 type Outcome struct {
 	ReviewReceipt     *githubutil.ReviewReceipt `json:"reviewReceipt,omitempty"`
 	ReviewInterrupted bool                      `json:"reviewInterrupted,omitempty"`
@@ -735,6 +738,9 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		}
 		r.Status = "running"
 	}
+	if r.Status == OutcomeChecksPending {
+		return nil
+	}
 	if r.Status == "running" || r.hasFailedPendingReview() {
 		var o Outcome
 		if r.Outcome != nil {
@@ -742,13 +748,17 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		} else {
 			o = e.Status(r.RequestID)
 		}
-		if o.Status == "failed" || o.Status == "succeeded" || o.Status == OutcomeReviewPending {
+		if o.Status == "failed" || o.Status == "succeeded" || o.Status == OutcomeReviewPending || o.Status == OutcomeChecksPending {
 			r.Outcome = &o
 		}
 		if o.ReviewInterrupted {
 			r.PRURL = o.PRURL
 			r.Status = "failed"
 			r.Reason = "Pull request merged externally during review"
+		} else if o.Status == OutcomeChecksPending {
+			r.PRURL, r.Status, r.Reason = o.PRURL, OutcomeChecksPending, o.Reason
+			r.MergeHead = ""
+			return finish()
 		} else if o.Status == OutcomeReviewPending {
 			r.PRURL, r.Status, r.Reason = o.PRURL, awaitingReview, o.Reason
 			r.MergeHead = ""
@@ -1020,7 +1030,7 @@ func (e *Engine) Complete(id string, outcome Outcome) error {
 		if r == nil {
 			return ErrActivationNotFound
 		}
-		if (r.Status == awaitingReview || r.Status == "failed") && r.hasPendingReview() {
+		if r.Status == OutcomeChecksPending || ((r.Status == awaitingReview || r.Status == "failed") && r.hasPendingReview()) {
 			r.Status = "running"
 		}
 		r.Outcome = &outcome

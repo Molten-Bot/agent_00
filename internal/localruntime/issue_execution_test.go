@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 	"time"
 
@@ -99,8 +98,9 @@ func TestIssueStepWatchdogFollowsProgressNotTaskAge(t *testing.T) {
 	}
 	select {
 	case <-ctx.Done():
-		if !strings.Contains(context.Cause(ctx).Error(), "pr exceeded") {
-			t.Fatal(context.Cause(ctx))
+		var timeout *StepTimeoutError
+		if cause := context.Cause(ctx); !errors.As(cause, &timeout) || timeout.Step != "pr" || timeout.Timeout != 150*time.Millisecond {
+			t.Fatal(cause)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("stalled workflow did not time out")
