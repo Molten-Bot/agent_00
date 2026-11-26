@@ -11,7 +11,7 @@ function OwnerIcon({ repository }) {
   ) : <Icon size={18} aria-hidden="true" />;
 }
 
-export function RepositoryPicker({ repositories, value, onChange, autoSelect, loading, error, onRetry }) {
+export function RepositoryPicker({ repositories, value, onChange, onAutoSelect, loading, error, onRetry }) {
   const [selectedOwner, setSelectedOwner] = useState("");
   const groups = new Map();
   for (const repository of repositories) {
@@ -28,10 +28,10 @@ export function RepositoryPicker({ repositories, value, onChange, autoSelect, lo
   const choices = [...(groups.get(owner)?.repositories || [])].sort((a, b) => a.full_name.localeCompare(b.full_name));
   const defaultRepository = choices.length === 1 ? choices[0].full_name : "";
   useEffect(() => {
-    if (autoSelect && !loading && !error && defaultRepository && defaultRepository !== value) {
-      onChange(defaultRepository);
+    if (!loading && !error && defaultRepository && defaultRepository !== value) {
+      onAutoSelect?.(defaultRepository);
     }
-  }, [autoSelect, loading, error, defaultRepository, value, onChange]);
+  }, [loading, error, defaultRepository, value, onAutoSelect]);
 
   return <div className="wf-repository-picker">
     {loading && <p role="status" className="wf-muted">Loading repositories…</p>}
