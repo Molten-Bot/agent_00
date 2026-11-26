@@ -11,6 +11,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/app"
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
+	"github.com/Molten-Bot/agent_00/internal/workflow"
 	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
 
@@ -146,6 +147,10 @@ func (e *issueExecution) finish(ctx context.Context, state string, result app.Re
 		record.NoChangeEvidence = result.NoChangeEvidence
 		if state == "interrupted" && errors.Is(context.Cause(ctx), context.Canceled) {
 			record.Incident = "service_shutdown"
+		}
+		if state == "error" && (errors.Is(result.Err, app.ErrReviewPending) || errors.Is(result.Err, app.ErrReviewHeadChanged)) {
+			record.Outcome = workflow.OutcomeReviewPending
+			record.PRURL = result.PRURL
 		}
 		if errors.Is(result.Err, app.ErrWorkflowPRMetadata) {
 			record.PRURL = result.PRURL

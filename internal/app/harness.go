@@ -130,6 +130,13 @@ var authSetupGitMu sync.Mutex
 var errPRCreatePermissionDenied = errors.New("pull request create permission denied")
 var errTransientPRLookup = errors.New("transient pull request lookup failure")
 var errPRChecksWatchTimeout = errors.New("pull request checks watch timed out")
+
+// ErrReviewPending indicates that the draft must remain gated while GitHub catches up.
+var ErrReviewPending = errors.New("pull request review pending")
+
+// ErrReviewHeadChanged requires a new review on the current published head.
+var ErrReviewHeadChanged = errors.New("published branch differs from the local review head; a fresh review is required")
+
 var errFinalReviewFindingsRemain = errors.New("post-task review findings remain")
 
 // Result captures run output and status.
@@ -253,8 +260,8 @@ type Harness struct {
 	// AgentHeartbeatInterval controls running-status log cadence while an agent is executing.
 	// Zero or negative uses the default interval.
 	AgentHeartbeatInterval time.Duration
-	// PRChecksWatchTimeout bounds each gh pr checks --watch call when positive.
-	// Zero uses the default timeout; negative disables the timeout.
+	// PRChecksWatchTimeout bounds gh pr checks --watch and draft verification polling when positive.
+	// Zero uses the default timeout. Negative disables the watch timeout and skips draft polling.
 	PRChecksWatchTimeout time.Duration
 	// FinalReviewPasses limits fixes during the post-task review cycle.
 	// A required confirmation can run after the budget is exhausted.
@@ -1036,6 +1043,12 @@ func (h Harness) finalizePullRequestReview(
 		if err := h.verifyDraftHandoff(ctx, *repo, runtime, codexOpts, agentsPath); err != nil {
 			repo.ReviewReceipt = nil
 			return ExitPR, "pr_verification", err
+		}
+	}
+	if repo.ReviewReceipt.Pass > 1 {
+		if err := h.confirmPublishedReviewHead(ctx, *repo, repo.ReviewReceipt.Head); err != nil {
+			repo.ReviewReceipt = nil
+			return ExitPR, "review", err
 		}
 	}
 	if err := h.completeCleanReviewGate(ctx, cfg, repo, !cfg.Draft); err != nil {
@@ -3722,14 +3735,18 @@ func isProtectedDefaultBranchName(branch string) bool {
 }
 
 func remoteBranchHeadExists(output, branch string) bool {
+	return remoteBranchHead(output, branch) != ""
+}
+
+func remoteBranchHead(output, branch string) string {
 	wantRef := "refs/heads/" + normalizeBranchRef(branch)
 	for _, line := range strings.Split(output, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) == 2 && fields[1] == wantRef {
-			return true
+			return fields[0]
 		}
 	}
-	return false
+	return ""
 }
 
 func remoteDefaultBranchFromLSRemote(output string) string {
@@ -4547,18 +4564,26 @@ func (h Harness) runFinalReviewCycle(
 			Trigger:    "post-task-cycle",
 			Writeback:  "summary-comment",
 		}
-		reviewContext, err := h.buildReviewPromptContext(ctx, *repo, reviewCfg)
+		metadata, sanitized, err := h.loadReviewMetadata(ctx, *repo, reviewSelector(reviewCfg))
+		resumedWithLag := (repo.ResumeWorkflowPR || (repo.IssueClaimBranch && h.ResumeIssueWorkspace)) && metadata.HeadRefOID != headBefore
+		if err == nil && (pass > 1 || resumedWithLag) {
+			metadata, sanitized, err = h.reconcileReviewRepairHead(ctx, *repo, reviewCfg, headBefore, metadata, sanitized)
+		}
 		if err != nil {
 			return ExitPR, "review", err
 		}
-		if strings.EqualFold(strings.TrimSpace(reviewContext.Metadata.State), "merged") {
+		if strings.EqualFold(strings.TrimSpace(metadata.State), "merged") {
 			repo.ReviewStoppedOnMerge = true
 			repo.ReviewInterrupted = true
 			h.logFinalReviewStoppedForMergedPR(*repo, pass, passLabelTotal)
 			return ExitSuccess, "", nil
 		}
-		if reviewContext.Metadata.HeadRefOID == "" || reviewContext.Metadata.HeadRefOID != headBefore {
+		if metadata.HeadRefOID == "" || metadata.HeadRefOID != headBefore {
 			return ExitPR, "review", fmt.Errorf("local HEAD does not match the current pull request head")
+		}
+		reviewContext, err := h.prepareReviewEvidence(ctx, *repo, reviewCfg, metadata, sanitized)
+		if err != nil {
+			return ExitPR, "review", err
 		}
 		if err := h.priorReviewFindings(ctx, *repo, reviewContext); err != nil {
 			return ExitPR, "review", h.reviewPublicationError(ctx, repo, pass, passLabelTotal, err)
@@ -4636,6 +4661,11 @@ func (h Harness) runFinalReviewCycle(
 			return ExitCodex, "review", fmt.Errorf("post-task review pass %d: %w", pass, err)
 		}
 
+		if pass > 1 {
+			if err := h.confirmPublishedReviewHead(ctx, *repo, headBefore); err != nil {
+				return ExitPR, "review", err
+			}
+		}
 		commentBody := finalReviewCommentBody(outcome, pass, passLabelTotal)
 		inline := inlineReviewFindings(reviewContext.Diff, outcome.Findings)
 		receipt, err := h.publishSubmittedReview(ctx, cfg, *repo, reviewContext, filepath.Dir(repo.Dir), pass, h.FinalReviewPasses, outcome, commentBody, inline)
@@ -4766,6 +4796,53 @@ func (h Harness) runFinalReviewCycle(
 			repo.PRURL,
 		)
 	}
+}
+
+// Review a repair only once GitHub's PR metadata and the published branch agree.
+func (h Harness) reconcileReviewRepairHead(ctx context.Context, repo repoWorkspace, cfg config.ReviewConfig, expected string, metadata reviewPRMetadata, sanitized bool) (reviewPRMetadata, bool, error) {
+	const attempts = 6
+	sleep := h.Sleep
+	if sleep == nil {
+		sleep = sleepWithContext
+	}
+	for attempt := 1; ; attempt++ {
+		if !strings.EqualFold(metadata.State, "OPEN") {
+			if strings.EqualFold(metadata.State, "MERGED") {
+				return metadata, sanitized, nil
+			}
+			return reviewPRMetadata{}, false, fmt.Errorf("cannot review a repair on a pull request in state %q", metadata.State)
+		}
+		if err := h.confirmPublishedReviewHead(ctx, repo, expected); err != nil {
+			return reviewPRMetadata{}, false, err
+		}
+		if metadata.HeadRefOID == expected {
+			return metadata, sanitized, nil
+		}
+		if attempt == attempts {
+			return reviewPRMetadata{}, false, fmt.Errorf("%w: GitHub has not reported the published repair as the pull request head", ErrReviewPending)
+		}
+		h.logf("stage=review status=retry action=reconcile_repair_head attempt=%d", attempt)
+		if err := sleep(ctx, 2*time.Second); err != nil {
+			return reviewPRMetadata{}, false, err
+		}
+		var err error
+		metadata, sanitized, err = h.loadReviewMetadata(ctx, repo, reviewSelector(cfg))
+		if err != nil {
+			return reviewPRMetadata{}, false, err
+		}
+	}
+}
+
+func (h Harness) confirmPublishedReviewHead(ctx context.Context, repo repoWorkspace, expected string) error {
+	ref := "refs/heads/" + normalizeBranchRef(repo.Branch)
+	remote, err := h.runCommand(ctx, "review", gitCommand(repo.Dir, "ls-remote", "--heads", repoPushRemote(repo), ref))
+	if err != nil {
+		return fmt.Errorf("confirm published review head: %w", err)
+	}
+	if remoteBranchHead(remote.Stdout, repo.Branch) != expected {
+		return ErrReviewHeadChanged
+	}
+	return nil
 }
 
 func (h Harness) finalReviewPullRequestMerged(ctx context.Context, repo repoWorkspace, pass, total int) bool {
@@ -4931,18 +5008,26 @@ func (h Harness) buildReviewPromptContext(
 		return nil, fmt.Errorf("review selector is required")
 	}
 
+	metadata, sanitized, err := h.loadReviewMetadata(ctx, repo, selector)
+	if err != nil {
+		return nil, err
+	}
+	return h.prepareReviewEvidence(ctx, repo, reviewCfg, metadata, sanitized)
+}
+
+func (h Harness) loadReviewMetadata(ctx context.Context, repo repoWorkspace, selector string) (reviewPRMetadata, bool, error) {
 	metadataCmd := prReviewMetadataCommand(repo.Dir, selector)
 	metaRes, err := h.runCommand(ctx, "review", metadataCmd)
 	gitHubTokenEnvSanitized := false
 	if err != nil {
 		fallbackReason := githubCredentialFallbackReason(err)
 		if fallbackReason == "" {
-			return nil, fmt.Errorf("load pull request metadata: %w", err)
+			return reviewPRMetadata{}, false, fmt.Errorf("load pull request metadata: %w", err)
 		}
 		retryCmd := commandWithoutGitHubTokenEnv(metadataCmd)
 		retryRes, retryErr := h.runCommand(ctx, "review", retryCmd)
 		if retryErr != nil {
-			return nil, fmt.Errorf("load pull request metadata: %w (retry without GH_TOKEN/GITHUB_TOKEN: %v)", err, retryErr)
+			return reviewPRMetadata{}, false, fmt.Errorf("load pull request metadata: %w (retry without GH_TOKEN/GITHUB_TOKEN: %v)", err, retryErr)
 		}
 		h.logf("stage=review status=warn action=retry_without_env_github_token reason=%s repo=%s repo_dir=%s", fallbackReason, repo.URL, repo.RelDir)
 		metaRes = retryRes
@@ -4951,15 +5036,19 @@ func (h Harness) buildReviewPromptContext(
 
 	var metadata reviewPRMetadata
 	if err := json.Unmarshal([]byte(strings.TrimSpace(metaRes.Stdout)), &metadata); err != nil {
-		return nil, fmt.Errorf("decode pull request metadata: %w", err)
+		return reviewPRMetadata{}, false, fmt.Errorf("decode pull request metadata: %w", err)
 	}
 	if metadata.Number <= 0 {
-		return nil, fmt.Errorf("pull request metadata did not include a valid number")
+		return reviewPRMetadata{}, false, fmt.Errorf("pull request metadata did not include a valid number")
 	}
 	if strings.TrimSpace(metadata.BaseRefName) == "" {
-		return nil, fmt.Errorf("pull request metadata did not include a base branch")
+		return reviewPRMetadata{}, false, fmt.Errorf("pull request metadata did not include a base branch")
 	}
 
+	return metadata, gitHubTokenEnvSanitized, nil
+}
+
+func (h Harness) prepareReviewEvidence(ctx context.Context, repo repoWorkspace, reviewCfg config.ReviewConfig, metadata reviewPRMetadata, gitHubTokenEnvSanitized bool) (*preparedReviewContext, error) {
 	if _, err := h.runCommand(ctx, "review", fetchRemoteBranchCommand(repo.Dir, metadata.BaseRefName)); err != nil {
 		return nil, fmt.Errorf("fetch pull request base branch %q: %w", metadata.BaseRefName, err)
 	}
@@ -5015,7 +5104,7 @@ func (h Harness) buildReviewPromptContext(
 	b.WriteString(truncateForPrompt(stringsx.FirstNonEmpty(diffPatchRes.Stdout, "No diff patch output was returned by git diff."), maxReviewDiffPatchChars))
 	b.WriteString("\n```")
 	return &preparedReviewContext{
-		Selector:                selector,
+		Selector:                reviewSelector(reviewCfg),
 		Metadata:                metadata,
 		Prompt:                  strings.TrimSpace(b.String()),
 		Diff:                    diffPatchRes.Stdout,
@@ -9839,22 +9928,29 @@ func (h Harness) reconcileNoChecksWithRequiredStatusChecks(ctx context.Context, 
 		return false, "", nil
 	}
 
-	res, err := h.runCommand(ctx, "checks", requiredStatusChecksCommand(repo.Dir, targetRepo, baseBranch))
+	names, err := h.configuredRequiredStatusChecks(ctx, repo.Dir, targetRepo, baseBranch, false)
 	if err != nil {
-		if isRequiredStatusChecksNotConfigured(res, err) {
-			return true, fmt.Sprintf("No required status checks are configured for branch %s.", baseBranch), nil
-		}
 		return false, "", err
-	}
-
-	names, parseErr := parseRequiredStatusCheckNames(res.Stdout)
-	if parseErr != nil {
-		return false, "", parseErr
 	}
 	if len(names) == 0 {
 		return true, fmt.Sprintf("No required status checks are configured for branch %s.", baseBranch), nil
 	}
 	return false, strings.Join(names, "\n"), nil
+}
+
+func (h Harness) configuredRequiredStatusChecks(ctx context.Context, repoDir, targetRepo, baseBranch string, sanitized bool) ([]string, error) {
+	cmd := requiredStatusChecksCommand(repoDir, targetRepo, baseBranch)
+	if sanitized {
+		cmd = commandWithoutGitHubTokenEnv(cmd)
+	}
+	res, err := h.runCommand(ctx, "checks", cmd)
+	if isRequiredStatusChecksNotConfigured(res, err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return parseRequiredStatusCheckNames(res.Stdout)
 }
 
 func (h Harness) reconcileNoChecksWithWorkflowDispatch(ctx context.Context, repo repoWorkspace) (bool, string, error) {

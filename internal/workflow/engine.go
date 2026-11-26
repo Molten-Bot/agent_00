@@ -182,6 +182,10 @@ type State struct {
 	Baselines    map[string]bool           `json:"baselines"`
 	Runs         []Run                     `json:"runs"`
 }
+
+// OutcomeReviewPending retains an activation while allowing fresh review work.
+const OutcomeReviewPending = "review_pending"
+
 type Outcome struct {
 	ReviewReceipt     *githubutil.ReviewReceipt `json:"reviewReceipt,omitempty"`
 	ReviewInterrupted bool                      `json:"reviewInterrupted,omitempty"`
@@ -259,7 +263,7 @@ func (e *Engine) Runs() ([]Run, error) {
 func (e *Engine) save(s State) error {
 	active := make([]Run, 0, len(s.Runs))
 	for _, run := range s.Runs {
-		if !terminal(run.Status) {
+		if !terminal(run.Status) || run.hasFailedPendingReview() {
 			active = append(active, run)
 		}
 	}
@@ -399,7 +403,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	s, err := e.load()
 	var runs []Run
 	for _, r := range s.Runs {
-		if !e.submitting[r.ID] && !terminal(r.Status) {
+		if !e.submitting[r.ID] && (!terminal(r.Status) || r.hasFailedPendingReview()) {
 			runs = append(runs, r)
 		}
 	}
@@ -731,20 +735,26 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		}
 		r.Status = "running"
 	}
-	if r.Status == "running" {
+	if r.Status == "running" || r.hasFailedPendingReview() {
 		var o Outcome
 		if r.Outcome != nil {
 			o = *r.Outcome
 		} else {
 			o = e.Status(r.RequestID)
 		}
-		if o.Status == "failed" || o.Status == "succeeded" {
+		if o.Status == "failed" || o.Status == "succeeded" || o.Status == OutcomeReviewPending {
 			r.Outcome = &o
 		}
 		if o.ReviewInterrupted {
 			r.PRURL = o.PRURL
 			r.Status = "failed"
 			r.Reason = "Pull request merged externally during review"
+		} else if o.Status == OutcomeReviewPending {
+			r.PRURL, r.Status, r.Reason = o.PRURL, awaitingReview, o.Reason
+			r.MergeHead = ""
+			if r.Reason == "" {
+				r.Reason = "Waiting for review to resume"
+			}
 		} else if o.Status == "failed" {
 			r.Status = "failed"
 			r.Reason = o.Reason
@@ -765,6 +775,15 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 			}
 		}
 	}
+	if r.Status == awaitingReview && r.hasPendingReview() {
+		if !exists {
+			r.Status, r.Reason = "completed", "Originating workflow removed before review resumed"
+		} else if original.Status == awaitingReview {
+			return nil
+		}
+		return finish()
+	}
+
 	if r.Status == awaitingReview && r.Outcome != nil && r.Outcome.PendingReviewGate != nil {
 		if !exists {
 			r.Status, r.Reason = "completed", "Originating workflow removed before review writeback"
@@ -941,6 +960,15 @@ func terminal(status string) bool {
 	return contains([]string{"failed", "succeeded", "merged", "completed"}, status)
 }
 
+// A recorded pending review can supersede a failed activation status.
+func (r Run) hasFailedPendingReview() bool {
+	return r.Status == "failed" && r.hasPendingReview()
+}
+
+func (r Run) hasPendingReview() bool {
+	return r.Outcome != nil && r.Outcome.Status == OutcomeReviewPending && !r.Outcome.ReviewInterrupted
+}
+
 // PrepareIssueRecovery retains the original event and merge policy before an
 // explicit recovery can enqueue a worker. Older journals dropped the run when
 // admission failed, even though the issue store retained the event and policy.
@@ -967,10 +995,17 @@ func (e *Engine) PrepareIssueRecovery(workflowID, policy, eventID, retryOf strin
 				}
 				return errJournalUnchanged
 			}
+			now := e.now()
+			// Recovery can arrive before a tick consumes the recorded outcome.
+			if previous := s.run(retryOf); previous != nil && previous.hasPendingReview() && !e.submitting[previous.ID] &&
+				(previous.Status == awaitingReview || previous.Status == "running" || previous.Status == "failed") &&
+				previous.Workflow.ID == workflowID && previous.Workflow.ExecutionPolicyHash() == policy &&
+				CanonicalRepository(previous.Item.Repository) == CanonicalRepository(item.Repository) && previous.Item.Number == item.Number {
+				previous.Status, previous.Reason, previous.UpdatedAt = "completed", "Review resumed by issue recovery", now
+			}
 			if s.busy(item) {
 				return fmt.Errorf("issue already has an active workflow run")
 			}
-			now := e.now()
 			s.Runs = append(s.Runs, Run{ID: eventID, RetryOf: retryOf, Workflow: w, Item: item, Status: "pending_issue", Reason: "Waiting for issue claim recovery", StartedAt: &now, UpdatedAt: now})
 			return nil
 		})
@@ -984,6 +1019,9 @@ func (e *Engine) Complete(id string, outcome Outcome) error {
 		r := s.run(id)
 		if r == nil {
 			return ErrActivationNotFound
+		}
+		if (r.Status == awaitingReview || r.Status == "failed") && r.hasPendingReview() {
+			r.Status = "running"
 		}
 		r.Outcome = &outcome
 		return nil

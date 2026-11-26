@@ -50,6 +50,115 @@ func TestOlderWorkflowJournalDoesNotTreatCleanFlagAsReceipt(t *testing.T) {
 	}
 }
 
+func TestPendingReviewRetainsActivationWithoutUsingReviewEvidence(t *testing.T) {
+	t.Parallel()
+	w := definition("pending-review")
+	w.ReviewCycles, w.Merge.Enabled = 1, true
+	e, _, _ := testEngine(t, w)
+	state, err := e.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := Item{Repository: w.Repository, Kind: "issue", Number: 1}
+	prURL := "https://github.com/acme/repo/pull/12"
+	state.Runs = []Run{{ID: "pending", Workflow: w, Item: item, Status: "running", Outcome: &Outcome{
+		Status: OutcomeReviewPending, PRURL: prURL, Reason: "Waiting for the reviewed head",
+		ReviewReceipt: fixtureReviewReceipt(w, prURL),
+	}}}
+	if err := e.save(state); err != nil {
+		t.Fatal(err)
+	}
+	e.InspectPR = func(context.Context, string, string) (Item, error) {
+		t.Fatal("pending review reached merge eligibility")
+		return Item{}, nil
+	}
+	tick(t, e)
+	tick(t, e)
+	state, err = e.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := state.run("pending")
+	if run == nil || run.Status != awaitingReview || run.MergeHead != "" || state.busy(item) {
+		t.Fatalf("pending review did not retain a retryable activation: %+v", run)
+	}
+}
+
+func TestPendingReviewRecoversFailedActivation(t *testing.T) {
+	t.Parallel()
+	for _, recorded := range []bool{false, true} {
+		t.Run(fmt.Sprintf("outcome_already_recorded=%t", recorded), func(t *testing.T) {
+			w := definition("failed-review")
+			w.ReviewCycles, w.Merge.Enabled = 1, true
+			e, _, _ := testEngine(t, w)
+			state, err := e.load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			item := Item{Repository: w.Repository, Kind: "issue", Number: 1}
+			prURL := "https://github.com/acme/repo/pull/12"
+			outcome := Outcome{Status: OutcomeReviewPending, PRURL: prURL, Reason: "Waiting for the reviewed head",
+				ReviewReceipt: fixtureReviewReceipt(w, prURL)}
+			run := Run{ID: "failed", Workflow: w, Item: item, Status: "failed", MergeHead: "old-head"}
+			if recorded {
+				run.Outcome = &outcome
+			}
+			state.Runs = []Run{run}
+			if err := writeAtomic(e.StatePath, state); err != nil {
+				t.Fatal(err)
+			}
+			if !recorded {
+				if err := e.Complete(run.ID, outcome); err != nil {
+					t.Fatal(err)
+				}
+			}
+			e.InspectPR = func(context.Context, string, string) (Item, error) {
+				t.Fatal("pending review reached merge eligibility")
+				return Item{}, nil
+			}
+			tick(t, e)
+			tick(t, e)
+			state, err = e.load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := state.run(run.ID)
+			if got == nil || got.Status != awaitingReview || got.PRURL != prURL || got.Reason != outcome.Reason ||
+				got.MergeHead != "" || got.Outcome == nil || got.Outcome.Status != OutcomeReviewPending || state.busy(item) {
+				t.Fatalf("failed activation did not retain pending review: %+v", got)
+			}
+		})
+	}
+}
+
+func TestIssueRecoveryReplacesPendingReviewBeforeTick(t *testing.T) {
+	t.Parallel()
+	for _, status := range []string{"running", "failed", awaitingReview} {
+		t.Run(status, func(t *testing.T) {
+			w := definition("pending-review-retry")
+			e, _, _ := testEngine(t, w)
+			item := Item{Repository: w.Repository, Kind: "issue", Number: 1}
+			state, err := e.load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			state.Runs = []Run{{ID: "original", Status: status, Workflow: w, Item: item,
+				Outcome: &Outcome{Status: OutcomeReviewPending, PRURL: "https://github.com/acme/repo/pull/12"},
+			}}
+			if err := e.save(state); err != nil {
+				t.Fatal(err)
+			}
+			if err := e.PrepareIssueRecovery(w.ID, w.ExecutionPolicyHash(), "retry", "original", item); err != nil {
+				t.Fatal(err)
+			}
+			runs, err := e.Runs()
+			if err != nil || len(runs) != 1 || runs[0].ID != "retry" || runs[0].RetryOf != "original" || runs[0].Status != "pending_issue" {
+				t.Fatalf("recovery did not replace the pending activation: %+v, %v", runs, err)
+			}
+		})
+	}
+}
+
 func TestReviewOutcomeSurvivesWorkspaceCleanup(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

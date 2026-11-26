@@ -4,10 +4,52 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/url"
+	"strings"
 )
 
 type StatusCheck struct {
 	Conclusion, State, Name, Context string
+}
+
+// CommitCheckNames reads both kinds of checks independently of the PR rollup.
+func CommitCheckNames(ctx context.Context, gh ReviewCommand, repo, head string) ([]string, error) {
+	prefix := "repos/" + repo + "/commits/" + url.PathEscape(head)
+	var names []string
+	for _, source := range []struct{ endpoint, field string }{
+		{"/check-runs", "check_runs"},
+		{"/status", "statuses"},
+	} {
+		raw, err := gh(ctx, "api", "--paginate", prefix+source.endpoint+"?per_page=100")
+		if err != nil {
+			return nil, fmt.Errorf("load commit %s: %w", source.field, err)
+		}
+		dec := json.NewDecoder(strings.NewReader(raw))
+		for pageNumber := 0; ; pageNumber++ {
+			var page map[string]json.RawMessage
+			if err := dec.Decode(&page); err == io.EOF && pageNumber > 0 {
+				break
+			} else if err != nil {
+				return nil, fmt.Errorf("decode commit %s: %w", source.field, err)
+			}
+			var entries []StatusCheck
+			if err := json.Unmarshal(page[source.field], &entries); err != nil || entries == nil {
+				return nil, fmt.Errorf("missing or invalid commit %s inventory", source.field)
+			}
+			for _, entry := range entries {
+				name := entry.Name
+				if name == "" {
+					name = entry.Context
+				}
+				if name == "" {
+					return nil, fmt.Errorf("unnamed entry in commit %s inventory", source.field)
+				}
+				names = append(names, name)
+			}
+		}
+	}
+	return names, nil
 }
 
 // CIStatus keeps CI independent of the review check, which has its own gate.
