@@ -52,6 +52,7 @@ type ReviewReceipt struct {
 // PendingReviewGate allows the workflow coordinator to finish writeback after
 // the clean review receipt has been archived.
 type PendingReviewGate struct {
+	VerifyHeadChecks  bool `json:"verifyHeadChecks,omitempty"`
 	MarkReady         bool `json:"markReady,omitempty"`
 	Sanitize          bool `json:"sanitize,omitempty"`
 	ThreadsReconciled bool `json:"threadsReconciled,omitempty"`

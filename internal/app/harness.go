@@ -706,7 +706,14 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	}
 	agentResponseMode := cfg.ResponseMode
 	invocationMode := "implementation"
+	agentComplexity := cfg.Complexity
 	if reviewRun {
+		if cfg.Workflow != nil && cfg.Workflow.DefaultApplied {
+			agentComplexity = cfg.Workflow.ReviewAgent.Complexity
+			if instructions := strings.TrimSpace(cfg.Workflow.ReviewAgent.Instructions); instructions != "" {
+				codexBasePrompt += "\n\nReview instructions:\n" + instructions
+			}
+		}
 		codexBasePrompt, err = withReviewSkillPrompt(codexBasePrompt)
 		if err != nil {
 			return h.fail(ExitConfig, "review", err, runDir)
@@ -723,10 +730,10 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	} else {
 		codexOpts.Env = h.Signing.Environment(env)
 	}
-	if cfg.Complexity != "" {
+	if agentComplexity != "" {
 		// A resumed publication can finish without an agent. Resolve on the
 		// first invocation and reuse the choice for follow-up agents by default.
-		h.resolveTaskModel = h.lazyTaskModel(ctx, runtime, codexDir, codexOpts, cfg.Complexity, agentStage, "resolve_model")
+		h.resolveTaskModel = h.lazyTaskModel(ctx, runtime, codexDir, codexOpts, agentComplexity, agentStage, "resolve_model")
 	}
 	if !reviewRun {
 		codexBasePrompt = withBackpressurePrompt(codexBasePrompt, h.collectBackpressureRequirements(repos, cfg.TargetSubdir))

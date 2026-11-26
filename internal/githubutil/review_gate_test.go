@@ -19,6 +19,29 @@ func testReviewReceipt() ReviewReceipt {
 	}
 }
 
+func TestVerifyReadyHeadCIBindsChecksToReviewedHead(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, head, checks string
+		want               string
+	}{
+		{"passing", "aaa", `[{"name":"CI","conclusion":"SUCCESS"}]`, ""},
+		{"stale head", "bbb", `[{"name":"CI","conclusion":"SUCCESS"}]`, "head changed"},
+		{"queued", "aaa", `[{"name":"CI","state":"QUEUED"}]`, "waiting for successful checks"},
+		{"missing rollup", "aaa", "null", "waiting for successful checks"},
+		{"no configured checks", "aaa", "[]", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := VerifyReadyHeadCI(t.Context(), func(context.Context, ...string) (string, error) {
+				return fmt.Sprintf(`{"state":"OPEN","headRefOid":%q,"statusCheckRollup":%s}`, tc.head, tc.checks), nil
+			}, testReviewReceipt())
+			if (tc.want == "" && err != nil) || (tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want))) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestVerifyReviewGateBlocksUnresolvedOrIncompleteThreads(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

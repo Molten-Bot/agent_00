@@ -70,6 +70,7 @@ type TaskStatusTransition struct {
 }
 
 type Task struct {
+	ReviewPolicy      TaskReviewPolicy       `json:"review_policy,omitzero"`
 	Complexity        string                 `json:"complexity,omitempty"`
 	ResolvedModel     string                 `json:"resolved_model,omitempty"`
 	CLIVersion        string                 `json:"cli_version,omitempty"`
@@ -114,6 +115,12 @@ type Task struct {
 	CanRerun          bool                   `json:"can_rerun,omitempty"`
 	Controls          TaskControls           `json:"controls,omitempty"`
 	Logs              []TaskLog              `json:"logs"`
+}
+
+type TaskReviewPolicy struct {
+	Name       string `json:"name"`
+	FixPasses  int    `json:"fix_passes"`
+	Complexity string `json:"complexity"`
 }
 
 // PromptImage captures one prompt image attachment shown in task views.
@@ -320,6 +327,7 @@ type Broker struct {
 }
 
 type taskState struct {
+	ReviewPolicy      TaskReviewPolicy
 	ResolvedModel     string
 	CLIVersion        string
 	ModelResolution   string
@@ -593,6 +601,7 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 		status := normalizeTaskTerminalStatus(t.Status)
 		prTitle, prTitleURL := taskPRTitle(t)
 		snapshot.Tasks = append(snapshot.Tasks, Task{
+			ReviewPolicy:      t.ReviewPolicy,
 			RequestID:         t.RequestID,
 			Source:            t.Source,
 			Prompt:            t.Prompt,
@@ -740,6 +749,7 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 		Branch:            t.Branch,
 		GitHubIssueURL:    t.GitHubIssueURL,
 		PRURL:             t.PRURL,
+		ReviewPolicy:      t.ReviewPolicy,
 		Complexity:        b.runConfigFieldsLocked(t.RequestID).complexity,
 		ResolvedModel:     t.ResolvedModel,
 		CLIVersion:        t.CLIVersion,
@@ -944,6 +954,12 @@ func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON [
 	if t != nil && t.WorkflowTriggered != workflowTriggered {
 		t.WorkflowTriggered = workflowTriggered
 		changed = true
+	}
+	if t != nil {
+		if policy := b.runConfigFieldsLocked(requestID).reviewPolicy; t.ReviewPolicy != policy {
+			t.ReviewPolicy = policy
+			changed = true
+		}
 	}
 	if prURL != "" && t != nil && t.PRURL != prURL {
 		t.PRURL = prURL
@@ -1730,6 +1746,7 @@ func normalizedGroupName(name, fallback string) string {
 // runConfigFields holds the values ensureTaskLocked derives from a stored run
 // config payload. Every field is a pure function of the payload bytes.
 type runConfigFields struct {
+	reviewPolicy TaskReviewPolicy
 	complexity   string
 	raw          []byte
 	images       []PromptImage
@@ -1756,7 +1773,9 @@ func (b *Broker) runConfigFieldsLocked(requestID string) runConfigFields {
 		return cached
 	}
 	var requested struct {
-		Complexity string `json:"complexity"`
+		Complexity string                    `json:"complexity"`
+		Workflow   *config.WorkflowRunConfig `json:"workflow"`
+		Review     *config.ReviewConfig      `json:"review"`
 	}
 	_ = json.Unmarshal(raw, &requested)
 	fields := runConfigFields{
@@ -1772,6 +1791,12 @@ func (b *Broker) runConfigFieldsLocked(requestID string) runConfigFields {
 		prURL:        prURLFromRunConfigJSON(raw),
 		issueTitle:   issueTitleFromRunConfigJSON(raw),
 		autoMerge:    autoMergeFromRunConfigJSON(raw),
+	}
+	if w := requested.Workflow; w != nil {
+		fields.reviewPolicy = TaskReviewPolicy{Name: w.Name, FixPasses: w.ReviewCycles, Complexity: w.ReviewAgent.Complexity}
+		if requested.Review != nil || fields.workflow == "code-review" {
+			fields.reviewPolicy.FixPasses = 0
+		}
 	}
 	if b.runConfigFieldCache == nil {
 		b.runConfigFieldCache = map[string]runConfigFields{}
@@ -2165,6 +2190,9 @@ func (b *Broker) ensureTaskLocked(requestID string, now time.Time) *taskState {
 			existing.PromptIsUserInput = promptIsUserInputForTask(requestID, existing.Prompt)
 		}
 		fields := b.runConfigFieldsLocked(requestID)
+		if existing.ReviewPolicy == (TaskReviewPolicy{}) {
+			existing.ReviewPolicy = fields.reviewPolicy
+		}
 		if len(existing.Assets) == 0 {
 			existing.Assets = slices.Clone(fields.assets)
 		}
@@ -2201,6 +2229,7 @@ func (b *Broker) ensureTaskLocked(requestID string, now time.Time) *taskState {
 	prompt := b.taskPromptLocked(requestID)
 	fields := b.runConfigFieldsLocked(requestID)
 	t := &taskState{
+		ReviewPolicy:      fields.reviewPolicy,
 		RequestID:         requestID,
 		Source:            stringsx.FirstNonEmpty(fields.source, defaultTaskSourceForRequestID(requestID)),
 		Prompt:            prompt,
@@ -3322,12 +3351,13 @@ func workflowFromRunConfigJSON(runConfigJSON []byte) string {
 func workflowTriggeredFromRunConfigJSON(runConfigJSON []byte) bool {
 	var raw struct {
 		Workflow *struct {
+			ID         string `json:"id"`
 			EventID    string `json:"eventId"`
 			PolicyHash string `json:"policyHash"`
 		} `json:"workflow"`
 	}
 	return json.Unmarshal(runConfigJSON, &raw) == nil && raw.Workflow != nil &&
-		raw.Workflow.EventID != "" && raw.Workflow.PolicyHash != ""
+		raw.Workflow.ID != config.DefaultExecutionWorkflowID && raw.Workflow.EventID != "" && raw.Workflow.PolicyHash != ""
 }
 
 func agentHarnessFromRunConfigJSON(runConfigJSON []byte) string {

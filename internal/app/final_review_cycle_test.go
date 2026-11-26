@@ -492,6 +492,9 @@ func (r *finalFindingReviewCycleRunner) Run(_ context.Context, cmd execx.Command
 				r.repairLagReads--
 				head = "head-sha"
 			}
+			if slices.Contains(cmd.Args, "state,headRefOid,statusCheckRollup") {
+				return execx.Result{Stdout: fmt.Sprintf(`{"state":"OPEN","headRefOid":%q,"statusCheckRollup":[{"name":"CI","conclusion":"SUCCESS"}]}`, head)}, nil
+			}
 			return execx.Result{Stdout: fmt.Sprintf(`{"number":7,"title":"Change","url":"https://github.com/acme/repo/pull/7","state":"OPEN","mergeable":"MERGEABLE","baseRefName":"main","headRefName":"feature","headRefOid":%q,"author":{"login":"dev"}}`, head)}, nil
 		}
 		if len(cmd.Args) >= 2 && cmd.Args[0] == "pr" && cmd.Args[1] == "list" {
@@ -731,7 +734,7 @@ func TestAppManagedMergeAfterIndependentReviewAndRepair(t *testing.T) {
 		Merge:       workflow.Merge{Enabled: true, Method: "squash", DeleteBranch: true},
 	}
 	cfg := config.Config{Prompt: "Implement the requested behavior.", Workflow: &config.WorkflowRunConfig{
-		PolicyHash:  w.ExecutionPolicyHash(),
+		PolicyHash: w.ExecutionPolicyHash(), DefaultApplied: true, ReviewCycles: 10,
 		ReviewAgent: config.ReviewAgentConfig{Instructions: reviewInstructions, Complexity: "easy"},
 	}}
 	exitCode, stage, err := h.runFinalReviewCycle(
@@ -760,10 +763,7 @@ func TestAppManagedMergeAfterIndependentReviewAndRepair(t *testing.T) {
 	if receipt == nil || !receipt.Clean() || receipt.Policy.FixPasses != 10 || receipt.Policy.Complexity != "easy" {
 		t.Fatalf("final review did not capture the delivery policy: %+v", receipt)
 	}
-	if err := h.finishReviewGate(t.Context(), *repo, *receipt, false); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.markPullRequestReadyForReview(t.Context(), *repo); err != nil || runner.released != 1 {
+	if err := h.completeCleanReviewGate(t.Context(), cfg, repo, true); err != nil || runner.released != 1 {
 		t.Fatalf("ready calls = %d, error = %v", runner.released, err)
 	}
 
@@ -791,7 +791,8 @@ func TestAppManagedMergeAfterIndependentReviewAndRepair(t *testing.T) {
 		}
 	})}
 	store := &workflow.Store{Path: filepath.Join(t.TempDir(), "workflows.json")}
-	if err := store.Initialize(workflow.Document{Version: workflow.Version, Workflows: []workflow.Definition{w}}); err != nil {
+	defaultExecution := &workflow.ExecutionPolicy{ReviewCycles: 10, ReviewAgent: config.ReviewAgentConfig{Complexity: "easy"}}
+	if err := store.Initialize(workflow.Document{Version: workflow.Version, DefaultExecution: defaultExecution, Workflows: []workflow.Definition{w}}); err != nil {
 		t.Fatal(err)
 	}
 	engine := &workflow.Engine{

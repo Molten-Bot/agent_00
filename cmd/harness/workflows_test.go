@@ -16,6 +16,27 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/workflow"
 )
 
+func TestResumePublishedTaskKeepsDefaultPolicyAndOriginalPR(t *testing.T) {
+	t.Parallel()
+	policy := workflow.ExecutionPolicy{ReviewCycles: 10, ReviewAgent: config.ReviewAgentConfig{Complexity: "easy"}}
+	captured := policy.Snapshot()
+	cfg := config.Config{RepoURL: "https://github.com/acme/repo", Workflow: captured}
+	task := web.Task{Status: "error", PRURL: "https://github.com/acme/repo/pull/7"}
+	if !resumePublishedTask(task, &cfg) {
+		t.Fatal("published draft was not eligible for in-place review retry")
+	}
+	_, err := retryWorkflowTask(t.Context(), nil, task, cfg, func(run config.Config) (string, error) {
+		if run.Workflow.ResumePRURL != task.PRURL || run.Workflow.ReviewCycles != 10 ||
+			run.Workflow.ReviewAgent.Complexity != "easy" || run.Workflow.PolicyHash != captured.PolicyHash {
+			t.Fatalf("retry changed the published target or captured policy: %+v", run.Workflow)
+		}
+		return "existing-task", nil
+	})
+	if err != nil || captured.ResumePRURL != "" {
+		t.Fatalf("retry error = %v, original policy = %+v", err, captured)
+	}
+}
+
 func TestWorkflowRunConfigPolicies(t *testing.T) {
 	t.Parallel()
 	for _, kind := range []string{"implement", "review", "repair"} {

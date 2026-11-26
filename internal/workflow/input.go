@@ -10,10 +10,10 @@ import (
 )
 
 func IsInputEvent(event string) bool {
-	return event == "app.prompt" || event == "app.json" || event == "app.chat"
+	return event == "app.prompt" || event == "app.json" || event == "app.chat" || event == "app.library"
 }
 
-// InputWorkflow selects an explicit replacement for configuration defaults.
+// InputWorkflow selects repository constraints for an app submission.
 // Ambiguous overrides are rejected rather than dispatching duplicate tasks.
 func (e *Engine) InputWorkflow(repository, source string) (*Definition, error) {
 	if !IsInputEvent("app."+source) || !e.Enabled() {
@@ -45,13 +45,17 @@ func (e *Engine) DispatchInput(ctx context.Context, w Definition, submit func(Ru
 	if !IsInputEvent(w.Trigger.Event) || !e.StillEnabled(w) {
 		return "", fmt.Errorf("input workflow changed or is disabled")
 	}
-	return e.dispatch(w, Item{Repository: w.Repository, Kind: "app", Title: "In-app submission"}, "In-app submission", "", submit)
+	doc, err := e.Store.Load()
+	if err != nil {
+		return "", err
+	}
+	return e.dispatch(w, doc.DefaultExecution.compose(w), Item{Repository: w.Repository, Kind: "app", Title: "In-app submission"}, "In-app submission", "", submit)
 }
 
 // DispatchRetry gives an eligible retry its own operational receipt without
 // reading a completed activation. The saved fingerprint binds the retry to the
 // original workflow policy, and Tick still enforces current merge gates.
-func (e *Engine) DispatchRetry(ctx context.Context, id, policy, priorEvent string, item Item, submit func(Run) (string, error)) (string, error) {
+func (e *Engine) DispatchRetry(ctx context.Context, id, policy, priorEvent string, item Item, execution *ExecutionPolicy, submit func(Run) (string, error)) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -60,21 +64,21 @@ func (e *Engine) DispatchRetry(ctx context.Context, id, policy, priorEvent strin
 		return "", err
 	}
 	for _, w := range doc.Workflows {
-		if w.ID == id && w.Merge.Enabled && w.ExecutionPolicyHash() == policy && CanonicalRepository(w.Repository) == CanonicalRepository(item.Repository) {
+		if w.ID == id && (w.Merge.Enabled || execution != nil) && w.ExecutionPolicyHash() == policy && CanonicalRepository(w.Repository) == CanonicalRepository(item.Repository) {
 			w.Enabled = true
-			return e.dispatch(w, item, "Workflow retry", priorEvent, submit)
+			return e.dispatch(w, execution, item, "Workflow retry", priorEvent, submit)
 		}
 	}
 	return submit(Run{})
 }
 
-func (e *Engine) dispatch(w Definition, item Item, reason, retryOf string, submit func(Run) (string, error)) (string, error) {
+func (e *Engine) dispatch(w Definition, execution *ExecutionPolicy, item Item, reason, retryOf string, submit func(Run) (string, error)) (string, error) {
 	var random [16]byte
 	if _, err := rand.Read(random[:]); err != nil {
 		return "", err
 	}
 	now := e.now()
-	run := Run{ID: hex.EncodeToString(random[:]), Workflow: w, Item: item, Status: "dispatching", Reason: reason, StartedAt: &now, UpdatedAt: now, RetryOf: retryOf}
+	run := Run{ID: hex.EncodeToString(random[:]), Workflow: w, Execution: execution, Item: item, Status: "dispatching", Reason: reason, StartedAt: &now, UpdatedAt: now, RetryOf: retryOf}
 	// Keep restart reconciliation away from this receipt until submit returns.
 	defer func() {
 		e.mu.Lock()

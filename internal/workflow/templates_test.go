@@ -76,7 +76,7 @@ func TestBundledTemplatesMatchWorkflowContract(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err = e.Complete(runs[0].ID, Outcome{Status: "succeeded", PRURL: "https://github.com/example/repository/pull/2", ReviewReceipt: fixtureReviewReceipt(runs[0].Workflow, "https://github.com/example/repository/pull/2")}); err != nil {
+			if err = e.Complete(runs[0].ID, Outcome{Status: "succeeded", PRURL: "https://github.com/example/repository/pull/2", ReviewReceipt: fixtureRunReviewReceipt(runs[0], "https://github.com/example/repository/pull/2")}); err != nil {
 				t.Fatal(err)
 			}
 			e.InspectPR = func(context.Context, string, string) (Item, error) {

@@ -22,9 +22,8 @@ func (s Server) submitInputWorkflow(ctx context.Context, body []byte, source str
 		(err == nil && c.Workflow != nil && c.Workflow.ResumePRURL != "") {
 		return "", fmt.Errorf("the runtime selects the original pull request for workflow retries")
 	}
-	if (header.Workflow != nil && header.Workflow.PolicyHash != "") ||
-		(err == nil && c.Workflow != nil && c.Workflow.PolicyHash != "") {
-		return "", fmt.Errorf("workflow policy fingerprints are assigned by the runtime")
+	if header.Workflow != nil || (err == nil && c.Workflow != nil) {
+		return "", fmt.Errorf("workflow execution policy is assigned by the runtime; edit it in Workflow")
 	}
 	fallback := func() (string, error) {
 		if err != nil {
@@ -32,7 +31,7 @@ func (s Server) submitInputWorkflow(ctx context.Context, body []byte, source str
 		}
 		return s.submitParsedWithIssueClaim(ctx, body, c, submit)
 	}
-	if header.Workflow != nil || s.Workflows == nil || !workflow.IsInputEvent("app."+source) || !s.Workflows.Enabled() {
+	if s.Workflows == nil || !workflow.IsInputEvent("app."+source) || !s.Workflows.Enabled() || (err == nil && c.GitHubIssue != nil) {
 		return fallback()
 	}
 	if err != nil {
@@ -54,7 +53,7 @@ func (s Server) submitInputWorkflow(ctx context.Context, body []byte, source str
 	if len(c.Repos) != 1 {
 		return "", fmt.Errorf("a custom input workflow requires a single-repository submission; submit repositories separately")
 	}
-	if c.Review != nil || c.GitHubIssue != nil {
+	if c.Review != nil {
 		return "", fmt.Errorf("custom app workflows accept repository tasks; use the GitHub workflow for an issue or pull request")
 	}
 	w := *selected
@@ -70,16 +69,24 @@ func (s Server) submitInputWorkflow(ctx context.Context, body []byte, source str
 	if w.Task.Reviewers != nil {
 		c.Reviewers = append([]string{}, (*w.Task.Reviewers)...)
 	}
-	c.AssignCreator = &w.Task.AssignCreator
-	c.Complexity = w.Task.Complexity
-	c.Draft = w.Task.Draft
+	if w.Task.AssignCreator {
+		c.AssignCreator = &w.Task.AssignCreator
+	}
+	if w.Task.Complexity != "" {
+		c.Complexity = w.Task.Complexity
+	}
+	c.Draft = c.Draft || w.Task.Draft
+	if c.Draft && w.Merge.Enabled {
+		return "", fmt.Errorf("a draft submission conflicts with the matching workflow's automatic merge setting")
+	}
 	if err := c.Validate(); err != nil {
 		return "", err
 	}
 	return s.Workflows.DispatchInput(ctx, w, func(run workflow.Run) (string, error) {
+		policy := run.ReviewPolicy()
 		c.Workflow = &config.WorkflowRunConfig{
 			ID: w.ID, Name: w.Name, EventID: run.ID, Instructions: c.Prompt,
-			ReviewCycles: w.ReviewCycles, ReviewAgent: w.ReviewAgent,
+			DefaultApplied: true, ReviewCycles: policy.ReviewCycles, ReviewAgent: policy.ReviewAgent,
 			PRAssignee: w.Task.PRAssignee, PRLabels: w.Task.PRLabels, PolicyHash: w.ExecutionPolicyHash(),
 		}
 		data, err := json.Marshal(c)

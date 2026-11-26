@@ -77,10 +77,20 @@ func CIStatus(checks []StatusCheck) (passed, failed bool) {
 }
 
 func VerifyReviewedHeadCI(ctx context.Context, gh ReviewCommand, receipt ReviewReceipt) error {
+	return verifyReviewedHeadCI(ctx, gh, receipt, false)
+}
+
+// VerifyReadyHeadCI verifies reported checks on the reviewed head. Repositories
+// without checks can still mark a PR ready after the publication check stage.
+func VerifyReadyHeadCI(ctx context.Context, gh ReviewCommand, receipt ReviewReceipt) error {
+	return verifyReviewedHeadCI(ctx, gh, receipt, true)
+}
+
+func verifyReviewedHeadCI(ctx context.Context, gh ReviewCommand, receipt ReviewReceipt, allowEmpty bool) error {
 	raw, err := gh(ctx, "pr", "view", PullRequestSelector(receipt.PRURL), "--repo", PullRequestRepository(receipt.PRURL),
 		"--json", "state,headRefOid,statusCheckRollup")
 	if err != nil {
-		return fmt.Errorf("verify checks before merging: %w", err)
+		return fmt.Errorf("verify checks on the reviewed head: %w", err)
 	}
 	var pr struct {
 		State, HeadRefOID string
@@ -92,11 +102,24 @@ func VerifyReviewedHeadCI(ctx context.Context, gh ReviewCommand, receipt ReviewR
 	if pr.State == "MERGED" {
 		return ErrReviewInterrupted
 	}
-	if pr.State != "OPEN" || pr.HeadRefOID != receipt.Head {
-		return fmt.Errorf("pull request is closed or head changed before verifying checks")
+	if pr.State != "OPEN" {
+		return fmt.Errorf("pull request is closed before verifying checks")
+	}
+	if pr.HeadRefOID != receipt.Head {
+		return ErrReviewHeadChanged
+	}
+	if allowEmpty && pr.StatusCheckRollup != nil {
+		// The trusted review check is handled by the review gate itself.
+		reported := false
+		for _, check := range pr.StatusCheckRollup {
+			reported = reported || (check.Name != ReviewCheckName && check.Context != ReviewCheckName)
+		}
+		if !reported {
+			return nil
+		}
 	}
 	if passed, _ := CIStatus(pr.StatusCheckRollup); !passed {
-		return fmt.Errorf("waiting for successful checks before merging")
+		return fmt.Errorf("waiting for successful checks on the reviewed head")
 	}
 	return nil
 }

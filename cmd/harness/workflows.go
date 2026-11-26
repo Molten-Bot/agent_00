@@ -76,9 +76,10 @@ func workflowRunConfigWithLibrary(r workflow.Run, resolve workflowLibraryResolve
 	if w.Task.Reviewers != nil {
 		c.Reviewers = append([]string(nil), (*w.Task.Reviewers)...)
 	}
+	policy := r.ReviewPolicy()
 	c.Workflow = &config.WorkflowRunConfig{
 		Instructions: resolvedPrompt, ID: w.ID, EventID: r.ID, Name: w.Name,
-		ReviewCycles: w.ReviewCycles, ReviewAgent: w.ReviewAgent,
+		DefaultApplied: r.Execution != nil, ReviewCycles: policy.ReviewCycles, ReviewAgent: policy.ReviewAgent,
 		PRAssignee: w.Task.PRAssignee, PRLabels: w.Task.PRLabels, PolicyHash: w.ExecutionPolicyHash(),
 	}
 	if i.Kind == "issue" {
@@ -238,8 +239,23 @@ func parseWorkflowOrSelection(body []byte) (config.Config, error) {
 	return localruntime.ParseRunConfigJSON(body)
 }
 
+type reviewResumeTaskKey struct{}
+
+func resumePublishedTask(task web.Task, cfg *config.Config) bool {
+	if (task.Status != "error" && task.Status != "stopped") || cfg.GitHubIssue != nil || cfg.Review != nil ||
+		strings.EqualFold(strings.TrimSpace(cfg.LibraryTaskName), "code-review") ||
+		cfg.Workflow == nil || !cfg.Workflow.DefaultApplied || cfg.Workflow.RepairPRURL != "" ||
+		len(cfg.RepoList()) != 1 || task.PRURL == "" {
+		return false
+	}
+	policy := *cfg.Workflow
+	policy.ResumePRURL = task.PRURL
+	cfg.Workflow = &policy
+	return true
+}
+
 func retryWorkflowTask(ctx context.Context, engine *workflow.Engine, task web.Task, cfg config.Config, submit func(config.Config) (string, error)) (string, error) {
-	if cfg.Workflow == nil || cfg.Workflow.PolicyHash == "" {
+	if cfg.Workflow == nil || cfg.Workflow.PolicyHash == "" || cfg.Workflow.IsDefaultExecution() {
 		return submit(cfg)
 	}
 	switch task.Status {
@@ -247,7 +263,8 @@ func retryWorkflowTask(ctx context.Context, engine *workflow.Engine, task web.Ta
 	default:
 		return submit(cfg)
 	}
-	if cfg.GitHubIssue == nil && (cfg.Workflow.ResumePRURL != "" || app.IsWorkflowPRMetadataFailure(task.Error)) {
+	if cfg.GitHubIssue == nil && (app.IsWorkflowPRMetadataFailure(task.Error) ||
+		(!cfg.Workflow.DefaultApplied && cfg.Workflow.ResumePRURL != "")) {
 		target := cfg.Workflow.ResumePRURL
 		if target == "" {
 			target = task.PRURL
@@ -271,7 +288,10 @@ func retryWorkflowTask(ctx context.Context, engine *workflow.Engine, task web.Ta
 		item.Number, _ = strconv.Atoi(number)
 		item.URL = task.PRURL
 	}
-	return engine.DispatchRetry(ctx, cfg.Workflow.ID, cfg.Workflow.PolicyHash, cfg.Workflow.EventID, item, func(run workflow.Run) (string, error) {
+	return engine.DispatchRetry(ctx, cfg.Workflow.ID, cfg.Workflow.PolicyHash, cfg.Workflow.EventID, item, workflow.CapturedExecution(cfg.Workflow), func(run workflow.Run) (string, error) {
+		if run.ID == "" && cfg.Workflow.DefaultApplied && cfg.Workflow.ResumePRURL != "" && cfg.GitHubIssue == nil {
+			return "", fmt.Errorf("review retry requires the originating workflow and its captured policy")
+		}
 		if run.ID != "" {
 			policy := *cfg.Workflow
 			policy.EventID = run.ID

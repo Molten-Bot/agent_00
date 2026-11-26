@@ -193,19 +193,26 @@ func promptImageFromDataURI(value string) (PromptImage, error) {
 	}, nil
 }
 
-// WorkflowRunConfig records the policy used for an automated run.
+const DefaultExecutionWorkflowID = "default-execution"
+
+// WorkflowRunConfig records the captured execution policy.
 type WorkflowRunConfig struct {
-	Instructions string            `json:"instructions,omitempty"`
-	ID           string            `json:"id"`
-	EventID      string            `json:"eventId"`
-	Name         string            `json:"name"`
-	ReviewCycles int               `json:"reviewCycles"`
-	ReviewAgent  ReviewAgentConfig `json:"reviewAgent,omitzero"`
-	PolicyHash   string            `json:"policyHash,omitempty"`
-	RepairPRURL  string            `json:"repairPrUrl,omitempty"`
-	PRAssignee   string            `json:"prAssignee,omitempty"`
-	PRLabels     []string          `json:"prLabels,omitempty"`
-	ResumePRURL  string            `json:"resumePrUrl,omitempty"`
+	DefaultApplied bool              `json:"defaultApplied,omitempty"`
+	Instructions   string            `json:"instructions,omitempty"`
+	ID             string            `json:"id"`
+	EventID        string            `json:"eventId"`
+	Name           string            `json:"name"`
+	ReviewCycles   int               `json:"reviewCycles"`
+	ReviewAgent    ReviewAgentConfig `json:"reviewAgent,omitzero"`
+	PolicyHash     string            `json:"policyHash,omitempty"`
+	RepairPRURL    string            `json:"repairPrUrl,omitempty"`
+	PRAssignee     string            `json:"prAssignee,omitempty"`
+	PRLabels       []string          `json:"prLabels,omitempty"`
+	ResumePRURL    string            `json:"resumePrUrl,omitempty"`
+}
+
+func (w *WorkflowRunConfig) IsDefaultExecution() bool {
+	return w != nil && w.ID == DefaultExecutionWorkflowID
 }
 
 type ReviewAgentConfig struct {
@@ -433,6 +440,9 @@ func (c Config) Validate() error {
 		}
 		if err := c.Workflow.ReviewAgent.Validate(); err != nil {
 			return err
+		}
+		if c.Workflow.DefaultApplied && (c.Workflow.ReviewCycles == 0 || c.Workflow.ReviewAgent.Complexity == "") {
+			return fmt.Errorf("invalid default execution policy snapshot")
 		}
 	}
 	if strings.TrimSpace(c.Version) == "" {
