@@ -125,6 +125,50 @@ func TestIssueRecoveryWithEmptyClaimStoreLeavesGitHubIdle(t *testing.T) {
 	}
 }
 
+func TestIssueRecoveryDefersWithoutChangingEvidenceDuringMemoryPressure(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	reconcileOrAdmitTestIssue(t.Context(), s)
+	record := completeRecoveryRecord(t, s, "error", 1)
+	record.WorkspaceDir = t.TempDir()
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	evidence := filepath.Join(record.WorkspaceDir, "validation.log")
+	if err := os.WriteFile(evidence, []byte("saved evidence"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	receipt := filepath.Join(s.IssueClaims.Root, record.ID+".json")
+	before, err := os.ReadFile(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := f.calls
+	paused := true
+	s.MemoryPressure = func() bool { return paused }
+	for range 3 {
+		if err := s.ReconcileIssueWork(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	after, err := os.ReadFile(receipt)
+	if err != nil || string(after) != string(before) || f.calls != calls || f.deletes != 0 || len(f.submissions) != 1 {
+		t.Fatalf("paused reconciliation changed claim or contacted GitHub: read err=%v, calls=%d, deletes=%d, submissions=%d",
+			err, f.calls-calls, f.deletes, len(f.submissions))
+	}
+	paused = false
+	if err := s.ReconcileIssueWork(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	got := latestRecoveryRecord(t, s)
+	if got.UnlockPending || got.AgentAttempts != 1 || f.deletes != 1 {
+		t.Fatalf("recovery did not resume from saved claim: pending=%t, attempts=%d, deletes=%d", got.UnlockPending, got.AgentAttempts, f.deletes)
+	}
+	if data, err := os.ReadFile(evidence); err != nil || string(data) != "saved evidence" {
+		t.Fatalf("workspace evidence changed: %q, %v", data, err)
+	}
+}
+
 func TestExplicitIssueRecoveryUsesPersistentOwner(t *testing.T) {
 	t.Parallel()
 	for _, action := range []string{"start", "recover"} {

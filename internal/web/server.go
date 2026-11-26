@@ -114,6 +114,7 @@ type Server struct {
 	ResolveGitHubRepos      func(context.Context) ([]GitHubRepo, error)
 	GitHubCooldown          *githubutil.Cooldown
 	GitHubIssueRunner       execx.Runner
+	MemoryPressure          func() bool
 	assetTransport          http.RoundTripper
 	assetPlaybackKey        []byte
 	IssueClaims             *localruntime.IssueClaimStore

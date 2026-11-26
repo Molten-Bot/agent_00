@@ -25,10 +25,11 @@ var errSchedulerClosed = errors.New("task controller is closed")
 // AdaptiveScheduler controls task admission with rolling system load samples.
 // It never preempts running work; when pressure rises, newer tasks stay queued.
 type AdaptiveScheduler struct {
-	cfg       SchedulerConfig
-	logf      func(string, ...any)
-	sample    resourceSampler
-	diskSpace func(string) (string, uint64, uint64, error)
+	cfg            SchedulerConfig
+	logf           func(string, ...any)
+	sample         resourceSampler
+	diskSpace      func(string) (string, uint64, uint64, error)
+	memoryPressure func() bool
 
 	mu       sync.Mutex
 	waiters  []*taskWaiter
@@ -104,6 +105,11 @@ type defaultResourceSampler struct {
 // WithSchedulerDiskSpace supplies filesystem identity, available bytes, and total capacity.
 func WithSchedulerDiskSpace(sample func(string) (string, uint64, uint64, error)) func(*AdaptiveScheduler) {
 	return func(c *AdaptiveScheduler) { c.diskSpace = sample }
+}
+
+// WithSchedulerMemoryPressure holds normal admission during severe host memory pressure.
+func WithSchedulerMemoryPressure(check func() bool) func(*AdaptiveScheduler) {
+	return func(c *AdaptiveScheduler) { c.memoryPressure = check }
 }
 
 // NewAdaptiveScheduler returns a queue-aware, adaptive scheduler.
@@ -216,6 +222,8 @@ func (c *AdaptiveScheduler) acquire(ctx context.Context, requestID string, disk 
 		allowed = c.allowed
 		if waiter.diskBlocked {
 			queueReason = " reason=disk_space"
+		} else if c.memoryPressure != nil && c.memoryPressure() {
+			queueReason = " reason=host_memory_pressure"
 		}
 	}
 	c.mu.Unlock()
@@ -355,6 +363,9 @@ func (c *AdaptiveScheduler) tryGrantLocked(start int) {
 	if c.running >= c.allowed || start >= len(c.waiters) {
 		return
 	}
+	if c.memoryPressure != nil && c.memoryPressure() {
+		return
+	}
 	samples := make(map[string]diskSample)
 	preparedRoots := make(map[string]error)
 	if start == 0 {
@@ -439,6 +450,9 @@ func (c *AdaptiveScheduler) RecheckQueue() {
 func (c *AdaptiveScheduler) sampleResources(retryDisk bool) {
 	if c == nil || c.sample == nil {
 		return
+	}
+	if c.memoryPressure != nil {
+		c.memoryPressure()
 	}
 
 	sample, err := c.sample.Sample()
@@ -786,37 +800,11 @@ func readLinuxCPUStat(path string) (uint64, uint64, error) {
 }
 
 func readLinuxMemoryUsagePercent(path string) (float64, error) {
-	data, err := os.ReadFile(path)
+	memory, err := readLinuxMemory(path)
 	if err != nil {
-		return 0, fmt.Errorf("read %s: %w", path, err)
+		return 0, err
 	}
-	var (
-		totalKB uint64
-		availKB uint64
-	)
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			continue
-		}
-		switch strings.TrimSuffix(fields[0], ":") {
-		case "MemTotal":
-			totalKB, _ = strconv.ParseUint(fields[1], 10, 64)
-		case "MemAvailable":
-			availKB, _ = strconv.ParseUint(fields[1], 10, 64)
-		}
-	}
-	if totalKB == 0 {
-		return 0, fmt.Errorf("parse %s: missing MemTotal", path)
-	}
-	if availKB > totalKB {
-		availKB = totalKB
-	}
-	usedRatio := float64(totalKB-availKB) / float64(totalKB)
+	usedRatio := float64(memory.total-min(memory.available, memory.total)) / float64(memory.total)
 	return usedRatio * 100, nil
 }
 

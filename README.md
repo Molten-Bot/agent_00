@@ -269,6 +269,56 @@ select **Retry** in **Settings → GitHub Issues**. Preserve unresolved checkout
 and journals when freeing space. If the claim journal is also full, keep the
 daemon running while freeing space so it can save the blocked outcome.
 
+#### Memory pressure during Go or browser validation
+
+One worker can run several Go compiler, Node, and Chromium processes at once.
+On Linux, the daemon logs `host_memory_pressure` when it defers normal worker
+admission, workflow scans, issue reconciliation, and PR monitoring. On hosts
+with at least 2.25 GiB RAM, it pauses at or below 128 MiB available, or at or
+below 512 MiB available with at most 128 MiB free swap. It resumes on normal
+ticks once 768 MiB is available, even if swap stays full. Smaller hosts use
+thresholds scaled to installed memory. Running workers can finish and record
+their outcomes. Deferred polls leave claims, retry counts, and review evidence intact.
+A GitHub command logged with `context deadline exceeded` reached its command
+or scan deadline. Workflow commands have a 45-second deadline. Issue
+reconciliation and PR state lookups have 30-second deadlines. Correlate kill
+messages with deadlines and kernel OOM events before attributing them to memory
+pressure.
+
+Sample while validation is running and again after recovery. Use the workspace
+path from the `stage=workspace` log and the service environment for any
+preinstalled browser path.
+
+```sh
+grep -E '^(MemAvailable|SwapTotal|SwapFree|Shmem):' /proc/meminfo
+df -hT /tmp /dev/shm "$task_dir"
+du -sh "$task_dir"/.agent00-agent-io/cache/* "$task_dir"/.agent00-agent-io/tmp
+ps -eo pid,ppid,rss,comm --sort=-rss | head -20
+```
+
+`Shmem` includes tmpfs and other shared memory. Use `df` to see which mounts
+consume space and `du` to locate generated caches on each mount. Use PID and
+PPID to identify task descendants. Shared pages can appear in several RSS
+values, so summing RSS can overcount. Check the mount and size of
+`PLAYWRIGHT_BROWSERS_PATH` separately for a preinstalled browser. For a
+container with its own memory limit, also check `memory.current`,
+`memory.max`, and the OOM counters in `memory.events` in its cgroup v2 directory.
+
+Set both `HARNESS_WORKSPACE_RAM_BASE` and `HARNESS_WORKSPACE_DISK_BASE` to
+disk-backed locations for sustained Go and browser work. Verify with `df -T`
+because `/tmp` can be tmpfs too. Keep any downloads moved out of stopped
+workspaces on disk. The bundled image already supplies Go and Playwright
+Chromium. For native installs, provision the repository's Go version on the
+service PATH and set `PLAYWRIGHT_BROWSERS_PATH` to a disk-backed installation
+matching the Playwright package version. These trusted tools can be reused
+across tasks. Each task keeps its own writable Go build and module caches.
+Use `go test -p 2` or Playwright's `--workers=1` when validation needs less
+process concurrency on a small host.
+Keep active workspaces, unresolved checkouts, journals, and logs in place
+when releasing generated data from stopped workers.
+
+### Agent sandbox
+
 Codex sandboxing needs nested user/mount namespaces supported by the container
 runtime. The image uses Codex's bundled bubblewrap helper. The startup warning
 about missing `bwrap` on PATH does not itself mean command execution failed.

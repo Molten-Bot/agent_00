@@ -225,6 +225,9 @@ func (s Server) ReconcileIssueWork(ctx context.Context) error {
 	}
 	s.issueAutomation.admission.Lock()
 	defer s.issueAutomation.admission.Unlock()
+	if s.MemoryPressure != nil && s.MemoryPressure() {
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	records, listErr := s.IssueClaims.List()
@@ -250,6 +253,9 @@ func (s Server) ReconcileIssueWork(ctx context.Context) error {
 		return errors.Join(listErr, err)
 	}
 	for offset := range keys {
+		if s.MemoryPressure != nil && s.MemoryPressure() {
+			break
+		}
 		index := (cursor - 1 + offset) % len(keys)
 		record := latest[keys[index]]
 		if ctx.Err() != nil {
