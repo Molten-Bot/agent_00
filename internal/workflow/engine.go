@@ -263,7 +263,7 @@ func (e *Engine) Runs() ([]Run, error) {
 func (e *Engine) save(s State) error {
 	active := make([]Run, 0, len(s.Runs))
 	for _, run := range s.Runs {
-		if !terminal(run.Status) {
+		if !terminal(run.Status) || run.hasFailedPendingReview() {
 			active = append(active, run)
 		}
 	}
@@ -403,7 +403,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	s, err := e.load()
 	var runs []Run
 	for _, r := range s.Runs {
-		if !e.submitting[r.ID] && !terminal(r.Status) {
+		if !e.submitting[r.ID] && (!terminal(r.Status) || r.hasFailedPendingReview()) {
 			runs = append(runs, r)
 		}
 	}
@@ -735,7 +735,7 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		}
 		r.Status = "running"
 	}
-	if r.Status == "running" {
+	if r.Status == "running" || r.hasFailedPendingReview() {
 		var o Outcome
 		if r.Outcome != nil {
 			o = *r.Outcome
@@ -958,6 +958,12 @@ func (r Run) cleanReviewReceipt(outcome *Outcome) *githubutil.ReviewReceipt {
 
 func terminal(status string) bool {
 	return contains([]string{"failed", "succeeded", "merged", "completed"}, status)
+}
+
+// A recorded pending review can supersede a failed activation status.
+func (r Run) hasFailedPendingReview() bool {
+	return r.Status == "failed" && r.Outcome != nil &&
+		r.Outcome.Status == OutcomeReviewPending && !r.Outcome.ReviewInterrupted
 }
 
 // PrepareIssueRecovery retains the original event and merge policy before an
