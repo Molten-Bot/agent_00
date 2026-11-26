@@ -131,6 +131,34 @@ func TestPendingReviewRecoversFailedActivation(t *testing.T) {
 	}
 }
 
+func TestIssueRecoveryReplacesPendingReviewBeforeTick(t *testing.T) {
+	t.Parallel()
+	for _, status := range []string{"running", "failed", awaitingReview} {
+		t.Run(status, func(t *testing.T) {
+			w := definition("pending-review-retry")
+			e, _, _ := testEngine(t, w)
+			item := Item{Repository: w.Repository, Kind: "issue", Number: 1}
+			state, err := e.load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			state.Runs = []Run{{ID: "original", Status: status, Workflow: w, Item: item,
+				Outcome: &Outcome{Status: OutcomeReviewPending, PRURL: "https://github.com/acme/repo/pull/12"},
+			}}
+			if err := e.save(state); err != nil {
+				t.Fatal(err)
+			}
+			if err := e.PrepareIssueRecovery(w.ID, w.ExecutionPolicyHash(), "retry", "original", item); err != nil {
+				t.Fatal(err)
+			}
+			runs, err := e.Runs()
+			if err != nil || len(runs) != 1 || runs[0].ID != "retry" || runs[0].RetryOf != "original" || runs[0].Status != "pending_issue" {
+				t.Fatalf("recovery did not replace the pending activation: %+v, %v", runs, err)
+			}
+		})
+	}
+}
+
 func TestReviewOutcomeSurvivesWorkspaceCleanup(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
