@@ -12,10 +12,57 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/githubutil"
 	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
+
+func TestVerifyDraftHandoffWithSuppliedEvidence(t *testing.T) {
+	t.Parallel()
+	const prURL = "https://github.com/acme/repo/pull/42"
+	repo := repoWorkspace{
+		Dir: t.TempDir(), PRVerification: draftHandoffStandard,
+		ReviewedDiffPatch: "diff --git a/work.txt b/work.txt\n--- a/work.txt\n+++ b/work.txt\n@@ -1 +1 @@\n-base\n+implemented",
+	}
+	evidence := draftVerificationEvidence{
+		requiredChecks: []string{"CI"},
+		review: githubutil.SubmittedReview{
+			ID: 1, Head: "reviewed-head", URL: prURL + "#pullrequestreview-1", State: "COMMENTED",
+			Body: githubutil.CleanReviewVerdict + "\nNo material issues found.",
+		},
+	}
+	if err := json.Unmarshal([]byte(`{
+		"number":42,"url":"https://github.com/acme/repo/pull/42","state":"OPEN","isDraft":true,
+		"baseRefName":"main","headRefName":"agent00-issue-17","headRefOid":"reviewed-head",
+		"statusCheckRollup":[{"name":"CI","conclusion":"SUCCESS"}],
+		"changedFiles":1,"files":[{"path":"work.txt","additions":1,"deletions":1}]
+	}`), &evidence.metadata); err != nil {
+		t.Fatal(err)
+	}
+	h := New(issueBranchRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		if cmd.Name != "codex" {
+			return execx.Result{}, fmt.Errorf("unexpected offline verifier command %q", cmd.Name)
+		}
+		for _, expected := range []string{draftHandoffStandard, "reviewed-head", "No material issues found.", `"conclusion":"SUCCESS"`, `"path":"work.txt"`, "+implemented"} {
+			if !strings.Contains(cmd.Stdin, expected) {
+				t.Errorf("verification prompt missing %q", expected)
+			}
+		}
+		if !strings.Contains(strings.Join(cmd.Args, " "), "network={enabled=false}") || !slices.Contains(cmd.Args, `web_search="disabled"`) {
+			t.Error("verifier was given network access")
+		}
+		return execx.Result{Stdout: `{"status":"passed","evidence":"The supplied clean review and CI result match the draft head."}`}, nil
+	}))
+	opts := codexRunOptions{Env: []string{"CODEX_HOME=" + filepath.Join(t.TempDir(), "codex")}}
+	if err := h.verifyDraftHandoff(t.Context(), repo, agentruntime.Default(), opts, nil); !errors.Is(err, ErrReviewPending) {
+		t.Fatalf("missing evidence must keep review pending: %v", err)
+	}
+	if err := h.verifyDraftHandoff(t.Context(), repo, agentruntime.Default(), opts, &evidence); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestClaimedIssueDraftHandoff(t *testing.T) {
 	credentialKeys := []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", reviewCheckTokenEnv}
@@ -52,18 +99,19 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 		patchTruncated         bool
 		reviewStale            bool
 		reviewTruncated        bool
-		standard               bool
+		verifierBlocked        bool
 		queued                 bool
 		wantExit               int
 		wantEvidenceError      string
 	}{
 		{name: "verify private draft from supplied evidence", answer: localSuccess, change: true, requiredChecks: `{"contexts":["CI"]}`},
-		{name: "verify standard handoff without invoking a verifier", answer: "Draft handoff: " + draftHandoffStandard, change: true, standard: true},
+		{name: "verify standard handoff from supplied evidence", answer: "Draft handoff: " + draftHandoffStandard, change: true},
+		{name: "standard handoff requires a passing verdict", answer: "Draft handoff: " + draftHandoffStandard, change: true, verifierBlocked: true, wantExit: ExitPR},
 		{name: "missing current-head checks", answer: localSuccess, change: true, checkRollups: []string{"null", "null"}, wantExit: ExitPR,
 			wantEvidenceError: "missing or invalid check results for the current draft head"},
 		{name: "unnamed check result", answer: localSuccess, change: true, checkRollups: []string{`[{"conclusion":"SUCCESS"}]`, `[{"conclusion":"SUCCESS"}]`}, wantExit: ExitPR,
 			wantEvidenceError: "unnamed check result for the current draft head"},
-		{name: "verify standard handoff with no configured checks", answer: "Draft handoff: " + draftHandoffStandard, change: true, standard: true, checkRollups: []string{"[]"}},
+		{name: "verify standard handoff with no configured checks", answer: "Draft handoff: " + draftHandoffStandard, change: true, checkRollups: []string{"[]"}},
 		{name: "configured check has not reported", answer: localSuccess, change: true, checkRollups: []string{"[]", "[]"}, requiredChecks: `{"contexts":["CI"]}`, wantExit: ExitPR,
 			wantEvidenceError: "missing result for configured draft check"},
 		{name: "wait for pending checks on reviewed head", answer: localSuccess, change: true, pendingChecks: 1},
@@ -182,12 +230,12 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 					switch {
 					case args == "--help":
 						return execx.Result{}, nil
-					case strings.Contains(cmd.Stdin, "Verify any additional draft-handoff criteria"):
+					case strings.Contains(cmd.Stdin, "Verify the requested draft-handoff criteria"):
 						verifications++
 						if hasGitHubCredential(cmd) || !strings.Contains(args, "network={enabled=false}") || !slices.Contains(cmd.Args, `web_search="disabled"`) {
 							t.Error("private draft verifier must run without GitHub credentials or network access")
 						}
-						if !draft || api.review.Head != api.head || !strings.Contains(cmd.Stdin, requirement) ||
+						if !draft || api.review.Head != api.head || !strings.Contains(cmd.Stdin, wantRequirement) ||
 							!strings.Contains(cmd.Stdin, `"state":"OPEN","isDraft":true`) ||
 							!strings.Contains(cmd.Stdin, `"headRefOid":"`+api.head+`"`) ||
 							!strings.Contains(cmd.Stdin, `"commit_id":"`+api.head+`"`) ||
@@ -203,8 +251,14 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 						if tc.requiredChecks == `{"contexts":["CI"]}` && !strings.Contains(cmd.Stdin, "Configured CI check names:\n[\"CI\"]") {
 							t.Error("verification prompt omitted configured CI checks")
 						}
+						if slices.Equal(tc.checkRollups, []string{"[]"}) && !strings.Contains(cmd.Stdin, "Configured CI check names:\n[]") {
+							t.Error("verification prompt omitted the empty configured check list")
+						}
 						if tc.retry && verifications == 1 {
 							return execx.Result{Stdout: `{"status":"blocked","evidence":"The requested change needs additional evidence"}`}, nil
+						}
+						if tc.verifierBlocked {
+							return execx.Result{Stdout: `{"status":"blocked","evidence":"The patch conflicts with the changed-file inventory"}`}, nil
 						}
 						if tc.headMovedAfterEvidence && verifications == 1 {
 							api.head = "new-head"
@@ -300,7 +354,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 					case strings.HasPrefix(args, "pr ready "):
 						if !slices.Contains(cmd.Args, "--undo") {
 							ready++
-							if !draft || (!tc.standard && verifications == 0) {
+							if !draft || verifications == 0 {
 								t.Error("draft released before verification")
 							}
 						}
@@ -406,6 +460,12 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			if tc.wantExit != ExitSuccess && (!draft || ready != 0 || result.ReviewReceipt != nil || result.PRVerificationPassed) {
 				t.Fatalf("failed verification or review released the draft: %+v", result)
 			}
+			if tc.verifierBlocked {
+				if creates != 1 || api.posts != 1 || verifications != 1 || !strings.Contains(fmt.Sprint(result.Err), "The patch conflicts with the changed-file inventory") {
+					t.Fatalf("expected the offline verifier verdict to keep the draft gated: %+v", result)
+				}
+				return
+			}
 			if tc.wantEvidenceError != "" {
 				if creates != 1 || api.posts != 1 || verifications != 0 || !strings.Contains(fmt.Sprint(result.Err), tc.wantEvidenceError) {
 					t.Fatalf("expected evidence validation to block verification with an actionable reason: %+v", result)
@@ -467,9 +527,6 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				wantReviews = 2
 			}
 			wantVerifications := 1
-			if tc.standard {
-				wantVerifications = 0
-			}
 			if tc.metadataError != "" {
 				if result.PRURL != prURL || !errors.Is(result.Err, ErrWorkflowPRMetadata) ||
 					!strings.Contains(result.Err.Error(), tc.metadataError+` "`) || verifications != 0 {

@@ -1040,7 +1040,11 @@ func (h Harness) finalizePullRequestReview(
 		return ExitPR, "review", fmt.Errorf("waiting for a submitted clean review receipt")
 	}
 	if repo.PRVerification != "" {
-		if err := h.verifyDraftHandoff(ctx, *repo, runtime, codexOpts); err != nil {
+		evidence, err := h.waitForDraftVerificationEvidence(ctx, *repo)
+		if err == nil {
+			err = h.verifyDraftHandoff(ctx, *repo, runtime, codexOpts, evidence)
+		}
+		if err != nil {
 			repo.ReviewReceipt = nil
 			return ExitPR, "pr_verification", err
 		}
