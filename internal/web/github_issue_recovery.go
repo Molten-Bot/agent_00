@@ -467,7 +467,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		return nil
 	}
 	if app.IsWorkflowPRMetadataFailure(record.FailureDetail()) ||
-		(record.Outcome != "" && record.Outcome != "completed" && record.Outcome != workflow.OutcomeReviewPending &&
+		(record.PRVerification == "" && record.Outcome != "" && record.Outcome != "completed" && record.Outcome != workflow.OutcomeReviewPending &&
 			record.Run.Workflow != nil && record.Run.Workflow.ResumePRURL != "") {
 		record.State = "blocked"
 		record.Error = record.FailureDetail()
@@ -676,7 +676,7 @@ func issueRunFailures(record localruntime.IssueClaimRecord) int {
 		return failures
 	}
 	switch record.Outcome {
-	case "error", "completed", "no_changes":
+	case "error", "completed", "no_changes", workflow.OutcomeReviewPending:
 		failures++
 	case "interrupted":
 		if record.Incident != "service_shutdown" {

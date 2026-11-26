@@ -18,6 +18,7 @@ const CleanReviewVerdict = `<!-- agent00-review-verdict {"status":"clean","merge
 var (
 	ErrReviewCheckPending     = errors.New("waiting for the trusted review policy check on the current pull request head")
 	ErrReviewInterrupted      = errors.New("pull request merged externally before the review gate completed")
+	ErrReviewHeadChanged      = errors.New("pull request head changed; a fresh review is required")
 	ErrReviewThreadsPending   = errors.New("waiting for unresolved review threads")
 	ErrReviewChangesRequested = errors.New("waiting for requested changes")
 	ErrReviewApprovalPending  = errors.New("waiting for human approval on the current pull request head")
@@ -176,8 +177,11 @@ func verifySubmittedCleanReview(ctx context.Context, gh ReviewCommand, receipt R
 	if pr.State == "MERGED" {
 		return ErrReviewInterrupted
 	}
-	if pr.State != "OPEN" || pr.HeadRefOID != receipt.Head {
-		return fmt.Errorf("pull request is closed or head changed since review")
+	if pr.State != "OPEN" {
+		return fmt.Errorf("pull request is closed")
+	}
+	if pr.HeadRefOID != receipt.Head {
+		return ErrReviewHeadChanged
 	}
 	var decision string
 	if len(pr.ReviewDecision) == 0 || json.Unmarshal(pr.ReviewDecision, &decision) != nil {
@@ -307,8 +311,11 @@ func reviewThreads(ctx context.Context, gh ReviewCommand, prURL, head string, di
 		if pr.State == "MERGED" {
 			return nil, ErrReviewInterrupted
 		}
-		if pr.State != "OPEN" || pr.HeadRefOID != head {
-			return nil, fmt.Errorf("pull request is closed or head changed while reading review threads")
+		if pr.State != "OPEN" {
+			return nil, fmt.Errorf("pull request is closed while reading review threads")
+		}
+		if pr.HeadRefOID != head {
+			return nil, ErrReviewHeadChanged
 		}
 		if directCLI && (pr.IsMergeQueueEnabled == nil || *pr.IsMergeQueueEnabled) {
 			return nil, fmt.Errorf("cannot verify a direct merge without a merge queue")

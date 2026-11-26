@@ -135,7 +135,7 @@ var errPRChecksWatchTimeout = errors.New("pull request checks watch timed out")
 var ErrReviewPending = errors.New("pull request review pending")
 
 // ErrReviewHeadChanged requires a new review on the current published head.
-var ErrReviewHeadChanged = errors.New("published branch differs from the local review head; a fresh review is required")
+var ErrReviewHeadChanged = githubutil.ErrReviewHeadChanged
 
 var errFinalReviewFindingsRemain = errors.New("post-task review findings remain")
 
@@ -1040,18 +1040,25 @@ func (h Harness) finalizePullRequestReview(
 		return ExitPR, "review", fmt.Errorf("waiting for a submitted clean review receipt")
 	}
 	if repo.PRVerification != "" {
-		if err := h.verifyDraftHandoff(ctx, *repo, runtime, codexOpts, agentsPath); err != nil {
+		evidence, err := h.waitForDraftVerificationEvidence(ctx, *repo)
+		if err == nil {
+			err = h.verifyDraftHandoff(ctx, *repo, runtime, codexOpts, evidence)
+		}
+		if err != nil {
 			repo.ReviewReceipt = nil
 			return ExitPR, "pr_verification", err
 		}
 	}
-	if repo.ReviewReceipt.Pass > 1 {
+	if repo.ReviewReceipt.Pass > 1 || repo.PRVerification != "" {
 		if err := h.confirmPublishedReviewHead(ctx, *repo, repo.ReviewReceipt.Head); err != nil {
 			repo.ReviewReceipt = nil
 			return ExitPR, "review", err
 		}
 	}
 	if err := h.completeCleanReviewGate(ctx, cfg, repo, !cfg.Draft); err != nil {
+		if errors.Is(err, ErrReviewHeadChanged) {
+			repo.ReviewReceipt = nil
+		}
 		return ExitPR, "review", h.reviewPublicationError(ctx, repo, 0, h.FinalReviewPasses, err)
 	}
 	repo.PRVerificationPassed = repo.PRVerification != ""

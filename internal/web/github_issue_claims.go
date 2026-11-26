@@ -423,7 +423,9 @@ func (s Server) finishIssueAdmission(ctx context.Context, record localruntime.Is
 		// reconciliation. Eligibility was checked before acquiring ownership.
 		record.LabelAdded = true
 		record.State = "queued"
-		record.RequestID = "issue-" + record.ID
+		if record.RequestID == "" {
+			record.RequestID = "issue-" + record.ID
+		}
 		if err := s.IssueClaims.Save(record); err != nil {
 			return "", err
 		}
@@ -835,7 +837,8 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 	workflowRecovery := !automatic && remote.Claim.ID != "" &&
 		((savedRun == nil && observed.ID != "") || hasUnsubmittedWorkflowRecovery(previous))
 	metadataRetry := app.IsWorkflowPRMetadataFailure(previous.FailureDetail()) ||
-		(savedRun != nil && savedRun.Workflow != nil && savedRun.Workflow.ResumePRURL != "")
+		(savedRun != nil && savedRun.Workflow != nil && savedRun.Workflow.ResumePRURL != "" &&
+			previous.PRVerification == "" && previous.Outcome != workflow.OutcomeReviewPending)
 	ownedWorkflowRetry := !automatic && !workflowRecovery && (requestedRun == nil || metadataRetry) && previous.Version == 2 && previous.RequestID != "" &&
 		previous.InstanceID == remote.InstanceID && previous.InstanceID == s.instanceID() &&
 		previous.ID == remote.Claim.ID && savedRun != nil && savedRun.Workflow != nil
@@ -1088,6 +1091,9 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		record.CheckoutComplete = record.CheckoutComplete || previous.CheckoutComplete || previous.PublicationReady
 		record.PublicationReady = previous.PublicationReady
 		record.PRVerification = previous.PRVerification
+		if (record.PRVerification != "" || resumeReview) && previous.InstanceID == record.InstanceID {
+			record.RequestID = previous.RequestID
+		}
 		if automatic {
 			record.AgentAttempts = previous.AgentAttempts
 			record.PriorRunFailures = issueRunFailures(previous)

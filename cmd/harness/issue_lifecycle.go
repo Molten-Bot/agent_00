@@ -100,12 +100,22 @@ func persistIssueControl(store *localruntime.IssueClaimStore, requestID, control
 	if err != nil {
 		return err
 	}
-	for _, record := range records {
-		if record.Version == 2 && record.RequestID == requestID {
-			return store.Update(record.ID, func(r *localruntime.IssueClaimRecord) error { r.Control = control; return nil })
-		}
+	record := latestClaimForTask(records, requestID)
+	if record.Version == 2 {
+		return store.Update(record.ID, func(r *localruntime.IssueClaimRecord) error { r.Control = control; return nil })
 	}
 	return nil
+}
+
+func latestClaimForTask(records []localruntime.IssueClaimRecord, requestID string) localruntime.IssueClaimRecord {
+	var latest localruntime.IssueClaimRecord
+	for _, record := range records {
+		if record.RequestID == requestID && (latest.ID == "" ||
+			record.Run.GitHubIssue.Claim.Attempt > latest.Run.GitHubIssue.Claim.Attempt) {
+			latest = record
+		}
+	}
+	return latest
 }
 
 func (e *issueExecution) finish(ctx context.Context, state string, result app.Result, waitForStorage func() bool) error {

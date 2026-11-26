@@ -845,19 +845,38 @@ func testLabeledIssueDraftVerificationRetry(t *testing.T, outcome string) {
 	engine.Fetch = func(context.Context, string, workflow.ScanNeeds) ([]workflow.Item, error) {
 		return []workflow.Item{{Kind: "issue", Repository: w.Repository, Number: f.issue.Number, URL: f.issue.URL, Open: true, Labels: []string{"ready"}}}, nil
 	}
+	// Mirror daemon submission: use the request ID persisted in the claim intent.
+	submit := func(ctx context.Context, body []byte) (string, error) {
+		if _, err := f.submit(ctx, body); err != nil {
+			return "", err
+		}
+		record, err := s.IssueClaims.Load(f.submissions[len(f.submissions)-1].GitHubIssue.Claim.ID)
+		if err != nil {
+			return "", err
+		}
+		if record.Run.GitHubIssue.Claim.Attempt > 1 {
+			s.Broker.IngestLog(fmt.Sprintf("task status=queued request_id=%s action=resume_draft_verification", record.RequestID))
+		}
+		s.Broker.RecordTaskRunConfig(record.RequestID, body)
+		return record.RequestID, nil
+	}
+	s.SubmitLocalPrompt = submit
 	engine.Submit = func(ctx context.Context, r workflow.Run) (string, error) {
 		run := issueRunConfig(GitHubRepo{FullName: w.Repository, DefaultBranch: "main"}, f.issue, r.Workflow.Task.IssueLinkMode)
 		run.Workflow = &config.WorkflowRunConfig{ID: r.Workflow.ID, EventID: r.ID, PolicyHash: r.Workflow.ExecutionPolicyHash()}
-		return s.SubmitWorkflowRun(ctx, run, f.submit)
+		return s.SubmitWorkflowRun(ctx, run, submit)
 	}
 	engine.Status = func(string) workflow.Outcome { return workflow.Outcome{Status: "running"} }
 	if err := engine.Tick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	previous := completeRecoveryRecord(t, s, outcome, 1)
+	s.Broker.IngestLog(fmt.Sprintf("task status=error request_id=%s exit_code=1 err=verification-failed", previous.RequestID))
 	previous.PublicationReady, previous.CheckoutComplete = true, true
 	previous.PRVerification = "Verify CI and the submitted review on the published head."
 	const prURL = "https://github.com/acme/repo/pull/42"
+	// Successful routing previously saved a resume URL before verification.
+	previous.Run.Workflow.ResumePRURL = prURL
 	const verificationFailure = "pr_verification: draft verification did not pass"
 	status := "failed"
 	if outcome == workflow.OutcomeReviewPending {
@@ -895,10 +914,14 @@ func testLabeledIssueDraftVerificationRetry(t *testing.T, outcome string) {
 	}
 	current := latestRecoveryRecord(t, s)
 	prior, retry := previous.Run.Workflow, current.Run.Workflow
-	if len(f.submissions) != 2 || current.PRVerification != previous.PRVerification || !current.PublicationReady ||
+	if len(f.submissions) != 2 || current.RequestID != previous.RequestID || current.PRVerification != previous.PRVerification || !current.PublicationReady ||
 		current.Run.GitHubIssue.Claim.Branch != previous.Run.GitHubIssue.Claim.Branch || current.AgentAttempts != 1 ||
 		retry.ID != prior.ID || retry.PolicyHash != prior.PolicyHash || retry.EventID == prior.EventID {
 		t.Fatalf("verification retry lost its accepted work or workflow policy: %+v", current)
+	}
+	if tasks := s.Broker.TaskList(); len(tasks) != 1 || tasks[0].RequestID != previous.RequestID ||
+		tasks[0].Status != "pending" || tasks[0].Error != "" || tasks[0].ExitCode != 0 {
+		t.Fatalf("retry should queue the original task without its previous error: %+v", tasks)
 	}
 	runs, err := engine.Runs()
 	if err != nil || len(runs) != 1 || runs[0].ID != retry.EventID || runs[0].RetryOf != prior.EventID {

@@ -2241,6 +2241,16 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 	t.UpdatedAt = now
 	t.LiveAppURL = stringsx.FirstNonEmpty(taskLiveAppURLFromFields(fields), t.LiveAppURL)
 
+	// Recovery reuses the task ID. Clear the previous terminal state before
+	// the new workflow activation starts polling the queued task.
+	if strings.HasPrefix(line, "task status=queued ") && fields["action"] == "resume_draft_verification" {
+		t.Status = "pending"
+		t.Stage, t.StageStatus = "task", "queued"
+		t.Error, t.Warning, t.ReviewURL, t.ReviewGate = "", "", "", ""
+		t.ExitCode = 0
+		t.TerminalAt = time.Time{}
+	}
+
 	if strings.HasPrefix(line, "task status=start") {
 		t.Status = "running"
 		t.explicitTerminal = fields["explicit_terminal"] == "true"
