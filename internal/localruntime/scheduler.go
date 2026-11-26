@@ -30,6 +30,7 @@ type AdaptiveScheduler struct {
 	sample         resourceSampler
 	diskSpace      func(string) (string, uint64, uint64, error)
 	memoryPressure func() bool
+	memoryPaused   bool
 
 	mu       sync.Mutex
 	waiters  []*taskWaiter
@@ -364,7 +365,12 @@ func (c *AdaptiveScheduler) tryGrantLocked(start int) {
 		return
 	}
 	if c.memoryPressure != nil && c.memoryPressure() {
+		c.memoryPaused = true
 		return
+	}
+	if c.memoryPaused {
+		start = 0
+		c.memoryPaused = false
 	}
 	samples := make(map[string]diskSample)
 	preparedRoots := make(map[string]error)

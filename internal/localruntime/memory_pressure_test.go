@@ -88,3 +88,19 @@ func TestSchedulerHoldsSingleWorkerAdmissionDuringMemoryPressure(t *testing.T) {
 		t.Fatal("queued work did not resume")
 	}
 }
+
+func TestSchedulerRecoveryAdmitsOlderWaiterBeforeNewSubmission(t *testing.T) {
+	t.Parallel()
+	paused := true
+	scheduler := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 1}, t.Logf, WithSchedulerMemoryPressure(func() bool { return paused }))
+	older := &taskWaiter{notify: make(chan struct{}, 1)}
+	newer := &taskWaiter{notify: make(chan struct{}, 1)}
+	scheduler.waiters = []*taskWaiter{older}
+	scheduler.tryGrantLocked(0)
+	paused = false
+	scheduler.waiters = append(scheduler.waiters, newer)
+	scheduler.tryGrantLocked(1)
+	if !older.granted || newer.granted {
+		t.Fatalf("recovery violated queue order: older=%t newer=%t", older.granted, newer.granted)
+	}
+}

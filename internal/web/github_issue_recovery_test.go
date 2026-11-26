@@ -147,7 +147,7 @@ func TestIssueRecoveryDefersWithoutChangingEvidenceDuringMemoryPressure(t *testi
 	paused := true
 	s.MemoryPressure = func() bool { return paused }
 	for range 3 {
-		if err := s.ReconcileIssueWork(t.Context()); err != nil {
+		if err := s.ReconcileIssueWork(t.Context()); !errors.Is(err, errIssueRecoveryDeferred) {
 			t.Fatal(err)
 		}
 	}
