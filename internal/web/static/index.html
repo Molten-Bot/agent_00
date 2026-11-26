@@ -1340,14 +1340,13 @@
       }
 
       const state = isConcept ? taskConceptSiteState(task) : "done";
-      const label = isConcept ? "Concept URL" : "Original URL";
       const node = document.createElement(url ? "a" : "span");
       node.className = `task-site-url-action task-site-url-action-${isConcept ? "concept" : "original"}`;
       if (state) {
         node.dataset.state = state;
       }
-      node.title = url || "Concept URL being created.";
-      node.setAttribute("aria-label", url ? `${label}: ${url}` : "Concept URL being created.");
+      node.title = isConcept ? url || "Concept URL being created." : githubRepoPathFromValue(url);
+      node.setAttribute("aria-label", isConcept && url ? `Concept URL: ${url}` : node.title);
 
       if (url) {
         node.href = url;
@@ -12843,15 +12842,16 @@
 
           const repos = document.createElement("div");
           repos.className = "task-meta-sites";
-          const reposLabel = document.createElement("span");
-          reposLabel.className = "task-meta-sites-label";
-          reposLabel.textContent = formatTaskRepos(task);
-          repos.appendChild(reposLabel);
           const siteLinks = document.createElement("span");
           siteLinks.className = "task-site-url-actions";
           const originalSiteAction = renderTaskSiteURLAction(task, "original");
           if (originalSiteAction) {
             siteLinks.appendChild(originalSiteAction);
+          } else {
+            const reposLabel = document.createElement("span");
+            reposLabel.className = "task-meta-sites-label";
+            reposLabel.textContent = formatTaskRepos(task);
+            repos.appendChild(reposLabel);
           }
           const conceptSiteAction = renderTaskSiteURLAction(task, "concept");
           if (conceptSiteAction) {
