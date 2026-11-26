@@ -191,6 +191,7 @@ type repoWorkspace struct {
 	ReviewInterrupted           bool
 	ReviewReceipt               *githubutil.ReviewReceipt
 	ReviewedDiffPatch           string
+	ReviewedDiffPatchTruncated  bool
 	PendingReviewGate           *githubutil.PendingReviewGate
 	ReviewRequired              bool
 	ReviewSanitize              bool
@@ -4547,7 +4548,9 @@ func (h Harness) runFinalReviewCycle(
 			repo.ReviewReceipt = &receipt
 			repo.ReviewSanitize = reviewContext.GitHubTokenEnvSanitized
 			if repo.PRVerification != "" {
-				repo.ReviewedDiffPatch = truncateForPrompt(reviewContext.Diff, maxReviewDiffPatchChars)
+				patch := strings.TrimSpace(reviewContext.Diff)
+				repo.ReviewedDiffPatchTruncated = len(patch) > maxReviewDiffPatchChars
+				repo.ReviewedDiffPatch = truncateForPrompt(patch, maxReviewDiffPatchChars)
 			}
 			h.logReviewReceipt(receipt)
 		}

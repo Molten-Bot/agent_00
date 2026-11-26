@@ -27,22 +27,29 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 		localSuccess = "Implementation and local checks passed.\nDraft handoff: " + requirement
 	)
 	for _, tc := range []struct {
-		name, answer string
-		change       bool
-		agentErr     error
-		retry        bool
-		findings     bool
-		headMoved    bool
-		filesPartial bool
-		reviewStale  bool
-		queued       bool
-		wantExit     int
+		name, answer        string
+		change              bool
+		agentErr            error
+		retry               bool
+		findings            bool
+		headMoved           bool
+		filesPartial        bool
+		filesTruncated      bool
+		patchTruncated      bool
+		reviewStale         bool
+		queued              bool
+		wantExit            int
+		wantTruncationError string
 	}{
 		{name: "verify private draft from supplied evidence", answer: localSuccess, change: true},
 		{name: "retry verification on the same draft", answer: localSuccess, change: true, retry: true, wantExit: ExitPR},
 		{name: "findings keep the draft blocked", answer: localSuccess, change: true, findings: true, wantExit: ExitPR},
 		{name: "head changed before verification", answer: localSuccess, change: true, headMoved: true, wantExit: ExitPR},
 		{name: "changed-file evidence unavailable", answer: localSuccess, change: true, filesPartial: true, wantExit: ExitPR},
+		{name: "changed-file inventory exceeds evidence limit", answer: localSuccess, change: true, filesTruncated: true, wantExit: ExitPR,
+			wantTruncationError: "live changed-file inventory exceeds the draft verification evidence limit"},
+		{name: "reviewed patch exceeds evidence limit", answer: localSuccess, change: true, patchTruncated: true, wantExit: ExitPR,
+			wantTruncationError: "reviewed patch exceeds the draft verification evidence limit"},
 		{name: "submitted review stale", answer: localSuccess, change: true, reviewStale: true, wantExit: ExitPR},
 		{name: "blocked implementation", answer: "Failure: Implementation remains blocked.\nError details: Local tests failed.\nDraft handoff: " + requirement, change: true, wantExit: ExitCodex},
 		{name: "agent execution failed", answer: localSuccess, change: true, agentErr: errors.New("execution failed"), wantExit: ExitCodex},
@@ -150,7 +157,11 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 							t.Error("implementation prompt omitted draft handoff contract")
 						}
 						if tc.change {
-							if err := os.WriteFile(filepath.Join(cmd.Dir, "work.txt"), []byte("implemented\n"), 0o600); err != nil {
+							content := "implemented\n"
+							if tc.patchTruncated {
+								content += strings.Repeat("extra line\n", maxReviewDiffPatchChars/len("extra line\n")+1)
+							}
+							if err := os.WriteFile(filepath.Join(cmd.Dir, "work.txt"), []byte(content), 0o600); err != nil {
 								return execx.Result{}, err
 							}
 						}
@@ -203,11 +214,18 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 							if tc.headMoved {
 								head = "new-head"
 							}
-							fileCount := 1
-							if tc.filesPartial {
-								fileCount = 2
+							files := []string{`{"path":"work.txt","additions":1,"deletions":1}`}
+							if tc.filesTruncated {
+								for i := range 80 {
+									path := fmt.Sprintf("%sextra-%d.txt", strings.Repeat("directory/", 20), i)
+									files = append(files, fmt.Sprintf(`{"path":%q,"additions":1,"deletions":0}`, path))
+								}
 							}
-							fileEvidence = fmt.Sprintf(`,"changedFiles":%d,"files":[{"path":"work.txt","additions":1,"deletions":1}]`, fileCount)
+							fileCount := len(files)
+							if tc.filesPartial {
+								fileCount++
+							}
+							fileEvidence = fmt.Sprintf(`,"changedFiles":%d,"files":[%s]`, fileCount, strings.Join(files, ","))
 						}
 						return execx.Result{Stdout: fmt.Sprintf(`{"number":42,"url":%q,"state":"OPEN","mergeable":"MERGEABLE","baseRefName":"main","headRefName":%q,"headRefOid":%q,"isDraft":%t,"statusCheckRollup":[{"name":"CI","conclusion":"SUCCESS"}]%s}`, prURL, branch, head, draft, fileEvidence)}, nil
 					case strings.Contains(args, "api repos/acme/repo/pulls?") && creates > 0:
@@ -247,6 +265,12 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			}
 			if tc.wantExit != ExitSuccess && (!draft || ready != 0 || result.ReviewReceipt != nil || result.PRVerificationPassed) {
 				t.Fatalf("failed verification or review released the draft: %+v", result)
+			}
+			if tc.wantTruncationError != "" {
+				if creates != 1 || api.posts != 1 || verifications != 0 || !strings.Contains(fmt.Sprint(result.Err), tc.wantTruncationError) {
+					t.Fatalf("expected truncation to block verification with an actionable reason: %+v", result)
+				}
+				return
 			}
 			if tc.filesPartial {
 				if creates != 1 || api.posts != 1 || verifications != 1 || !strings.Contains(fmt.Sprint(result.Err), "Need the complete live changed-file inventory from GitHub.") {

@@ -123,10 +123,16 @@ func (h Harness) draftVerificationPrompt(ctx context.Context, repo repoWorkspace
 	filesEvidence := "Unavailable: GitHub did not return a changed-file inventory."
 	if state.Files != nil {
 		filesJSON, _ := json.Marshal(state.Files)
-		filesEvidence = truncateForPrompt(string(filesJSON), maxReviewDiffStatChars)
+		if len(filesJSON) > maxReviewDiffStatChars {
+			return "", fmt.Errorf("live changed-file inventory exceeds the draft verification evidence limit (%d bytes). Reduce the size of the pull request and retry verification", maxReviewDiffStatChars)
+		}
+		filesEvidence = string(filesJSON)
 		if state.ChangedFiles == nil || len(state.Files) != *state.ChangedFiles {
 			filesEvidence = "Incomplete: the returned file count could not be reconciled with the live changed-file count.\n" + filesEvidence
 		}
+	}
+	if repo.ReviewedDiffPatchTruncated {
+		return "", fmt.Errorf("reviewed patch exceeds the draft verification evidence limit (%d bytes). Reduce the size of the pull request and retry verification", maxReviewDiffPatchChars)
 	}
 	state.Files = nil
 	metadataJSON, _ := json.Marshal(state)
