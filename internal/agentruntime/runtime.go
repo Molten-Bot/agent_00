@@ -45,7 +45,8 @@ type RunOptions struct {
 	// invocation (for example Edit/Write/NotebookEdit for a read-only review
 	// pass). Only honored by harnesses that support a tool denylist; ignored
 	// otherwise.
-	DisallowedTools []string
+	DisallowedTools  []string
+	DisableWebSearch bool
 }
 
 // Runtime describes one executable LLM harness runtime.
@@ -498,6 +499,9 @@ func buildCodexCommand(targetDir, prompt string, opts RunOptions) (execx.Command
 	} else {
 		args = append([]string{"exec", "--sandbox", "workspace-write"}, args[1:]...)
 		args = append(args, workspaceSandboxArgs(opts)...)
+	}
+	if opts.DisableWebSearch {
+		args = append(args, "-c", `web_search="disabled"`)
 	}
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)

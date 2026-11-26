@@ -1033,7 +1033,7 @@ func (h Harness) finalizePullRequestReview(
 		return ExitPR, "review", fmt.Errorf("waiting for a submitted clean review receipt")
 	}
 	if repo.PRVerification != "" {
-		if err := h.verifyDraftHandoff(ctx, *repo, runtime, codexOpts, agentsPath); err != nil {
+		if err := h.verifyDraftHandoff(ctx, *repo, runtime, codexOpts); err != nil {
 			repo.ReviewReceipt = nil
 			return ExitPR, "pr_verification", err
 		}
@@ -9839,22 +9839,29 @@ func (h Harness) reconcileNoChecksWithRequiredStatusChecks(ctx context.Context, 
 		return false, "", nil
 	}
 
-	res, err := h.runCommand(ctx, "checks", requiredStatusChecksCommand(repo.Dir, targetRepo, baseBranch))
+	names, err := h.requiredStatusCheckNames(ctx, repo, targetRepo, baseBranch)
 	if err != nil {
-		if isRequiredStatusChecksNotConfigured(res, err) {
-			return true, fmt.Sprintf("No required status checks are configured for branch %s.", baseBranch), nil
-		}
 		return false, "", err
-	}
-
-	names, parseErr := parseRequiredStatusCheckNames(res.Stdout)
-	if parseErr != nil {
-		return false, "", parseErr
 	}
 	if len(names) == 0 {
 		return true, fmt.Sprintf("No required status checks are configured for branch %s.", baseBranch), nil
 	}
 	return false, strings.Join(names, "\n"), nil
+}
+
+func (h Harness) requiredStatusCheckNames(ctx context.Context, repo repoWorkspace, targetRepo, baseBranch string) ([]string, error) {
+	cmd := requiredStatusChecksCommand(repo.Dir, targetRepo, baseBranch)
+	if repo.ReviewSanitize {
+		cmd = commandWithoutGitHubTokenEnv(cmd)
+	}
+	res, err := h.runCommand(ctx, "checks", cmd)
+	if err != nil {
+		if isRequiredStatusChecksNotConfigured(res, err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return parseRequiredStatusCheckNames(res.Stdout)
 }
 
 func (h Harness) reconcileNoChecksWithWorkflowDispatch(ctx context.Context, repo repoWorkspace) (bool, string, error) {

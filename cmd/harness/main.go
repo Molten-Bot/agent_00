@@ -472,6 +472,9 @@ func runServer(args []string) int {
 		}
 		runCtx, cancelRun := context.WithCancelCause(ctx)
 		taskHandle := localTaskController.Register(requestID, cancelRun)
+		if issueWork != nil && issueWork.record.PRVerification != "" && runCfg.GitHubIssue.Claim.Attempt > 1 {
+			daemonLogger("task status=queued request_id=%s action=resume_draft_verification", requestID)
+		}
 		if runConfigJSON, ok := marshalRunConfigJSON(runCfg); ok {
 			monitorBroker.RecordTaskRunConfigWithSource(requestID, runConfigJSON, taskStartSourceForSubmission(source, runCfg))
 		}
@@ -488,7 +491,6 @@ func runServer(args []string) int {
 		) {
 			finalState := ""
 			defer cancelRun(nil)
-			defer localTaskController.Complete(requestID)
 			var issueResult app.Result
 			if repairWork != nil {
 				runCtx = context.WithValue(runCtx, issueRepairContextKey{}, repairWork)
@@ -522,6 +524,8 @@ func runServer(args []string) int {
 				}()
 				runCtx = context.WithValue(runCtx, issueExecutionContextKey{}, issueWork)
 			}
+			// Release task controls before the issue worker releases its lock for recovery.
+			defer localTaskController.Complete(requestID)
 			if dedupeKey != "" {
 				defer func() {
 					localSubmitDeduper.Done(dedupeKey, requestID, dedupeFinalStateForSubmission(source, finalState))
@@ -818,10 +822,8 @@ func runServer(args []string) int {
 			if err != nil {
 				return err
 			}
-			for _, record := range records {
-				if record.RequestID == requestID && record.State != "fulfilled" {
-					return fmt.Errorf("unresolved issue evidence is retained; resolve or explicitly abandon the issue before deleting it")
-				}
+			if record := latestClaimForTask(records, requestID); record.ID != "" && record.State != "fulfilled" {
+				return fmt.Errorf("unresolved issue evidence is retained; resolve or explicitly abandon the issue before deleting it")
 			}
 			var errs []error
 

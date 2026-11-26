@@ -27,23 +27,34 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 		localSuccess = "Implementation and local checks passed.\nDraft handoff: " + requirement
 	)
 	for _, tc := range []struct {
-		name, answer        string
-		change              bool
-		agentErr            error
-		retry               bool
-		metadataError       string
-		findings            bool
-		headMoved           bool
-		filesPartial        bool
-		filesTruncated      bool
-		patchTruncated      bool
-		reviewStale         bool
-		reviewTruncated     bool
-		queued              bool
-		wantExit            int
-		wantTruncationError string
+		name, answer      string
+		change            bool
+		agentErr          error
+		retry             bool
+		metadataError     string
+		findings          bool
+		headMoved         bool
+		filesPartial      bool
+		checkRollup       string
+		requiredCheck     bool
+		standard          bool
+		filesTruncated    bool
+		patchTruncated    bool
+		reviewStale       bool
+		reviewTruncated   bool
+		queued            bool
+		wantExit          int
+		wantEvidenceError string
 	}{
 		{name: "verify private draft from supplied evidence", answer: localSuccess, change: true},
+		{name: "verify standard handoff without invoking a verifier", answer: "Draft handoff: " + draftHandoffStandard, change: true, standard: true},
+		{name: "missing current-head checks", answer: localSuccess, change: true, checkRollup: "null", wantExit: ExitPR,
+			wantEvidenceError: "missing or invalid check results for the current draft head"},
+		{name: "pending current-head checks", answer: localSuccess, change: true, checkRollup: `[{"name":"CI","status":"IN_PROGRESS"}]`, wantExit: ExitPR,
+			wantEvidenceError: "checks on the current draft head have not all passed"},
+		{name: "verify standard handoff with no configured checks", answer: "Draft handoff: " + draftHandoffStandard, change: true, standard: true, checkRollup: "[]"},
+		{name: "configured check has not reported", answer: localSuccess, change: true, checkRollup: "[]", requiredCheck: true, wantExit: ExitPR,
+			wantEvidenceError: "missing result for configured draft check"},
 		{name: "retry verification on the same draft", answer: localSuccess, change: true, retry: true, wantExit: ExitPR},
 		{name: "retry rejected assignee on the same draft", answer: localSuccess, change: true, metadataError: "assignee", wantExit: ExitPR},
 		{name: "retry rejected label on the same draft", answer: localSuccess, change: true, metadataError: "label", wantExit: ExitPR},
@@ -51,12 +62,12 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 		{name: "head changed before verification", answer: localSuccess, change: true, headMoved: true, wantExit: ExitPR},
 		{name: "changed-file evidence unavailable", answer: localSuccess, change: true, filesPartial: true, wantExit: ExitPR},
 		{name: "changed-file inventory exceeds evidence limit", answer: localSuccess, change: true, filesTruncated: true, wantExit: ExitPR,
-			wantTruncationError: "live changed-file inventory exceeds the draft verification evidence limit"},
+			wantEvidenceError: "live changed-file inventory exceeds the draft verification evidence limit"},
 		{name: "reviewed patch exceeds evidence limit", answer: localSuccess, change: true, patchTruncated: true, wantExit: ExitPR,
-			wantTruncationError: "reviewed patch exceeds the draft verification evidence limit"},
+			wantEvidenceError: "reviewed patch exceeds the draft verification evidence limit"},
 		{name: "submitted review stale", answer: localSuccess, change: true, reviewStale: true, wantExit: ExitPR},
 		{name: "submitted review body exceeds evidence limit", answer: localSuccess, change: true, reviewTruncated: true, wantExit: ExitPR,
-			wantTruncationError: "submitted review 1 body exceeds the draft verification evidence limit"},
+			wantEvidenceError: "submitted review 1 body exceeds the draft verification evidence limit"},
 		{name: "blocked implementation", answer: "Failure: Implementation remains blocked.\nError details: Local tests failed.\nDraft handoff: " + requirement, change: true, wantExit: ExitCodex},
 		{name: "agent execution failed", answer: localSuccess, change: true, agentErr: errors.New("execution failed"), wantExit: ExitCodex},
 		{name: "missing handoff", answer: "Implementation and local checks passed.", change: true, wantExit: ExitCodex},
@@ -94,6 +105,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			base := git(seed, "rev-parse", "HEAD")
 
 			api := &reviewAPIStub{t: t}
+			wantRequirement, _ := draftHandoffRequest(tc.answer)
 			var implementations, creates, verifications, ready int
 			var draft, accepted, metadataRetry bool
 			savedResume := ""
@@ -131,12 +143,12 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 					switch {
 					case args == "--help":
 						return execx.Result{}, nil
-					case strings.Contains(cmd.Stdin, "Verify the remaining acceptance criteria against live GitHub evidence"):
+					case strings.Contains(cmd.Stdin, "Verify any additional draft-handoff criteria"):
 						verifications++
-						if hasGitHubCredential(cmd) || !strings.Contains(args, "network={enabled=false}") {
+						if hasGitHubCredential(cmd) || !strings.Contains(args, "network={enabled=false}") || !slices.Contains(cmd.Args, `web_search="disabled"`) {
 							t.Error("private draft verifier must run without GitHub credentials or network access")
 						}
-						if !draft || api.posts != 1 || !strings.Contains(cmd.Stdin, requirement) ||
+						if !draft || api.review.Head != api.head || !strings.Contains(cmd.Stdin, requirement) ||
 							!strings.Contains(cmd.Stdin, `"state":"OPEN","isDraft":true`) ||
 							!strings.Contains(cmd.Stdin, `"headRefOid":"`+api.head+`"`) ||
 							!strings.Contains(cmd.Stdin, `"commit_id":"`+api.head+`"`) ||
@@ -145,11 +157,9 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 							!strings.Contains(cmd.Stdin, "+implemented") {
 							t.Error("verification started before draft and submitted evidence were available")
 						}
-						if tc.filesPartial {
-							if !strings.Contains(cmd.Stdin, "Incomplete: the returned file count") {
-								t.Error("partial live file inventory was not marked incomplete")
-							}
-							return execx.Result{Stdout: `{"status":"blocked","evidence":"Need the complete live changed-file inventory from GitHub."}`}, nil
+						if !strings.Contains(cmd.Stdin, "Do not use gh, GitHub APIs, browser, web search") ||
+							strings.Contains(cmd.Stdin, "AGENTS.md") || strings.Contains(cmd.Stdin, "Backpressure") {
+							t.Error("verification prompt must be self-contained and forbid live lookups")
 						}
 						if tc.retry && verifications == 1 {
 							return execx.Result{Stdout: `{"status":"blocked","evidence":"Missing live evidence"}`}, nil
@@ -181,7 +191,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 					}
 				case "gh":
 					switch {
-					case args == "api repos/acme/repo/pulls/42/reviews/1":
+					case args == fmt.Sprintf("api repos/acme/repo/pulls/42/reviews/%d", api.review.ID):
 						if !hasGitHubCredential(cmd) {
 							return execx.Result{}, errors.New("private draft review requires authentication")
 						}
@@ -199,7 +209,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 						return execx.Result{}, nil
 					case strings.HasPrefix(args, "pr create "):
 						creates++
-						if !slices.Contains(cmd.Args, "--draft") || !accepted || savedRequirement != requirement {
+						if !slices.Contains(cmd.Args, "--draft") || !accepted || savedRequirement != wantRequirement {
 							t.Error("harness published before accepting the verification checkpoint as a draft")
 						}
 						draft = slices.Contains(cmd.Args, "--draft")
@@ -242,7 +252,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 					case strings.HasPrefix(args, "pr ready "):
 						if !slices.Contains(cmd.Args, "--undo") {
 							ready++
-							if !draft || verifications == 0 {
+							if !draft || (!tc.standard && verifications == 0) {
 								t.Error("draft released before verification")
 							}
 						}
@@ -253,11 +263,15 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 					case strings.HasPrefix(args, "pr view "):
 						head := api.head
 						fileEvidence := ""
+						checks := `[{"name":"CI","conclusion":"SUCCESS"}]`
 						if strings.Contains(args, "statusCheckRollup") && strings.Contains(args, "changedFiles,files") {
 							if !hasGitHubCredential(cmd) {
 								return execx.Result{}, errors.New("private draft file metadata requires authentication")
 							}
-							if tc.headMoved {
+							if tc.checkRollup != "" {
+								checks = tc.checkRollup
+							}
+							if tc.headMoved && api.posts == 1 {
 								head = "new-head"
 							}
 							files := []string{`{"path":"work.txt","additions":1,"deletions":1}`}
@@ -273,9 +287,14 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 							}
 							fileEvidence = fmt.Sprintf(`,"changedFiles":%d,"files":[%s]`, fileCount, strings.Join(files, ","))
 						}
-						return execx.Result{Stdout: fmt.Sprintf(`{"number":42,"url":%q,"state":"OPEN","mergeable":"MERGEABLE","baseRefName":"main","headRefName":%q,"headRefOid":%q,"isDraft":%t,"statusCheckRollup":[{"name":"CI","conclusion":"SUCCESS"}]%s}`, prURL, branch, head, draft, fileEvidence)}, nil
+						return execx.Result{Stdout: fmt.Sprintf(`{"number":42,"url":%q,"state":"OPEN","mergeable":"MERGEABLE","baseRefName":"main","headRefName":%q,"headRefOid":%q,"isDraft":%t,"statusCheckRollup":%s%s}`, prURL, branch, head, draft, checks, fileEvidence)}, nil
 					case strings.Contains(args, "api repos/acme/repo/pulls?") && creates > 0:
 						return execx.Result{Stdout: fmt.Sprintf(`[{"html_url":%q,"title":"Issue","state":"open","head":{"ref":%q,"repo":{"full_name":"acme/repo"}},"base":{"ref":"main"}}]`, prURL, branch)}, nil
+					case args == "api repos/acme/repo/branches/main/protection/required_status_checks":
+						if tc.requiredCheck {
+							return execx.Result{Stdout: `{"contexts":["CI"]}`}, nil
+						}
+						return execx.Result{Stdout: `{"contexts":[]}`}, nil
 					case strings.HasPrefix(args, "api "):
 						return execx.Result{Stdout: "[]"}, nil
 					}
@@ -316,14 +335,14 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			if tc.wantExit != ExitSuccess && (!draft || ready != 0 || result.ReviewReceipt != nil || result.PRVerificationPassed) {
 				t.Fatalf("failed verification or review released the draft: %+v", result)
 			}
-			if tc.wantTruncationError != "" {
-				if creates != 1 || api.posts != 1 || verifications != 0 || !strings.Contains(fmt.Sprint(result.Err), tc.wantTruncationError) {
-					t.Fatalf("expected truncation to block verification with an actionable reason: %+v", result)
+			if tc.wantEvidenceError != "" {
+				if creates != 1 || api.posts != 1 || verifications != 0 || !strings.Contains(fmt.Sprint(result.Err), tc.wantEvidenceError) {
+					t.Fatalf("expected evidence validation to block verification with an actionable reason: %+v", result)
 				}
 				return
 			}
 			if tc.filesPartial {
-				if creates != 1 || api.posts != 1 || verifications != 1 || !strings.Contains(fmt.Sprint(result.Err), "Need the complete live changed-file inventory from GitHub.") {
+				if creates != 1 || api.posts != 1 || verifications != 0 || !strings.Contains(fmt.Sprint(result.Err), "missing or incomplete changed-file inventory for the current draft head") {
 					t.Fatalf("expected one blocked verification with an actionable reason: %+v", result)
 				}
 				return
@@ -332,12 +351,35 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				if creates != 1 || api.posts != 1 || verifications != 0 {
 					t.Fatal("expected one submitted review and verification blocked")
 				}
+				if tc.headMoved && !strings.Contains(fmt.Sprint(result.Err), "draft head changed after review") {
+					t.Fatalf("expected head movement to require fresh review and checks: %+v", result)
+				}
 				if tc.reviewStale && !strings.Contains(fmt.Sprint(result.Err), "submitted review 1 to show a clean verdict on the draft head") {
 					t.Fatalf("expected the stale review to block verification: %+v", result)
 				}
-				return
+				if !tc.headMoved {
+					return
+				}
+				// Advance the real branch before recovery. The earlier clean review
+				// must not be replayed against the new remote commit.
+				git(seed, "fetch", remote, branch)
+				git(seed, "checkout", "-B", branch, "FETCH_HEAD")
+				if err := os.WriteFile(filepath.Join(seed, "work.txt"), []byte("implemented\nfresh head\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				git(seed, "commit", "-am", "advance draft head")
+				git(seed, "push", remote, branch)
+				api.head = git(remote, "rev-parse", branch)
+				git(remote, "update-ref", "refs/pull/42/head", api.head)
+			}
+			wantReviews := 1
+			if tc.headMoved {
+				wantReviews = 2
 			}
 			wantVerifications := 1
+			if tc.standard {
+				wantVerifications = 0
+			}
 			if tc.metadataError != "" {
 				if result.PRURL != prURL || !errors.Is(result.Err, ErrWorkflowPRMetadata) ||
 					!strings.Contains(result.Err.Error(), tc.metadataError+` "`) || verifications != 0 {
@@ -346,7 +388,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				cfg.Workflow.ResumePRURL = result.PRURL
 				metadataRetry = true
 			}
-			if tc.retry || metadataRetry {
+			if tc.retry || metadataRetry || tc.headMoved {
 				h.ResumeIssueWorkspace = true
 				h.IssueCheckoutComplete = true
 				h.IssuePublicationReady = accepted
@@ -362,7 +404,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				t.Fatalf("retry did not preserve and add metadata: labels %v, assignees %v", labels, assignees)
 			}
 			if result.Err != nil || result.PRURL != prURL || !result.ReviewRequired || result.ReviewReceipt == nil || !result.PRVerificationPassed ||
-				implementations != 1 || creates != 1 || api.posts != 1 || verifications != wantVerifications || ready != 1 || draft {
+				implementations != 1 || creates != 1 || api.posts != wantReviews || result.ReviewReceipt.Head != api.head || verifications != wantVerifications || ready != 1 || draft {
 				t.Fatalf("implementation/create/review/verify/ready = %d/%d/%d/%d/%d, draft=%t, result=%+v",
 					implementations, creates, api.posts, verifications, ready, draft, result)
 			}
