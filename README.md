@@ -757,11 +757,16 @@ Human approval, when required, remains a separate requirement.
 
 Code findings on the diff are submitted as review threads. Findings that
 require a branch or history repair outside review scope leave the gate blocked.
-A later clean pass can resolve a harness thread if it verified the fix and
-the thread has no replies. Before merge, the harness rechecks the head, review,
-change requests, and every page
-of conversations, including outdated threads. A changed head needs a fresh
-clean review. The task UI shows the review link and a pending or blocked reason.
+Workflow repairs carry the original native findings into the repair prompt,
+even when a different activation published them. A repair with open native
+findings gets an independent confirmation pass, including when its fix-pass
+budget is zero. A clean pass can resolve an app-authored thread from an earlier
+head if it verified the specific fix and the original comment has no replies
+or changes since verification. The workflow retains the clean receipt and
+resolution evidence if GitHub writeback is interrupted. Before readiness and
+merge, the harness rechecks the head, submitted review, change requests, and
+every page of conversations, including outdated threads. A changed head needs
+a fresh clean review. The task UI shows the review link and pending reason.
 
 ##### Enforce it for external clients
 

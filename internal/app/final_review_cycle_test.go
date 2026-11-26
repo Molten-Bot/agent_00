@@ -778,8 +778,12 @@ func TestProcessChangedRepoReleasesPRFromDraftAfterCleanFinalReviewCycle(t *test
 			if (err == nil) != (tc.wantReady == 1) {
 				t.Fatalf("processChangedRepo() = (%d, %q, %v)", exitCode, stage, err)
 			}
-			if runner.reviews != 1 || runner.comments != 1 {
-				t.Fatalf("review/comment counts = %d/%d, want 1/1", runner.reviews, runner.comments)
+			wantReviews := 1
+			if tc.head != "head-sha" {
+				wantReviews = 0
+			}
+			if runner.reviews != wantReviews || runner.comments != wantReviews {
+				t.Fatalf("review/comment counts = %d/%d, want %d/%d", runner.reviews, runner.comments, wantReviews, wantReviews)
 			}
 			if runner.released != tc.wantReady {
 				t.Fatalf("released count = %d, want %d", runner.released, tc.wantReady)

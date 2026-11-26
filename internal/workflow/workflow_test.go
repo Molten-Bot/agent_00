@@ -368,9 +368,13 @@ func (f fakeRunner) Run(c context.Context, cmd execx.Command) (execx.Result, err
 func TestGitHubPollingAndHeadBoundMerge(t *testing.T) {
 	t.Parallel()
 	var commands []execx.Command
+	resolved := false
 	g := GitHub{Runner: fakeRunner(func(_ context.Context, c execx.Command) (execx.Result, error) {
 		commands = append(commands, c)
 		args := strings.Join(c.Args, " ")
+		if strings.Contains(args, "reviewThreads(first:100") {
+			return execx.Result{Stdout: fmt.Sprintf(`{"data":{"repository":{"pullRequest":{"state":"OPEN","headRefOid":"abc","reviewThreads":{"nodes":[{"id":"finding","isResolved":%t}],"pageInfo":{"hasNextPage":false}}}}}}`, resolved)}, nil
+		}
 		if strings.Contains(args, "api graphql") {
 			return execx.Result{Stdout: "0\n"}, nil
 		}
@@ -394,7 +398,12 @@ func TestGitHubPollingAndHeadBoundMerge(t *testing.T) {
 	}
 	w := definition("one")
 	w.Merge.DeleteBranch = true
-	if err = g.Merge(context.Background(), Run{Workflow: w, Item: items[1], PRURL: "https://github.com/acme/repo/pull/2", MergeHead: "abc"}); err != nil {
+	run := Run{Workflow: w, Item: items[1], PRURL: "https://github.com/acme/repo/pull/2", MergeHead: "abc"}
+	if err = g.Merge(t.Context(), run); !errors.Is(err, githubutil.ErrReviewThreadsPending) {
+		t.Fatalf("merge with unresolved finding = %v", err)
+	}
+	resolved = true
+	if err = g.Merge(t.Context(), run); err != nil {
 		t.Fatal(err)
 	}
 	args := strings.Join(commands[len(commands)-1].Args, " ")

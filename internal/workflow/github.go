@@ -302,6 +302,8 @@ func (g GitHub) Merge(ctx context.Context, r Run) error {
 		if !r.Workflow.Merge.DeleteBranch {
 			return githubutil.MergeReviewedHead(ctx, g.command, *receipt, r.Workflow.Merge.Method)
 		}
+	} else if err := githubutil.VerifyReviewThreads(ctx, g.command, r.PRURL, r.MergeHead); err != nil {
+		return err
 	}
 	args := []string{"pr", "merge", r.PRURL, "--repo", r.Item.Repository, "--" + r.Workflow.Merge.Method, "--match-head-commit", r.MergeHead}
 	if r.Workflow.Merge.DeleteBranch {

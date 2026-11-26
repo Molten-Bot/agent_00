@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Molten-Bot/agent_00/internal/app"
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/library"
@@ -78,6 +79,7 @@ func workflowRunConfigWithLibrary(r workflow.Run, resolve workflowLibraryResolve
 	} else if i.Kind == "pr" && w.Task.Kind == "review" {
 		c.Review = &config.ReviewConfig{PRNumber: i.Number, PRURL: i.URL, HeadBranch: i.HeadBranch, Trigger: "manual", Writeback: "comment"}
 	} else if i.Kind == "pr" {
+		c.Workflow.RepairPRURL = i.URL
 		c.RequiresNonDefaultBranch = true
 		if c.LibraryTaskName == "" {
 			c.LibraryTaskName = "resolve-pr-comments"
@@ -107,7 +109,8 @@ func configureWorkflows(ctx context.Context, cfg localruntime.InitConfig, runner
 		return err
 	}
 	gh := workflow.GitHub{Runner: runner, Cooldown: server.GitHubCooldown, Logf: logf}
-	engine := &workflow.Engine{Store: store, StatePath: filepath.Join(root, "workflow-state.json"), Fetch: gh.Fetch, InspectPR: gh.Inspect, Merge: gh.Merge, Logf: logf}
+	reviewer := app.New(runner)
+	engine := &workflow.Engine{Store: store, StatePath: filepath.Join(root, "workflow-state.json"), Fetch: gh.Fetch, InspectPR: gh.Inspect, FinishReview: reviewer.ResumeReviewGate, Merge: gh.Merge, Logf: logf}
 	engine.Enabled = func() bool {
 		s, err := localruntime.LoadRuntimeConfigUISettings(cfg.RuntimeConfigPath)
 		return err == nil && s.WorkflowEnabled

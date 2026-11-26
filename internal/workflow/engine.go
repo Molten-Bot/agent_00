@@ -176,24 +176,30 @@ type Outcome struct {
 	Status            string                    `json:"status"`
 	PRURL             string                    `json:"prUrl,omitempty"`
 	Reason            string                    `json:"reason,omitempty"`
+
+	PendingReviewGate *githubutil.PendingReviewGate `json:"pendingReviewGate,omitempty"`
+	ReviewRequired    bool                          `json:"reviewRequired,omitempty"`
 	// Accept older journals without using their unacknowledged review verdicts.
 	LegacyReviewClean  bool   `json:"reviewClean,omitempty"`
 	LegacyReviewedHead string `json:"reviewedHead,omitempty"`
 }
 type Engine struct {
-	Now        func() time.Time
-	Active     func(Definition) bool
-	Store      *Store
-	StatePath  string
-	Enabled    func() bool
-	Allowed    func(string) bool
-	Fetch      func(context.Context, string, ScanNeeds) ([]Item, error)
-	Submit     func(context.Context, Run) (string, error)
-	Status     func(string) Outcome
-	Reconcile  func(string) string
-	InspectPR  func(context.Context, string, string) (Item, error)
-	Merge      func(context.Context, Run) error
-	Logf       func(string, ...any)
+	Now       func() time.Time
+	Active    func(Definition) bool
+	Store     *Store
+	StatePath string
+	Enabled   func() bool
+	Allowed   func(string) bool
+	Fetch     func(context.Context, string, ScanNeeds) ([]Item, error)
+	Submit    func(context.Context, Run) (string, error)
+	Status    func(string) Outcome
+	Reconcile func(string) string
+	InspectPR func(context.Context, string, string) (Item, error)
+	Merge     func(context.Context, Run) error
+	Logf      func(string, ...any)
+
+	FinishReview func(context.Context, githubutil.ReviewReceipt, *githubutil.PendingReviewGate) error
+
 	wakeOnce   sync.Once
 	wake       chan struct{}
 	tickMu     sync.Mutex
@@ -279,6 +285,8 @@ func (e *Engine) logRun(r Run, event string) {
 		reason = "review_not_clean"
 	case "Waiting for the trusted review policy check on the current pull request head":
 		reason = "review_check_pending"
+	case "Review writeback paused: workflow changed or was disabled":
+		reason = "review_writeback_paused"
 	case "Pull request merged externally during review":
 		reason = "external_merge"
 	case "Pull request was already merged when the workflow checked":
@@ -286,6 +294,9 @@ func (e *Engine) logRun(r Run, event string) {
 	}
 	if strings.HasPrefix(r.Reason, "Merge blocked:") {
 		reason = "merge_blocked"
+	}
+	if strings.HasPrefix(r.Reason, "Review writeback pending:") {
+		reason = "review_writeback_pending"
 	}
 	var durationMS int64
 	if r.StartedAt != nil && (r.Status == "succeeded" || r.Status == "merged") {
@@ -659,7 +670,9 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 			if r.PRURL == "" {
 				r.PRURL = r.Item.URL
 			}
-			if r.Workflow.Merge.Enabled && (!exists || w.Merge.Enabled) && strings.Contains(r.PRURL, "/pull/") {
+			if o.PendingReviewGate != nil {
+				r.Status = awaitingReview
+			} else if r.Workflow.Merge.Enabled && (!exists || w.Merge.Enabled) && strings.Contains(r.PRURL, "/pull/") {
 				r.Status = "waiting"
 				r.Reason = "Waiting for checks and merge requirements"
 
@@ -668,6 +681,65 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 				r.Reason = "Task completed"
 			}
 		}
+	}
+	if r.Status == awaitingReview && r.Outcome != nil && r.Outcome.PendingReviewGate != nil {
+		if !exists {
+			r.Status, r.Reason = "completed", "Originating workflow removed before review writeback"
+			return finish()
+		}
+		if !active || !e.StillEnabled(r.Workflow) {
+			r.Reason = "Review writeback paused: workflow changed or was disabled"
+			return finish()
+		}
+		receipt := r.cleanReviewReceipt(r.Outcome)
+		if receipt == nil || e.FinishReview == nil {
+			r.Reason = "Waiting for a submitted clean review on the current pull request head"
+			return finish()
+		}
+		i, err := e.InspectPR(ctx, r.Item.Repository, r.PRURL)
+		if err != nil {
+			return errors.Join(err, finish())
+		}
+		if !i.Open {
+			r.Status, r.Reason = "completed", "Pull request closed before review writeback"
+			return finish()
+		}
+		if i.HeadSHA != receipt.Head {
+			r.Reason = "Head changed after merge eligibility; a new review is required"
+			return finish()
+		}
+		if !e.StillEnabled(r.Workflow) {
+			r.Reason = "Review writeback paused: workflow changed or was disabled"
+			return finish()
+		}
+		if err := commit(); err != nil || stale {
+			return err
+		}
+		gate := *r.Outcome.PendingReviewGate
+		gate.MarkReady = gate.MarkReady && i.Draft
+		err = e.FinishReview(ctx, *receipt, &gate)
+		outcome := *r.Outcome
+		outcome.PendingReviewGate = &gate
+		r.Outcome = &outcome
+		switch {
+		case errors.Is(err, githubutil.ErrReviewInterrupted):
+			r.Status, r.Reason = "completed", "Pull request was already merged when the workflow checked"
+		case errors.Is(err, githubutil.ErrReviewThreadsPending):
+			r.Reason = "Waiting for unresolved review threads"
+		case errors.Is(err, githubutil.ErrReviewChangesRequested):
+			r.Reason = "Waiting for requested changes"
+		case err != nil:
+			r.Reason = "Review writeback pending: " + err.Error()
+		default:
+			outcome.PendingReviewGate = nil
+			if r.Workflow.Merge.Enabled && w.Merge.Enabled {
+				r.Status, r.Reason = "waiting", "Waiting for checks and merge requirements"
+			} else {
+				r.Status, r.Reason = "succeeded", "Task completed"
+			}
+		}
+		r.UpdatedAt = e.now()
+		return finish()
 	}
 	waiting := r.Status == "waiting" || r.Status == awaitingReview
 	if waiting && (!exists || !w.Merge.Enabled) {
@@ -762,7 +834,7 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 }
 
 func (r Run) requiresReview() bool {
-	return r.Workflow.Task.Kind == "review" || r.Workflow.ReviewCycles > 0
+	return r.Workflow.Task.Kind == "review" || r.Workflow.ReviewCycles > 0 || (r.Outcome != nil && r.Outcome.ReviewRequired)
 }
 
 func (r Run) cleanReviewReceipt(outcome *Outcome) *githubutil.ReviewReceipt {

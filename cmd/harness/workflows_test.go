@@ -36,7 +36,7 @@ func TestWorkflowRunConfigPolicies(t *testing.T) {
 			if kind == "review" && (c.Review == nil || c.Review.AutoMerge || c.Review.Writeback != "summary-comment") {
 				t.Fatal("review must report outcome before merge", c)
 			}
-			if kind == "repair" && (c.BaseBranch != "feature" || !c.RequiresNonDefaultBranch) {
+			if kind == "repair" && (c.BaseBranch != "feature" || !c.RequiresNonDefaultBranch || c.Workflow.RepairPRURL != i.URL) {
 				t.Fatal("repair must reuse existing branch")
 			}
 		})
