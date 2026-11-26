@@ -159,7 +159,8 @@ func TestIssueCheckWaitResumesSameClaimAndPreservesBackoff(t *testing.T) {
 	}
 	got, err := store.Load(record.ID)
 	if err != nil || got.Outcome != localruntime.IssueChecksPending || got.UnlockPending || !got.LabelAdded ||
-		got.PRURL != prURL || !got.NextAttemptAt.Equal(reset) || got.AgentAttempts != record.AgentAttempts || got.PRVerification != record.PRVerification {
+		got.PRURL != prURL || !got.NextAttemptAt.Equal(reset) || got.Failures != record.Failures ||
+		got.AgentAttempts != record.AgentAttempts || got.PRVerification != record.PRVerification {
 		t.Fatalf("waiting issue receipt = %+v, %v", got, err)
 	}
 	if next, request, err := prepareIssueExecution(store, record.Run, policy); err != nil || next != nil || request != record.RequestID {
@@ -184,7 +185,7 @@ func TestIssueCheckWaitResumesSameClaimAndPreservesBackoff(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err = store.Load(record.ID)
-	if err != nil || got.NextAttemptAt.Sub(got.StoppedAt) != 5*time.Second || got.UnlockPending ||
+	if err != nil || got.NextAttemptAt.Sub(got.StoppedAt) != 2*time.Second || got.Failures != 1 || got.UnlockPending ||
 		got.AgentAttempts != record.AgentAttempts || got.PRURL != prURL {
 		t.Fatalf("persistent failure did not use bounded backoff: %+v, %v", got, err)
 	}

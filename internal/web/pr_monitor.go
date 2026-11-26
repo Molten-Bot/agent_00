@@ -12,19 +12,20 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/githubutil"
 )
 
-const defaultPRMergePollInterval = 10 * time.Second
+const defaultPRMergePollInterval = time.Minute
 const prMonitorTitleLookupTimeout = 2 * time.Second
 const prMonitorStateLookupTimeout = 30 * time.Second
 
 // PRMergeMonitor watches task pull requests and marks merged tasks as done.
 type PRMergeMonitor struct {
-	Runner         execx.Runner
-	Broker         *Broker
-	Logf           func(string, ...any)
-	CleanupTask    func(context.Context, string) error
-	PollInterval   time.Duration
-	Cooldown       *githubutil.Cooldown
-	MemoryPressure func() bool
+	Runner            execx.Runner
+	Broker            *Broker
+	Logf              func(string, ...any)
+	CleanupTask       func(context.Context, string) error
+	PollInterval      time.Duration
+	Cooldown          *githubutil.Cooldown
+	MemoryPressure    func() bool
+	RepositoryAllowed func(context.Context, string) (bool, error)
 
 	mu       sync.Mutex
 	inFlight map[string]struct{}
@@ -67,6 +68,7 @@ func (m *PRMergeMonitor) pollOnce(ctx context.Context) {
 	if (m.MemoryPressure != nil && m.MemoryPressure()) || !m.Cooldown.RetryAt().IsZero() {
 		return
 	}
+	ctx = githubutil.WithCaller(ctx, "pr_monitor")
 	tasks := m.Broker.TaskList()
 	active := make(map[string]struct{}, len(tasks))
 	reads := map[string]func() (prViewState, error){}
@@ -80,7 +82,12 @@ func (m *PRMergeMonitor) pollOnce(ctx context.Context) {
 		}
 		read := reads[task.PRURL]
 		if read == nil {
-			read = sync.OnceValues(func() (prViewState, error) { return m.prState(ctx, task.PRURL) })
+			read = sync.OnceValues(func() (prViewState, error) {
+				if !m.allowed(ctx, task.PRURL) {
+					return prViewState{}, nil
+				}
+				return m.prState(ctx, task.PRURL)
+			})
 			reads[task.PRURL] = read
 		}
 		go func(task Task) {
@@ -157,15 +164,30 @@ func (m *PRMergeMonitor) forgetMissingTasks(active map[string]struct{}) {
 	}
 }
 
+func (m *PRMergeMonitor) allowed(ctx context.Context, prURL string) bool {
+	if m.RepositoryAllowed == nil {
+		return true
+	}
+	repo := githubutil.PullRequestRepository(prURL)
+	if repo == "" {
+		return false
+	}
+	allowed, err := m.RepositoryAllowed(ctx, repo)
+	return err == nil && allowed
+}
+
 func (m *PRMergeMonitor) applyPRState(ctx context.Context, task Task, state prViewState, err error) {
 	if err != nil {
 		m.Logf("localruntime.ui status=warn event=pr_monitor request_id=%s pr_url=%s err=%q", task.RequestID, task.PRURL, err)
 		return
 	}
+	if state.State == "" && state.MergedAt == "" && state.Title == "" {
+		return
+	}
 	if !isReviewTask(task.Source, task.Workflow) {
 		if task.PRTitleURL == "" || task.PRTitleURL == task.PRURL {
 			m.Broker.recordTaskPRTitle(task.RequestID, task.PRURL, state.Title, taskPRTitleMonitored)
-		} else if m.MemoryPressure == nil || !m.MemoryPressure() {
+		} else if (m.MemoryPressure == nil || !m.MemoryPressure()) && m.allowed(ctx, task.PRTitleURL) {
 			titleCtx, cancel := context.WithTimeout(ctx, prMonitorTitleLookupTimeout)
 			result, err := m.Cooldown.Run(titleCtx, m.Runner, execx.Command{
 				Name: "gh",

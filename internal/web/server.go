@@ -397,6 +397,23 @@ func (s Server) handleGitHubProfile(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s Server) RepositoryAllowed(ctx context.Context, repository string) (bool, error) {
+	if s.ReviewSettingsStatus == nil {
+		return true, nil
+	}
+	settings, err := s.ReviewSettingsStatus(ctx)
+	if err != nil {
+		return false, err
+	}
+	key := workflow.CanonicalRepository(repository)
+	for _, disabled := range settings.DisabledRepositories {
+		if workflow.CanonicalRepository(disabled) == key {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 func filterDisabledGitHubRepos(repos []GitHubRepo, disabled []string) []GitHubRepo {
 	blocked := make(map[string]struct{}, len(disabled))
 	for _, value := range disabled {

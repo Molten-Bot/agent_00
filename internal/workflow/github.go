@@ -73,6 +73,7 @@ func (r *scanRunner) Run(ctx context.Context, cmd execx.Command) (execx.Result, 
 }
 
 func (g GitHub) Fetch(ctx context.Context, repo string, needs ScanNeeds) ([]Item, error) {
+	ctx = githubutil.WithDefaultCaller(ctx, "workflow_discovery")
 	if g.Logf != nil {
 		start := time.Now()
 		runner := &scanRunner{Runner: g.Runner}
@@ -252,7 +253,7 @@ func (g GitHub) fetchCollection(ctx context.Context, repo, resource, viewer stri
 	return items, nil
 }
 func (g GitHub) Inspect(ctx context.Context, repo, selector string) (Item, error) {
-	return g.inspect(ctx, repo, selector, ScanNeeds{LinkedIssues: true, Reviews: true, Checks: true})
+	return g.inspect(githubutil.WithCaller(ctx, "workflow_inspect"), repo, selector, ScanNeeds{LinkedIssues: true, Reviews: true, Checks: true})
 }
 
 func (g GitHub) inspect(ctx context.Context, repo, selector string, needs ScanNeeds) (Item, error) {
@@ -334,6 +335,7 @@ func (g GitHub) inspect(ctx context.Context, repo, selector string, needs ScanNe
 	return i, nil
 }
 func (g GitHub) Merge(ctx context.Context, r Run) error {
+	ctx = githubutil.WithCaller(ctx, "workflow_merge")
 	if r.MergeHead == "" {
 		return fmt.Errorf("missing reviewed head")
 	}

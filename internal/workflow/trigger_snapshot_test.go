@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/githubutil"
 )
 
 func TestWorkflowPollingPreservesRunsAndObservationsDuringMemoryPressure(t *testing.T) {
@@ -233,5 +235,51 @@ func TestMixedWorkflowsShareCollectionListings(t *testing.T) {
 	}
 	if len(logs) != 1 || !strings.Contains(logs[0], "gh_calls=2 duration_ms=") {
 		t.Fatalf("scan logs=%v", logs)
+	}
+}
+
+func TestWorkflowDiscoveryDoesNotConsumeEventDuringQuotaPause(t *testing.T) {
+	t.Parallel()
+	w := definition("quota-discovery")
+	e, _, submitted := testEngine(t, w)
+	now := time.Now().Truncate(time.Second)
+	reset := now.Add(time.Minute)
+	e.Now = func() time.Time { return now }
+	cooldown := &githubutil.Cooldown{Now: e.Now, Logf: t.Logf}
+	calls := 0
+	runner := fakeRunner(func(_ context.Context, _ execx.Command) (execx.Result, error) {
+		calls++
+		remaining, deadline := 100, reset
+		items := `[{"number":1,"labels":[{"name":"ready"}]}]`
+		switch calls {
+		case 2:
+			remaining = 0
+		case 3, 4:
+			deadline = now.Add(time.Hour)
+			items = `[{"number":1,"labels":[{"name":"ready"}]},{"number":2,"labels":[{"name":"ready"}]}]`
+		}
+		return execx.Result{Stdout: items, Stderr: fmt.Sprintf(
+			"* Request to https://api.github.com/repos/acme/repo/issues\n< HTTP/2.0 200 OK\n< X-RateLimit-Resource: core\n< X-RateLimit-Limit: 5000\n< X-RateLimit-Remaining: %d\n< X-RateLimit-Reset: %d\n\n* Request took 1ms\n",
+			remaining, deadline.Unix())}, nil
+	})
+	e.Fetch = (GitHub{Runner: runner, Cooldown: cooldown}).Fetch
+	tick(t, e)
+	now = now.Add(30 * time.Second)
+	for range 2 {
+		var rate *githubutil.RateLimitError
+		if err := e.Tick(t.Context()); !errors.As(err, &rate) || !rate.RetryAt.Equal(reset) {
+			t.Fatalf("discovery cooldown = %v", err)
+		}
+	}
+	if calls != 2 || *submitted != 0 {
+		t.Fatalf("during quota pause: calls=%d submitted=%d", calls, *submitted)
+	}
+	now = reset
+	tick(t, e)
+	now = now.Add(30 * time.Second)
+	tick(t, e)
+	runs, err := e.Runs()
+	if *submitted != 1 || len(runs) != 1 || runs[0].Item.Number != 2 || err != nil {
+		t.Fatalf("resumed discovery: submitted=%d runs=%+v err=%v", *submitted, runs, err)
 	}
 }

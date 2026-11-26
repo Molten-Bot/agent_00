@@ -17,6 +17,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
 	"github.com/Molten-Bot/agent_00/internal/githubassets"
+	"github.com/Molten-Bot/agent_00/internal/githubutil"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/workflow"
 	"github.com/Molten-Bot/agent_00/internal/workspace"
@@ -58,9 +59,14 @@ func (s Server) runIssueRecovery(ctx context.Context) {
 	for ctx.Err() == nil {
 		err := s.ReconcileIssueWork(ctx)
 		var status issueAutomationStatus
+		var rate *githubutil.RateLimitError
 		if err != nil && !errors.Is(err, errIssueRecoveryDeferred) && ctx.Err() == nil {
 			status.addError(err)
-			s.logf("localruntime.ui status=warn event=github_issue_recovery err=%q", status.Error)
+			if errors.As(err, &rate) {
+				s.logf("localruntime.ui status=waiting event=github_issue_recovery retry_at=%s", rate.RetryAt.UTC().Format(time.RFC3339))
+			} else {
+				s.logf("localruntime.ui status=warn event=github_issue_recovery err=%q", status.Error)
+			}
 		}
 		s.issueAutomation.mu.Lock()
 		if !errors.Is(err, errIssueRecoveryDeferred) {
@@ -234,7 +240,7 @@ func (s Server) ReconcileIssueWork(ctx context.Context) error {
 	if s.MemoryPressure != nil && s.MemoryPressure() {
 		return errIssueRecoveryDeferred
 	}
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(githubutil.WithCaller(ctx, "issue_recovery"), 30*time.Second)
 	defer cancel()
 	records, listErr := s.IssueClaims.List()
 	latest := map[string]localruntime.IssueClaimRecord{}
@@ -314,6 +320,14 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	if err != nil {
 		return err
 	}
+	allowed, err := s.RepositoryAllowed(ctx, record.Run.GitHubIssue.Repository)
+	if err != nil {
+		return err
+	}
+	if !allowed && !record.LabelAdded && !record.UnlockPending {
+		return nil
+	}
+
 	staleOwner := isStaleIssueClaim(record)
 	if err := s.IssueClaims.CheckOwner(record.InstanceID); err != nil {
 		if !errors.Is(err, localruntime.ErrIssueOwnershipChanged) {
@@ -410,6 +424,29 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	if record.UnlockPending && now.Before(record.NextUnlockAt) {
 		return nil
 	}
+	if !allowed {
+		// A stopped worker's owned label still needs to be removed. Keep
+		// its claim and outcome for resumption when the repository is enabled.
+		if !record.LabelAdded {
+			return nil
+		}
+		issue := record.Run.GitHubIssue
+		cleanupCtx := githubutil.WithCaller(ctx, "issue_cleanup")
+		remote, err := s.latestIssueAttempt(cleanupCtx, issue.Repository, issue.Number)
+		if err != nil {
+			return s.deferIssueUnlock(record.ID, err)
+		}
+		if remote.Claim.ID != record.ID || remote.InstanceID != record.InstanceID {
+			// Another owner controls the label. Drop only our cleanup intent.
+			record.LabelAdded, record.UnlockPending = false, false
+			return s.IssueClaims.Save(record)
+		}
+		if err := s.unlockIssue(cleanupCtx, &record); err != nil {
+			return s.deferIssueUnlock(record.ID, err)
+		}
+		return nil
+	}
+
 	cooling := now.Before(record.NextAttemptAt)
 	// Failed admission can leave a label to clean up while dispatch cools down.
 	if cooling && (record.Outcome != "" || !record.UnlockPending) {
@@ -711,7 +748,7 @@ func (s Server) ValidateIssueOwnership(ctx context.Context, run config.Config) e
 		return nil
 	}
 	issue := run.GitHubIssue
-	remote, err := s.latestIssueAttempt(ctx, issue.Repository, issue.Number)
+	remote, err := s.latestIssueAttempt(githubutil.WithCaller(ctx, "issue_ownership"), issue.Repository, issue.Number)
 	if err != nil {
 		return err
 	}
@@ -747,6 +784,11 @@ func issueRetryFailures(record localruntime.IssueClaimRecord) int {
 }
 
 func (s Server) scheduleIssueRetry(record *localruntime.IssueClaimRecord, cause error) {
+	var rate *githubutil.RateLimitError
+	if errors.As(cause, &rate) {
+		record.NextAttemptAt = rate.RetryAt
+		return
+	}
 	record.Failures++
 	record.NextAttemptAt = s.IssueRecovery.Defaults().RetryDeadline(time.Now(), record.ID, issueRetryFailures(*record), cause)
 }
@@ -768,8 +810,13 @@ func (s Server) deferIssueRecord(record localruntime.IssueClaimRecord, cause err
 			}
 			current.State = localruntime.IssueChecksPending
 			current.Error = cause.Error()
-			current.Failures++
-			current.NextAttemptAt = s.IssueRecovery.Defaults().RetryDeadline(time.Now(), current.ID, current.Failures, cause)
+			var rate *githubutil.RateLimitError
+			if errors.As(cause, &rate) {
+				current.NextAttemptAt = rate.RetryAt
+			} else {
+				current.Failures++
+				current.NextAttemptAt = s.IssueRecovery.Defaults().RetryDeadline(time.Now(), current.ID, current.Failures, cause)
+			}
 			return nil
 		}
 		if errors.Is(cause, errWorkflowIssueRecovery) {
@@ -830,9 +877,14 @@ func blockStaleIssueClaim(record *localruntime.IssueClaimRecord) {
 func (s Server) deferIssueUnlock(id string, cause error) error {
 	err := s.IssueClaims.Update(id, func(record *localruntime.IssueClaimRecord) error {
 		record.UnlockPending = true
-		record.UnlockFailures++
 		record.UnlockError = cause.Error()
-		record.NextUnlockAt = s.IssueRecovery.Defaults().RetryDeadline(time.Now(), record.ID, record.UnlockFailures, cause)
+		var rate *githubutil.RateLimitError
+		if errors.As(cause, &rate) {
+			record.NextUnlockAt = rate.RetryAt
+		} else {
+			record.UnlockFailures++
+			record.NextUnlockAt = s.IssueRecovery.Defaults().RetryDeadline(time.Now(), record.ID, record.UnlockFailures, cause)
+		}
 		return nil
 	})
 	return errors.Join(cause, err)
@@ -841,7 +893,7 @@ func (s Server) deferIssueUnlock(id string, cause error) error {
 func (s Server) unlockIssue(ctx context.Context, record *localruntime.IssueClaimRecord) error {
 	issue := record.Run.GitHubIssue
 	// Read first: deletion after an accepted-but-lost response is idempotent.
-	fresh, err := s.fetchGitHubIssue(ctx, issue.Repository, issue.Number)
+	fresh, err := s.fetchGitHubIssueMetadata(ctx, issue.Repository, issue.Number)
 	if err != nil {
 		return err
 	}

@@ -731,11 +731,20 @@ func (s Server) handleIssueAutomationRetry(w http.ResponseWriter, r *http.Reques
 		writeJSONError(w, 400, fmt.Errorf("valid repository and issue number are required"))
 		return
 	}
+	allowed, err := s.RepositoryAllowed(r.Context(), repository)
+	if err != nil {
+		writeJSONError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	if !allowed {
+		writeJSONError(w, http.StatusForbidden, fmt.Errorf("repository is disabled in Settings"))
+		return
+	}
 	s.issueAutomation.admission.Lock()
 	defer s.issueAutomation.admission.Unlock()
 	remote, err := s.latestIssueAttempt(r.Context(), repository, request.Number)
 	if err != nil {
-		writeJSONError(w, 502, err)
+		writeJSONError(w, githubErrorStatus(w, http.StatusBadGateway, err), err)
 		return
 	}
 	expectedID := remote.Claim.ID
@@ -757,7 +766,7 @@ func (s Server) handleIssueAutomationRetry(w http.ResponseWriter, r *http.Reques
 	submit := s.issueRetrySubmitter()
 	result, status, err := s.recoverIssueClaimWithRun(r.Context(), repository, request.Number, remote, submit, false, nil)
 	if err != nil {
-		writeJSONError(w, status, err)
+		writeJSONError(w, githubErrorStatus(w, status, err), err)
 		return
 	}
 	writeJSON(w, status, struct {

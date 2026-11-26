@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/githubutil"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 )
 
@@ -114,6 +116,17 @@ func (s Server) handleGitHubIssues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	allowed, err := s.RepositoryAllowed(r.Context(), repository)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !allowed {
+		writeJSONError(w, http.StatusForbidden, errors.New("repository is disabled in Settings"))
+		return
+	}
+	r = r.WithContext(githubutil.WithCaller(r.Context(), "issue_browser"))
+
 	path := strings.TrimPrefix(r.URL.Path, "/api/github/issues")
 	if path == "" {
 		s.handleGitHubIssueList(w, r, repository)
@@ -160,8 +173,11 @@ func (s Server) handleGitHubIssueList(w http.ResponseWriter, r *http.Request, re
 	}
 	issues, err := s.listGitHubIssues(r.Context(), repository, state, search, assignee, branch)
 	if err != nil {
-		s.logf("localruntime.ui status=warn endpoint=github_issues_list repo=%s err=%q", repository, err)
-		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": fmt.Sprintf("list GitHub issues: %v", err)})
+		status := githubErrorStatus(w, http.StatusBadGateway, err)
+		if status != http.StatusTooManyRequests {
+			s.logf("localruntime.ui status=warn endpoint=github_issues_list repo=%s err=%q", repository, err)
+		}
+		writeJSONError(w, status, fmt.Errorf("list GitHub issues: %w", err))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "issues": issues})
@@ -331,7 +347,7 @@ func (s Server) githubIssueDevelopmentStates(ctx context.Context, issues []githu
 func (s Server) handleGitHubIssueDetail(w http.ResponseWriter, r *http.Request, repository string, number int) {
 	issue, err := s.fetchGitHubIssue(r.Context(), repository, number)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": err.Error()})
+		writeJSONError(w, githubErrorStatus(w, http.StatusBadGateway, err), err)
 		return
 	}
 	response := map[string]any{"ok": true, "issue": issue}
@@ -356,7 +372,7 @@ func (s Server) handleGitHubIssueDetail(w http.ResponseWriter, r *http.Request, 
 	writeJSON(w, http.StatusOK, response)
 }
 
-func (s Server) fetchGitHubIssue(ctx context.Context, repository string, number int) (GitHubIssue, error) {
+func (s Server) fetchGitHubIssueMetadata(ctx context.Context, repository string, number int) (GitHubIssue, error) {
 	args := []string{
 		"issue", "view", strconv.Itoa(number), "--repo", repository,
 		"--json", "number,title,body,state,url,author,labels,assignees,createdAt,updatedAt",
@@ -372,6 +388,14 @@ func (s Server) fetchGitHubIssue(ctx context.Context, repository string, number 
 	if issue.Number != number {
 		return GitHubIssue{}, fmt.Errorf("GitHub returned a different issue number")
 	}
+	return issue, nil
+}
+
+func (s Server) fetchGitHubIssue(ctx context.Context, repository string, number int) (GitHubIssue, error) {
+	issue, err := s.fetchGitHubIssueMetadata(ctx, repository, number)
+	if err != nil {
+		return GitHubIssue{}, err
+	}
 	commentResult, err := s.runIssueGH(ctx, execx.Command{
 		Name: "gh",
 		Args: []string{"api", "--paginate", fmt.Sprintf("repos/%s/issues/%d/comments", repository, number)},
@@ -383,6 +407,15 @@ func (s Server) fetchGitHubIssue(ctx context.Context, repository string, number 
 		return GitHubIssue{}, fmt.Errorf("decode GitHub issue comments: %w", err)
 	}
 	return issue, nil
+}
+
+func githubErrorStatus(w http.ResponseWriter, fallback int, err error) int {
+	var rate *githubutil.RateLimitError
+	if errors.As(err, &rate) {
+		w.Header().Set("Retry-After", rate.RetryAt.UTC().Format(http.TimeFormat))
+		return http.StatusTooManyRequests
+	}
+	return fallback
 }
 
 func decodePaginatedGitHubIssueComments(raw string, issue *GitHubIssue) error {

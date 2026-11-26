@@ -8,11 +8,12 @@ import (
 	"strings"
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/githubutil"
 )
 
 // Use the same gh account and credential selection as issue admission.
 func (s Server) issueGitHubRepos(ctx context.Context) ([]GitHubRepo, error) {
-	result, err := s.runIssueGH(ctx, execx.Command{Name: "gh", Args: []string{"api", "--paginate", "user/repos?per_page=100&visibility=all&affiliation=owner,collaborator,organization_member&sort=pushed"}})
+	result, err := s.runIssueGH(githubutil.WithCaller(ctx, "repository_catalog"), execx.Command{Name: "gh", Args: []string{"api", "--paginate", "user/repos?per_page=100&visibility=all&affiliation=owner,collaborator,organization_member&sort=pushed"}})
 	if err != nil {
 		return nil, err
 	}
