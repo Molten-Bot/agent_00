@@ -20,3 +20,9 @@ Return only one JSON object in your final response. Include at most three positi
 ```
 
 `status` must be exactly one of `clean`, `findings`, or `blocked`; never copy a list of choices into the value. Use `clean` with `mergeReady: true` and an empty `findings` array when inspection is complete and there are no material issues. Use `findings` with `mergeReady: false` for actionable problems in the PR. Use `blocked` with `mergeReady: false`, an empty `findings` array, and a short explanation in `summary` if you cannot complete the code inspection. GitHub publication, connectivity for publication, and tool permissions for publication have no bearing on this verdict or its findings.
+
+When given original findings keyed by GitHub thread ID, independently check
+each one against the current head. Add a top-level `verifiedThreadIds` array
+with the exact IDs of findings demonstrably fixed by the current code. Leave
+out any ID whose fix you cannot establish. An outdated diff anchor or a clean
+overall verdict alone does not verify the original finding.

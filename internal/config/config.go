@@ -202,6 +202,7 @@ type WorkflowRunConfig struct {
 	ReviewCycles int               `json:"reviewCycles"`
 	ReviewAgent  ReviewAgentConfig `json:"reviewAgent,omitzero"`
 	PolicyHash   string            `json:"policyHash,omitempty"`
+	RepairPRURL  string            `json:"repairPrUrl,omitempty"`
 }
 
 type ReviewAgentConfig struct {

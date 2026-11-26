@@ -75,6 +75,62 @@ func TestVerifyReviewGateBlocksUnresolvedOrIncompleteThreads(t *testing.T) {
 	}
 }
 
+func TestReconcileReviewThreadsRequiresUnchangedVerifiedAppFinding(t *testing.T) {
+	t.Parallel()
+	receipt := testReviewReceipt()
+	marker := "<!-- agent00-review " + strings.Repeat("a", 64) + " -->\nFinding"
+	thread := func(id, head, body string, byViewer bool, comments int) string {
+		return fmt.Sprintf(`{"id":%q,"isResolved":false,"comments":{"totalCount":%d,"nodes":[{"id":%q,"body":%q,"path":"main.go","originalLine":5,"viewerDidAuthor":%t,"pullRequestReview":{"id":"review","body":%q,"state":"COMMENTED","submittedAt":"2026-11-25","viewerDidAuthor":%t,"commit":{"oid":%q}}}]}}`,
+			id, comments, id+"-comment", body, byViewer, marker, byViewer, head)
+	}
+	editedBody := "original finding"
+	var writes []string
+	gh := func(_ context.Context, args ...string) (string, error) {
+		switch {
+		case args[0] == "pr":
+			return `{"state":"OPEN","headRefOid":"aaa","reviewDecision":null}`, nil
+		case args[1] == "--paginate":
+			review := SubmittedReview{ID: receipt.ReviewID, Head: receipt.Head, URL: receipt.URL, State: "COMMENTED", SubmittedAt: "2026-11-25",
+				Body: receipt.Marker + "\n" + CleanReviewVerdict + "\nNo material issues found."}
+			data, _ := json.Marshal([]SubmittedReview{review})
+			return string(data), nil
+		case strings.Contains(args[3], "resolveReviewThread("):
+			id := strings.TrimPrefix(args[len(args)-1], "id=")
+			writes = append(writes, id)
+			return fmt.Sprintf(`{"data":{"resolveReviewThread":{"thread":{"id":%q,"isResolved":true}}}}`, id), nil
+		default:
+			nodes := []string{
+				thread("verified", "old", "fixed finding", true, 1),
+				thread("unverified", "old", "outstanding finding", true, 1),
+				thread("edited", "old", editedBody, true, 1),
+				thread("replied", "old", "finding with reply", true, 2),
+				thread("human", "old", "human with copied marker", false, 1),
+				thread("same-head", receipt.Head, "unrepaired finding", true, 1),
+			}
+			return fmt.Sprintf(`{"data":{"repository":{"pullRequest":{"state":"OPEN","headRefOid":%q,"reviewThreads":{"nodes":[%s],"pageInfo":{"hasNextPage":false}}}}}}`, receipt.Head, strings.Join(nodes, ",")), nil
+		}
+	}
+	findings, err := OpenNativeReviewFindings(t.Context(), gh, receipt.PRURL, receipt.Head)
+	if err != nil || len(findings) != 4 {
+		t.Fatalf("open findings = %+v, %v", findings, err)
+	}
+	receipt.VerifiedThreads = map[string]string{
+		"verified": findings["verified"].Fingerprint(), "edited": findings["edited"].Fingerprint(),
+		"human": findings["human"].Fingerprint(), "replied": findings["replied"].Fingerprint(),
+		"same-head": findings["same-head"].Fingerprint(),
+	}
+	editedBody = "edited since verification"
+	if err := ReconcileVerifiedReviewThreads(t.Context(), gh, receipt); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(writes, []string{"verified"}) {
+		t.Fatalf("resolved threads = %v, want only verified", writes)
+	}
+	if err := VerifyReviewGate(t.Context(), gh, receipt); !errors.Is(err, ErrReviewThreadsPending) {
+		t.Fatalf("unresolved findings did not block the gate: %v", err)
+	}
+}
+
 func TestVerifyRequiredReviewCheckRequiresPinnedAppAndConversations(t *testing.T) {
 	t.Parallel()
 	const protected = `[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"agent00 / review-policy","integration_id":123}]}}]

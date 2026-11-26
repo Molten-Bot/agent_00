@@ -2103,9 +2103,15 @@ func TestTaskShowsPublishedReviewEvidenceAndPendingGate(t *testing.T) {
 	broker.IngestLog("task status=start request_id=review-task explicit_terminal=true")
 	broker.IngestLog("task request_id=review-task stage=review status=ok action=receipt review_url=" + url)
 	broker.IngestLog("task status=completed request_id=review-task")
-	broker.IngestLog("workflow event=transition request_id=review-task status=waiting reason=review_threads_pending")
-	task, ok := broker.Task("review-task")
-	if !ok || task.ReviewURL != url || task.ReviewGate != "Waiting for unresolved review threads." {
-		t.Fatalf("task did not preserve review evidence and pending gate: %+v", task)
+	for _, tc := range []struct{ reason, text string }{
+		{"review_writeback_pending", "Waiting to confirm GitHub review writeback."},
+		{"review_writeback_paused", "Review writeback paused by workflow settings."},
+		{"review_threads_pending", "Waiting for unresolved review threads."},
+	} {
+		broker.IngestLog("workflow event=transition request_id=review-task status=awaiting_review reason=" + tc.reason)
+		task, ok := broker.Task("review-task")
+		if !ok || task.ReviewURL != url || task.ReviewGate != tc.text {
+			t.Fatalf("task did not preserve review evidence and pending gate: %+v", task)
+		}
 	}
 }

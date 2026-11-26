@@ -1050,7 +1050,7 @@ func TestRunBuildsReviewContextBeforeInvokingCodex(t *testing.T) {
 		{cmd: headCommitSHACommand(repoDir), res: execx.Result{Stdout: "abc123\n"}},
 	}}
 
-	api := &reviewAPIStub{t: t}
+	api := &reviewAPIStub{t: t, head: "abc123"}
 	h := New(sessionRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
 		if res, ok, err := api.handle(cmd); ok {
 			return res, err

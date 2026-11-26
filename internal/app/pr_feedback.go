@@ -61,6 +61,9 @@ func (h Harness) preparePRFeedbackTarget(ctx context.Context, cfg *config.Config
 	}
 	repoName := ref.owner + "/" + ref.name
 	urls := githubPullRequestURLPattern.FindAllString(cfg.Prompt, -1)
+	if cfg.Workflow != nil && cfg.Workflow.RepairPRURL != "" {
+		urls = []string{cfg.Workflow.RepairPRURL}
+	}
 	selector := normalizeBranchRef(cfg.BaseBranch)
 	if len(urls) > 0 {
 		selector = urls[0]
@@ -95,6 +98,9 @@ func (h Harness) preparePRFeedbackTarget(ctx context.Context, cfg *config.Config
 	}
 	if target.IsCrossRepository {
 		return "", fmt.Errorf("PR feedback target uses a fork; updating its head repository is required, refusing a replacement PR")
+	}
+	if len(urls) > 0 && githubutil.PullRequestSelector(target.URL) != githubutil.PullRequestSelector(selector) {
+		return "", fmt.Errorf("PR feedback target does not match the selected pull request")
 	}
 	if len(urls) == 0 && normalizeBranchRef(target.HeadRefName) != selector {
 		return "", fmt.Errorf("PR feedback target head does not match the selected branch")

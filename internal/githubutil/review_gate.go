@@ -43,6 +43,17 @@ type ReviewReceipt struct {
 	ReviewID     int64           `json:"reviewId"`
 	ReviewNodeID string          `json:"reviewNodeId,omitempty"`
 	URL          string          `json:"url"`
+
+	// VerifiedThreads maps each approved thread ID to its original finding fingerprint.
+	VerifiedThreads map[string]string `json:"verifiedThreads,omitempty"`
+}
+
+// PendingReviewGate allows the workflow coordinator to finish writeback after
+// the clean review receipt has been archived.
+type PendingReviewGate struct {
+	MarkReady         bool `json:"markReady,omitempty"`
+	Sanitize          bool `json:"sanitize,omitempty"`
+	ThreadsReconciled bool `json:"threadsReconciled,omitempty"`
 }
 
 func (r ReviewReceipt) Clean() bool {
@@ -117,6 +128,30 @@ func VerifyReviewMergeGate(ctx context.Context, gh ReviewCommand, receipt Review
 }
 
 func verifyReviewGate(ctx context.Context, gh ReviewCommand, receipt ReviewReceipt, requireApproval, directCLI bool) error {
+	if err := verifySubmittedCleanReview(ctx, gh, receipt, requireApproval); err != nil {
+		return err
+	}
+	return verifyReviewThreads(ctx, gh, receipt.PRURL, receipt.Head, directCLI)
+}
+
+func VerifyReviewThreads(ctx context.Context, gh ReviewCommand, prURL, head string) error {
+	return verifyReviewThreads(ctx, gh, prURL, head, false)
+}
+
+func verifyReviewThreads(ctx context.Context, gh ReviewCommand, prURL, head string, directCLI bool) error {
+	threads, err := reviewThreads(ctx, gh, prURL, head, directCLI)
+	if err != nil {
+		return err
+	}
+	for _, thread := range threads {
+		if !*thread.Resolved {
+			return ErrReviewThreadsPending
+		}
+	}
+	return nil
+}
+
+func verifySubmittedCleanReview(ctx context.Context, gh ReviewCommand, receipt ReviewReceipt, requireApproval bool) error {
 	if !receipt.Clean() {
 		return fmt.Errorf("waiting for a submitted clean review receipt")
 	}
@@ -192,42 +227,36 @@ func verifyReviewGate(ctx context.Context, gh ReviewCommand, receipt ReviewRecei
 	if requireApproval && !humanApproved {
 		return ErrReviewApprovalPending
 	}
-	threads, err := reviewThreads(ctx, gh, receipt.PRURL, receipt.Head, directCLI)
-	if err != nil {
-		return err
-	}
-	for _, thread := range threads {
-		if !*thread.Resolved {
-			return ErrReviewThreadsPending
-		}
-	}
 	return nil
 }
 
-type ReviewThread struct {
+type reviewThread struct {
 	ID       string `json:"id"`
 	Resolved *bool  `json:"isResolved"`
 	Comments struct {
 		TotalCount int `json:"totalCount"`
 		Nodes      []struct {
-			Body   string
-			Review struct {
-				ID string `json:"id"`
+			ID, Body, Path  string
+			OriginalLine    int
+			ViewerDidAuthor bool
+			Review          struct {
+				ID, Body, State, SubmittedAt string
+				ViewerDidAuthor              bool
+				Commit                       struct{ OID string }
 			} `json:"pullRequestReview"`
 		}
 	}
 }
 
-func ReviewThreads(ctx context.Context, gh ReviewCommand, prURL, head string) ([]ReviewThread, error) {
-	return reviewThreads(ctx, gh, prURL, head, false)
-}
-
-func reviewThreads(ctx context.Context, gh ReviewCommand, prURL, head string, directCLI bool) ([]ReviewThread, error) {
+func reviewThreads(ctx context.Context, gh ReviewCommand, prURL, head string, directCLI bool) ([]reviewThread, error) {
 	const query = `query($owner:String!,$repo:String!,$number:Int!,$cursor:String) {
 		repository(owner:$owner,name:$repo) { pullRequest(number:$number) {
 			state headRefOid isMergeQueueEnabled reviewThreads(first:100,after:$cursor) {
 				pageInfo { hasNextPage endCursor }
-				nodes { id isResolved comments(first:1) { totalCount nodes { body pullRequestReview { id } } } }
+				nodes { id isResolved comments(first:1) { totalCount nodes {
+					id body path originalLine viewerDidAuthor
+					pullRequestReview { id body state submittedAt viewerDidAuthor commit { oid } }
+				} } }
 			}
 		} }
 	}`
@@ -236,7 +265,7 @@ func reviewThreads(ctx context.Context, gh ReviewCommand, prURL, head string, di
 		return nil, fmt.Errorf("missing review thread target")
 	}
 	base := []string{"api", "graphql", "-f", "query=" + query, "-f", "owner=" + repo[0], "-f", "repo=" + repo[1], "-F", "number=" + PullRequestSelector(prURL)}
-	var threads []ReviewThread
+	var threads []reviewThread
 	seenCursors := map[string]bool{}
 	seenThreads := map[string]bool{}
 	cursor := ""
@@ -261,7 +290,7 @@ func reviewThreads(ctx context.Context, gh ReviewCommand, prURL, head string, di
 								HasNextPage *bool
 								EndCursor   string
 							}
-							Nodes []ReviewThread
+							Nodes []reviewThread
 						}
 					}
 				}
@@ -302,7 +331,7 @@ func reviewThreads(ctx context.Context, gh ReviewCommand, prURL, head string, di
 	}
 }
 
-func ResolveReviewThread(ctx context.Context, gh ReviewCommand, id string) error {
+func resolveReviewThread(ctx context.Context, gh ReviewCommand, id string) error {
 	const query = `mutation($id:ID!) { resolveReviewThread(input:{threadId:$id}) { thread { id isResolved } } }`
 	raw, err := gh(ctx, "api", "graphql", "-f", "query="+query, "-f", "id="+id)
 	if err != nil {

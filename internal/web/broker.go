@@ -483,6 +483,10 @@ func (b *Broker) IngestLog(line string) {
 				t.ReviewGate = "Waiting for the trusted review policy check."
 			case "review_threads_pending":
 				t.ReviewGate = "Waiting for unresolved review threads."
+			case "review_writeback_paused":
+				t.ReviewGate = "Review writeback paused by workflow settings."
+			case "review_writeback_pending":
+				t.ReviewGate = "Waiting to confirm GitHub review writeback."
 			case "changes_requested":
 				t.ReviewGate = "Waiting for requested changes."
 			case "approval_pending":
