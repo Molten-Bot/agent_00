@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/githubutil"
 )
 
 func TestOlderWorkflowJournalDoesNotTreatCleanFlagAsReceipt(t *testing.T) {
@@ -426,5 +427,78 @@ func TestThrottledIssueAdmissionReconcilesOriginalActivation(t *testing.T) {
 	runs, err = e.Runs()
 	if err != nil || len(runs) != 1 || runs[0].RequestID != "recovered-worker" || runs[0].Status != "running" || attempts != 1 {
 		t.Fatal(runs, attempts, err)
+	}
+}
+
+func TestWorkflowReviewCooldownRetainsActivationAndRechecksHeadAfterRestart(t *testing.T) {
+	t.Parallel()
+	for _, headAfterReset := range []string{"abc", "new-head"} {
+		t.Run(headAfterReset, func(t *testing.T) {
+			t.Parallel()
+			w := definition("quota-review")
+			w.Task.Kind = "review"
+			w.Trigger = Trigger{Event: "pr.opened"}
+			e, _, submissions := testEngine(t, w)
+			prURL := "https://github.com/acme/repo/pull/42"
+			now := time.Now()
+			reset := now.Add(time.Minute)
+			e.Now = func() time.Time { return now }
+			receipt := fixtureReviewReceipt(w, prURL)
+			state, err := e.load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			state.Runs = []Run{{ID: "activation", RequestID: "task", Workflow: w,
+				Item: Item{Repository: w.Repository, Kind: "pr", Number: 42}, Status: awaitingReview, PRURL: prURL,
+				Outcome: &Outcome{Status: "succeeded", ReviewReceipt: receipt, PendingReviewGate: &githubutil.PendingReviewGate{MarkReady: true}}}}
+			if err := e.save(state); err != nil {
+				t.Fatal(err)
+			}
+			head := receipt.Head
+			reads, writes := 0, 0
+			e.InspectPR = func(context.Context, string, string) (Item, error) {
+				reads++
+				return Item{Open: true, Draft: true, HeadSHA: head}, nil
+			}
+			e.FinishReview = func(_ context.Context, _ githubutil.ReviewReceipt, gate *githubutil.PendingReviewGate) error {
+				writes++
+				if writes == 1 {
+					gate.ThreadsReconciled = true
+					return &githubutil.RateLimitError{RetryAt: reset}
+				}
+				if !gate.ThreadsReconciled {
+					t.Fatal("lost review writeback checkpoint")
+				}
+				return nil
+			}
+			tick(t, e)
+			restarted := &Engine{Store: e.Store, StatePath: e.StatePath, Enabled: e.Enabled, Allowed: e.Allowed,
+				Now: e.Now, Fetch: e.Fetch, Submit: e.Submit, Status: e.Status, InspectPR: e.InspectPR, FinishReview: e.FinishReview}
+			tick(t, restarted)
+			pending, err := restarted.load()
+			if err != nil || len(pending.Runs) != 1 {
+				t.Fatalf("workflow activation lost during cooldown: %+v %v", pending, err)
+			}
+			waiting := pending.Runs[0]
+			if reads != 1 || writes != 1 || waiting.ID != "activation" || waiting.RequestID != "task" ||
+				!waiting.GitHubRetryAt.Equal(reset) || waiting.Outcome.ReviewReceipt.Head != receipt.Head {
+				t.Fatalf("cooldown changed workflow or read early: %+v reads=%d writes=%d", waiting, reads, writes)
+			}
+			now = reset
+			head = headAfterReset
+			tick(t, restarted)
+			state, err = restarted.load()
+			if err != nil || reads != 2 || *submissions != 0 {
+				t.Fatalf("resume did not recheck the same activation: %+v reads=%d submitted=%d err=%v", state, reads, *submissions, err)
+			}
+			if head == receipt.Head {
+				if writes != 2 || len(state.Runs) != 0 {
+					t.Fatalf("current head did not finish: %+v writes=%d", state.Runs, writes)
+				}
+			} else if writes != 1 || len(state.Runs) != 1 || state.Runs[0].ID != waiting.ID ||
+				state.Runs[0].Status != awaitingReview || !strings.Contains(state.Runs[0].Reason, "Head changed") {
+				t.Fatalf("stale review was reused: %+v writes=%d", state.Runs, writes)
+			}
+		})
 	}
 }

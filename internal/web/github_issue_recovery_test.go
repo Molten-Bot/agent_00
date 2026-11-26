@@ -1119,7 +1119,7 @@ func TestIssueRecoveryHonorsLabelCleanupRetryAfter(t *testing.T) {
 	}
 	s.IssueClaims = &localruntime.IssueClaimStore{Root: s.IssueClaims.Root}
 	got := latestRecoveryRecord(t, s)
-	if !got.UnlockPending || !got.NextUnlockAt.Equal(retryAt) || got.UnlockFailures != 1 ||
+	if !got.UnlockPending || !got.NextUnlockAt.Equal(retryAt) || got.UnlockFailures != waiting.UnlockFailures ||
 		!got.NextAttemptAt.Equal(waiting.NextAttemptAt) || got.Failures != waiting.Failures || got.UnlockError == "" || got.Error != waiting.Error {
 		t.Fatalf("cleanup failure changed dispatch backoff or lost Retry-After: %+v", got)
 	}
@@ -2364,5 +2364,109 @@ func TestIssuePRMetadataStoppedTaskRerunWithRoutingCorrection(t *testing.T) {
 	if policy.ResumePRURL != previous.PRURL || policy.PRAssignee != "replacement" || len(policy.PRLabels) != 1 ||
 		policy.PolicyHash != doc.Workflows[0].ExecutionPolicyHash() || policy.EventID == run.Workflow.EventID {
 		t.Fatalf("retry lost the original PR or workflow policy: %+v", policy)
+	}
+}
+
+func TestDisabledRepositoryPausesMonitorAndRetainedClaimAcrossRestart(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	s, f := recoveryServer(t)
+	reconcileOrAdmitTestIssue(ctx, s)
+	record := completeRecoveryRecord(t, s, localruntime.IssueChecksPending, 1)
+	record.State = localruntime.IssueChecksPending
+	record.PRURL = "https://github.com/acme/repo/pull/42"
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+
+	settings, err := s.ReviewSettingsStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.DisabledRepositories = []string{"https://github.com/ACME/Repo.git"}
+	s.ReviewSettingsStatus = func(context.Context) (ReviewSettingsState, error) { return settings, nil }
+	s.Broker.IngestLog("task status=completed request_id=monitored pr_url=https://github.com/acme/repo/pull/42")
+	runner := &stubPRMonitorRunner{result: execx.Result{Stdout: `{"state":"OPEN","title":"Monitored PR"}`}}
+	poll := func(server Server) {
+		t.Helper()
+		monitor := PRMergeMonitor{Broker: server.Broker, Runner: runner, Logf: t.Logf, RepositoryAllowed: server.RepositoryAllowed}
+		for range 2 {
+			monitor.pollOnce(ctx)
+			waitForHubUITest(t, time.Second, func() bool {
+				monitor.mu.Lock()
+				defer monitor.mu.Unlock()
+				return len(monitor.inFlight) == 0
+			})
+		}
+	}
+	var requests []string
+	s.GitHubIssueRunner = githubIssueRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+		requests = append(requests, strings.Join(cmd.Args, " "))
+		return f.Run(ctx, cmd)
+	})
+	if err := s.ReconcileIssueWork(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 4 || !strings.Contains(requests[0], "/git/matching-refs/tags/") ||
+		!strings.Contains(requests[1], "/git/tags/") || !strings.HasPrefix(requests[2], "issue view") ||
+		!strings.Contains(requests[3], "--method DELETE") || f.deletes != 1 {
+		t.Fatalf("expected only owned label cleanup, got %v", requests)
+	}
+
+	restarted := NewServer("", s.Broker)
+	restarted.IssueClaims = &localruntime.IssueClaimStore{Root: s.IssueClaims.Root}
+	restarted.IssueRecovery = s.IssueRecovery
+	restarted.Workflows = s.Workflows
+	restarted.GitHubIssueRunner = s.GitHubIssueRunner
+	restarted.ReviewSettingsStatus = s.ReviewSettingsStatus
+	restarted.SubmitLocalPrompt = f.submit
+	before := len(requests)
+	for _, server := range []Server{s, restarted} {
+		poll(server)
+		for range 2 {
+			if err := server.ReconcileIssueWork(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, path := range []string{"/api/github/issues?repo=acme/repo", "/api/github/issues/17?repo=acme/repo",
+			"/api/workflows/pr-options?repo=acme/repo", "/api/github/automation/retry?repo=acme/repo&number=17"} {
+			response := httptest.NewRecorder()
+			server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+			if response.Code != http.StatusForbidden {
+				t.Fatalf("%s returned %d, want 403", path, response.Code)
+			}
+		}
+	}
+	got := latestRecoveryRecord(t, restarted)
+	if got.ID != record.ID || got.RequestID != record.RequestID || got.PRURL != record.PRURL ||
+		got.State != record.State || got.LabelAdded || got.UnlockPending || len(runner.Commands()) != 0 || len(requests) != before || f.deletes != 1 {
+		t.Fatalf("disabled repository changed retained work or polled GitHub, record=%+v monitor=%d issue=%d cleanup=%d",
+			got, len(runner.Commands()), len(requests)-before, f.deletes)
+	}
+
+	settings.DisabledRepositories = nil
+	submitted := 0
+	restarted.SubmitLocalPrompt = func(_ context.Context, body []byte) (string, error) {
+		submitted++
+		var run config.Config
+		if err := json.Unmarshal(body, &run); err != nil {
+			return "", err
+		}
+		if run.GitHubIssue.Claim.ID != record.ID || run.Workflow.EventID != record.Run.Workflow.EventID {
+			t.Fatal("reenabling changed the claim or activation")
+		}
+		return record.RequestID, nil
+	}
+	if err := restarted.ReconcileIssueWork(ctx); err != nil || submitted != 1 {
+		t.Fatalf("reenabled claim resumed %d times, error=%v", submitted, err)
+	}
+	poll(restarted)
+	if len(runner.Commands()) != 2 || len(restarted.Broker.TaskList()) != 1 {
+		t.Fatalf("expected resumed polling of the same task, lookups=%d tasks=%d", len(runner.Commands()), len(restarted.Broker.TaskList()))
+	}
+	response := httptest.NewRecorder()
+	restarted.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/github/issues/17?repo=acme/repo", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("reenabled repository detail returned %d: %s", response.Code, response.Body)
 	}
 }

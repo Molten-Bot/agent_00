@@ -49,11 +49,11 @@ func (m *PRMergeMonitor) checkTaskPR(ctx context.Context, task Task) {
 	m.applyPRState(ctx, task, state, err)
 }
 
-func TestDefaultPRMergePollIntervalIsLowLatency(t *testing.T) {
+func TestDefaultPRMergePollIntervalBoundsBackgroundTraffic(t *testing.T) {
 	t.Parallel()
 
-	if defaultPRMergePollInterval > 10*time.Second {
-		t.Fatalf("defaultPRMergePollInterval = %s, want low-latency merge updates", defaultPRMergePollInterval)
+	if defaultPRMergePollInterval != time.Minute {
+		t.Fatalf("defaultPRMergePollInterval = %s, want one lookup per minute per tracked PR", defaultPRMergePollInterval)
 	}
 }
 

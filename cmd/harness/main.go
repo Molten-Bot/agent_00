@@ -350,7 +350,7 @@ func runServer(args []string) int {
 	repairHistory := &issueRepairQueue{store: &localruntime.IssueRepairStore{Root: filepath.Join(filepath.Dir(cfg.RuntimeConfigPath), "issue-repairs")}, logRoot: logRoot}
 	var wakeIssueRecovery func()
 	var verifyIssueOwnership func(context.Context, config.Config) error
-	githubCooldown := &githubutil.Cooldown{}
+	githubCooldown := &githubutil.Cooldown{Logf: daemonLogger}
 	var workflowEngine *workflow.Engine
 	var enqueueLocalRun func(reqCtx context.Context, runCfg config.Config, source string, force bool) (string, error)
 	enqueueLocalRun = func(reqCtx context.Context, runCfg config.Config, source string, force bool) (string, error) {
@@ -659,11 +659,11 @@ func runServer(args []string) int {
 				taskRunner := execx.Runner(runner)
 				if issueWork != nil {
 					verify := verifyIssueOwnership
-					if verify != nil && issueWork.record.Outcome == localruntime.IssueChecksPending {
+					if verify != nil {
 						verify = func(ctx context.Context, cfg config.Config) error {
 							err := verifyIssueOwnership(ctx, cfg)
 							var rate *githubutil.RateLimitError
-							if errors.As(err, &rate) || app.IsTransientGitHubReadError(err) {
+							if errors.As(err, &rate) || (issueWork.record.Outcome == localruntime.IssueChecksPending && app.IsTransientGitHubReadError(err)) {
 								return fmt.Errorf("%w: %w", app.ErrChecksUnavailable, err)
 							}
 							return err
@@ -688,7 +688,7 @@ func runServer(args []string) int {
 				taskWorkspace := diskRequest.Workspace
 				taskWorkspace.Root = workspaceRoot
 				canRetryWorkspace := diskRequest.RetryRoot == "" && canRetryTaskWorkspace(diskRequest.Workspace)
-				outcome := runLocalTask(runCtx, taskRunner, daemonLogger, "local", requestID, runCfg, taskReviewPasses(runCfg), taskHandle, signingSnapshot, monitorBroker, taskWorkspace, func(runDir string) {
+				outcome := runLocalTask(context.WithValue(runCtx, githubCooldownContextKey{}, githubCooldown), taskRunner, daemonLogger, "local", requestID, runCfg, taskReviewPasses(runCfg), taskHandle, signingSnapshot, monitorBroker, taskWorkspace, func(runDir string) {
 					recordLocalTaskDiskUsage(diskHistory, diskKey, requestID, runDir, daemonLogger)
 				}, canRetryWorkspace)
 				if taskHandle != nil {
@@ -722,7 +722,8 @@ func runServer(args []string) int {
 				if outcome.Result.Err != nil {
 					reviewOutcome.Reason = outcome.Result.Err.Error()
 				}
-				if outcome.State == "error" && (errors.Is(outcome.Result.Err, app.ErrReviewPending) || errors.Is(outcome.Result.Err, app.ErrReviewHeadChanged)) {
+				var rate *githubutil.RateLimitError
+				if outcome.State == "error" && (errors.Is(outcome.Result.Err, app.ErrReviewPending) || errors.Is(outcome.Result.Err, app.ErrReviewHeadChanged) || errors.As(outcome.Result.Err, &rate)) {
 					reviewOutcome.Status = workflow.OutcomeReviewPending
 				}
 				checksInterrupted := issueWork != nil && issueWork.record.Outcome == localruntime.IssueChecksPending &&
@@ -997,12 +998,13 @@ func runServer(args []string) int {
 			return app.ExitSuccess
 		}
 		prMonitor := &web.PRMergeMonitor{
-			Cooldown:       githubCooldown,
-			Runner:         runner,
-			Broker:         monitorBroker,
-			Logf:           daemonLogger,
-			CleanupTask:    cleanupTaskLogs,
-			MemoryPressure: memoryPressure,
+			Cooldown:          githubCooldown,
+			Runner:            runner,
+			Broker:            monitorBroker,
+			Logf:              daemonLogger,
+			CleanupTask:       cleanupTaskLogs,
+			MemoryPressure:    memoryPressure,
+			RepositoryAllowed: uiServer.RepositoryAllowed,
 		}
 		go func() {
 			if err := prMonitor.Run(ctx); err != nil {
@@ -1374,6 +1376,8 @@ func validatedSigningSnapshotForTask(
 	}
 }
 
+type githubCooldownContextKey struct{}
+
 func runLocalTask(
 	ctx context.Context,
 	runner execx.Runner,
@@ -1400,6 +1404,10 @@ func runLocalTask(
 
 	h := app.New(runner)
 	h.Workspace = taskWorkspace
+	if cooldown, ok := ctx.Value(githubCooldownContextKey{}).(*githubutil.Cooldown); ok {
+		h.GitHubCooldown = cooldown
+		h.WaitForGitHub = true
+	}
 	checkoutComplete := false
 	h.OnCheckout = func() { checkoutComplete = true }
 	if broker != nil {
@@ -1488,9 +1496,11 @@ func runLocalTask(
 	if issue && errors.As(context.Cause(ctx), &stepTimeout) && stepTimeout.Step == "checks" {
 		res.Err = errors.Join(app.ErrChecksUnavailable, res.Err)
 	}
-	if issue && taskCtx.Err() == nil && errors.Is(res.Err, app.ErrChecksUnavailable) {
-		res.PRURL = stringsx.FirstNonEmpty(res.PRURL, issueWork.record.PRURL)
-		if res.PRURL != "" {
+	var rate *githubutil.RateLimitError
+	if issue && taskCtx.Err() == nil {
+		prURL := stringsx.FirstNonEmpty(res.PRURL, issueWork.record.PRURL)
+		if errors.As(res.Err, &rate) || (prURL != "" && errors.Is(res.Err, app.ErrChecksUnavailable)) {
+			res.PRURL = prURL
 			logf("task status=queued request_id=%s action=wait_for_github_checks pr_url=%s", requestID, res.PRURL)
 			return localTaskOutcome{State: localruntime.IssueChecksPending, Result: res}
 		}

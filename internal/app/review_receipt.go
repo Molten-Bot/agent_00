@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/config"
+	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/githubutil"
 	"github.com/Molten-Bot/agent_00/internal/stringsx"
 )
@@ -191,6 +192,37 @@ func (h Harness) publishSubmittedReview(
 			}
 			// A rate-limit rejection explicitly confirms the write did not
 			// happen. Other errors can follow a committed review.
+			var rate *githubutil.RateLimitError
+			if errors.As(err, &rate) {
+				if rate.Rejected {
+					if h.WaitForGitHub && !h.ResumeIssueWorkspace {
+						h.logf("stage=review status=waiting action=github_rate_limit retry_at=%s", rate.RetryAt.UTC().Format(time.RFC3339))
+						if waitErr := h.GitHubCooldown.Wait(ctx, rate.RetryAt); waitErr != nil {
+							return receipt, errors.Join(err, waitErr, os.Remove(journal))
+						}
+						raw, readErr := gh(ctx, "pr", "view", prURL, "--json", "headRefOid,state")
+						if readErr != nil {
+							return receipt, errors.Join(readErr, os.Remove(journal))
+						}
+						var current prStateView
+						if decodeErr := json.Unmarshal([]byte(raw), &current); decodeErr != nil {
+							return receipt, errors.Join(decodeErr, os.Remove(journal))
+						}
+						if current.State == "MERGED" {
+							return receipt, errors.Join(githubutil.ErrReviewInterrupted, os.Remove(journal))
+						}
+						if current.State != "OPEN" || current.HeadRefOID != head {
+							return receipt, errors.Join(ErrReviewHeadChanged, os.Remove(journal))
+						}
+						attempt--
+						continue
+					}
+					// This intent has never been accepted. A future run may
+					// create it again once its current head has been verified.
+					return receipt, errors.Join(err, os.Remove(journal))
+				}
+				break
+			}
 			if attempt == 2 || !strings.Contains(err.Error(), "HTTP 429") || h.Sleep == nil {
 				break
 			}
@@ -204,6 +236,11 @@ func (h Harness) publishSubmittedReview(
 		// Never post again until GitHub acknowledges the outcome.
 		for attempt := 0; attempt < 3; attempt++ {
 			reviews, err := githubutil.ListSubmittedReviews(ctx, gh, prURL)
+			var rate *githubutil.RateLimitError
+			if errors.As(err, &rate) {
+				writeErr = errors.Join(writeErr, err)
+				break
+			}
 			if err == nil {
 				for _, candidate := range reviews {
 					if candidate.Matches(head, receipt.Marker) {
@@ -287,10 +324,22 @@ func (h Harness) completeCleanReviewGate(ctx context.Context, cfg config.Config,
 		repo.PendingReviewGate = &gate
 		return nil
 	}
-	err := h.resumeReviewGate(ctx, *repo, receipt, &gate)
-	if cfg.Workflow != nil && (errors.Is(err, githubutil.ErrReviewThreadsPending) || errors.Is(err, githubutil.ErrReviewChangesRequested)) {
+	// A pause within the gate would retain reads made before the cooldown.
+	// Recheck the live head and review evidence as a unit after the wait.
+	gateHarness := h
+	gateHarness.WaitForGitHub = false
+	err := gateHarness.resumeReviewGate(ctx, *repo, receipt, &gate)
+	var rate *githubutil.RateLimitError
+	if cfg.Workflow != nil && (errors.As(err, &rate) || errors.Is(err, githubutil.ErrReviewThreadsPending) || errors.Is(err, githubutil.ErrReviewChangesRequested)) {
 		repo.PendingReviewGate = &gate
 		return nil
+	}
+	for h.WaitForGitHub && !h.ResumeIssueWorkspace && errors.As(err, &rate) {
+		h.logf("stage=review status=waiting action=github_rate_limit retry_at=%s", rate.RetryAt.UTC().Format(time.RFC3339))
+		if waitErr := h.GitHubCooldown.Wait(ctx, rate.RetryAt); waitErr != nil {
+			return errors.Join(err, waitErr)
+		}
+		err = gateHarness.resumeReviewGate(ctx, *repo, receipt, &gate)
 	}
 	return err
 }
@@ -300,7 +349,7 @@ func (h Harness) ResumeReviewGate(ctx context.Context, receipt githubutil.Review
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 	repo := repoWorkspace{PRURL: receipt.PRURL, ReviewReceipt: &receipt, ReviewSanitize: gate.Sanitize}
-	return h.resumeReviewGate(ctx, repo, receipt, gate)
+	return h.resumeReviewGate(githubutil.WithCaller(ctx, "workflow_review"), repo, receipt, gate)
 }
 
 func (h Harness) resumeReviewGate(ctx context.Context, repo repoWorkspace, receipt githubutil.ReviewReceipt, gate *githubutil.PendingReviewGate) error {
@@ -320,6 +369,10 @@ func (h Harness) resumeReviewGate(ctx context.Context, repo repoWorkspace, recei
 }
 
 func (h Harness) reviewPublicationError(ctx context.Context, repo *repoWorkspace, pass, total int, err error) error {
+	var rate *githubutil.RateLimitError
+	if errors.As(err, &rate) {
+		return err
+	}
 	if errors.Is(err, githubutil.ErrReviewInterrupted) || h.finalReviewPullRequestMerged(ctx, *repo, pass, total) {
 		repo.ReviewInterrupted = true
 		if errors.Is(err, githubutil.ErrReviewInterrupted) {
@@ -355,7 +408,13 @@ func (h Harness) finishReviewGate(ctx context.Context, repo repoWorkspace, recei
 	checkGH := func(ctx context.Context, args ...string) (string, error) {
 		cmd := ghCommand(repo.Dir, args...)
 		cmd.Env = append(environWithoutKeys(os.Environ(), reviewCheckTokenEnv, "GH_TOKEN", "GITHUB_TOKEN", "GH_DEBUG"), "GH_TOKEN="+token)
-		res, err := h.runCommand(ctx, "review", cmd)
+		var res execx.Result
+		var err error
+		if h.GitHubCooldown.TracksRequests() {
+			res, err = h.runGitHubCommand(githubutil.WithCaller(ctx, "review_installation"), h.GitHubCooldown.ReviewInstallation(), "review", cmd)
+		} else {
+			res, err = h.runCommand(ctx, "review", cmd)
+		}
 		return res.Stdout, err
 	}
 	if err := githubutil.PublishReviewCheck(ctx, checkGH, appID, receipt); err != nil {

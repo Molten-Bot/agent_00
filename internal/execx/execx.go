@@ -28,6 +28,9 @@ type Command struct {
 	StdinFile *os.File
 	// StdoutWriter receives raw stdout in place of capturing or streaming it.
 	StdoutWriter io.Writer
+	// OmitFailureDetails keeps arguments and buffered output out of errors.
+	// The caller can extract a diagnostic after stripping sensitive output.
+	OmitFailureDetails bool
 	// Started persists process identity before execution is acknowledged. A
 	// failure terminates the process group. Exited runs after Wait completes.
 	Started     func(int) error
@@ -137,6 +140,9 @@ func runWithStream(ctx context.Context, cmd Command, handler StreamLineHandler) 
 	stderrEmitter.Flush()
 	res := Result{Stdout: stdout.String(), Stderr: stderr.String()}
 	if err != nil {
+		if cmd.OmitFailureDetails {
+			return res, fmt.Errorf("run %s: %w", cmd.Name, err)
+		}
 		if detail := commandFailureDetail(res); detail != "" {
 			return res, fmt.Errorf("run %s %v: %w (%s)", cmd.Name, cmd.Args, err, detail)
 		}

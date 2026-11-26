@@ -158,18 +158,19 @@ func (w Definition) ExecutionPolicyHash() string {
 }
 
 type Run struct {
-	Outcome   *Outcome   `json:"outcome,omitempty"`
-	ID        string     `json:"id"`
-	RetryOf   string     `json:"retryOf,omitempty"`
-	Workflow  Definition `json:"workflow"`
-	Item      Item       `json:"item"`
-	RequestID string     `json:"requestId,omitempty"`
-	Status    string     `json:"status"`
-	Reason    string     `json:"reason"`
-	PRURL     string     `json:"prUrl,omitempty"`
-	MergeHead string     `json:"mergeHead,omitempty"`
-	StartedAt *time.Time `json:"startedAt,omitempty"`
-	UpdatedAt time.Time  `json:"updatedAt"`
+	Outcome       *Outcome   `json:"outcome,omitempty"`
+	ID            string     `json:"id"`
+	RetryOf       string     `json:"retryOf,omitempty"`
+	Workflow      Definition `json:"workflow"`
+	Item          Item       `json:"item"`
+	RequestID     string     `json:"requestId,omitempty"`
+	Status        string     `json:"status"`
+	Reason        string     `json:"reason"`
+	PRURL         string     `json:"prUrl,omitempty"`
+	MergeHead     string     `json:"mergeHead,omitempty"`
+	StartedAt     *time.Time `json:"startedAt,omitempty"`
+	UpdatedAt     time.Time  `json:"updatedAt"`
+	GitHubRetryAt time.Time  `json:"githubRetryAt,omitzero"`
 }
 type observation struct {
 	Fingerprint string `json:"fingerprint"`
@@ -319,6 +320,9 @@ func (e *Engine) logRun(r Run, event string) {
 	if strings.HasPrefix(r.Reason, "Review writeback pending:") {
 		reason = "review_writeback_pending"
 	}
+	if !r.GitHubRetryAt.IsZero() {
+		reason = "github_rate_limit"
+	}
 	durationMS := "unknown"
 	if terminal(r.Status) && r.StartedAt != nil && !r.StartedAt.IsZero() &&
 		!r.UpdatedAt.IsZero() && !r.UpdatedAt.Before(*r.StartedAt) {
@@ -341,7 +345,7 @@ func (e *Engine) Preview(ctx context.Context, w Definition) ([]Decision, error) 
 	}
 	var needs ScanNeeds
 	needs.include(w)
-	items, err := e.Fetch(ctx, w.Repository, needs)
+	items, err := e.Fetch(githubutil.WithCaller(ctx, "workflow_preview"), w.Repository, needs)
 	kind := strings.Split(w.Trigger.Event, ".")[0]
 	if !usableSnapshot(kind, err) {
 		return nil, err
@@ -381,7 +385,12 @@ func (e *Engine) Run(ctx context.Context) {
 	wake := e.wakeChannel()
 	for ctx.Err() == nil {
 		if err := e.Tick(ctx); err != nil && e.Logf != nil {
-			e.Logf("workflow status=error err=%q", err)
+			var rate *githubutil.RateLimitError
+			if errors.As(err, &rate) {
+				e.Logf("workflow status=waiting reason=github_rate_limit retry_at=%s", rate.RetryAt.UTC().Format(time.RFC3339))
+			} else {
+				e.Logf("workflow status=error err=%q", err)
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -698,7 +707,21 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		}
 		return nil
 	}
+	waitForQuota := func(err error) bool {
+		var rate *githubutil.RateLimitError
+		if !errors.As(err, &rate) {
+			return false
+		}
+		r.GitHubRetryAt = rate.RetryAt
+		r.Reason = "Waiting for GitHub quota. " + rate.Error()
+		return true
+	}
 	active := featureEnabled && exists && w.Enabled && e.Allowed(w.Repository) && e.Allowed(r.Item.Repository)
+	if !e.now().Before(r.GitHubRetryAt) {
+		r.GitHubRetryAt = time.Time{}
+	} else if active {
+		return nil
+	}
 	if r.Status == "pending_action" {
 		if !active || !e.StillEnabled(r.Workflow) {
 			r.Status, r.Reason = "completed", "Workflow changed or was disabled before queued repair"
@@ -810,6 +833,7 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		}
 		i, err := e.InspectPR(ctx, r.Item.Repository, r.PRURL)
 		if err != nil {
+			waitForQuota(err)
 			return errors.Join(err, finish())
 		}
 		if !i.Open {
@@ -840,6 +864,7 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 			r.Reason = "Waiting for unresolved review threads"
 		case errors.Is(err, githubutil.ErrReviewChangesRequested):
 			r.Reason = "Waiting for requested changes"
+		case waitForQuota(err):
 		case err != nil:
 			r.Reason = "Review writeback pending: " + err.Error()
 		default:
@@ -870,6 +895,7 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		reviewRequired := r.requiresReview() || appID > 0
 		i, inspectErr := e.InspectPR(ctx, r.Item.Repository, r.PRURL)
 		if inspectErr != nil {
+			waitForQuota(inspectErr)
 			return errors.Join(inspectErr, finish())
 		}
 		if i.Open && reviewRequired {
@@ -932,7 +958,9 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		} else if errors.Is(mergeErr, githubutil.ErrReviewApprovalPending) {
 			r.Reason = "Waiting for human approval"
 		} else if mergeErr != nil {
-			r.Reason = "Merge blocked: " + mergeErr.Error()
+			if !waitForQuota(mergeErr) {
+				r.Reason = "Merge blocked: " + mergeErr.Error()
+			}
 		} else {
 			r.Status = "merged"
 			r.Reason = "Pull request merged"

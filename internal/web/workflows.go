@@ -15,7 +15,7 @@ import (
 )
 
 func workflowError(w http.ResponseWriter, status int, err error) {
-	writeJSON(w, status, map[string]any{"error": err.Error()})
+	writeJSON(w, githubErrorStatus(w, status, err), map[string]any{"error": err.Error()})
 }
 func (s Server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodGet, http.MethodPut) {

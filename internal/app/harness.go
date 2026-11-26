@@ -241,6 +241,7 @@ type Harness struct {
 	// IssueChecksPRURL resumes verification on the already published issue PR.
 	IssueChecksPRURL string
 	GitHubCooldown   *githubutil.Cooldown
+	WaitForGitHub    bool
 	// SaveIssuePublicationReady checkpoints agent acceptance before publication.
 	SaveIssuePublicationReady func(ready bool, verification string) error
 
@@ -3227,6 +3228,32 @@ func (h Harness) createPullRequestURL(
 	for attempt := 1; ; attempt++ {
 		prRes, err := h.runCommand(ctx, "pr", cmd)
 		if err != nil {
+			var rate *githubutil.RateLimitError
+			if errors.As(err, &rate) {
+				// An issue worker can release its slot and recover the retained claim.
+				// Other workers wait here, then look for an accepted creation before retrying.
+				if h.ResumeIssueWorkspace || !h.WaitForGitHub || (!rate.Rejected && (!createWorkBranch || repo.BaseBranch == "")) {
+					return "", err
+				}
+				h.logf("stage=pr status=waiting action=github_rate_limit retry_at=%s", rate.RetryAt.UTC().Format(time.RFC3339))
+				if waitErr := h.GitHubCooldown.Wait(ctx, rate.RetryAt); waitErr != nil {
+					return "", errors.Join(err, waitErr)
+				}
+				if rate.Rejected {
+					continue
+				}
+				pr, lookupErr := h.lookupPRByRefs(ctx, repo, targetRepo, repo.BaseBranch, "open")
+				if lookupErr != nil {
+					return "", errors.Join(err, lookupErr)
+				}
+				if pr.URL != "" {
+					if h.OnPRTitle != nil && pr.Title != "" {
+						h.OnPRTitle(pr.URL, pr.Title)
+					}
+					return pr.URL, nil
+				}
+				continue
+			}
 			// The runner's wrapper includes command arguments. Use subprocess
 			// output and the exit error to classify and report creation failures.
 			if cause := errors.Unwrap(err); cause != nil {
@@ -5465,6 +5492,22 @@ func (h Harness) autoMergeCleanReview(ctx context.Context, repo repoWorkspace, m
 	if repo.ReviewReceipt == nil {
 		return fmt.Errorf("waiting for a submitted clean review receipt")
 	}
+	mergeHarness := h
+	mergeHarness.WaitForGitHub = false
+	for {
+		err := mergeHarness.mergeCleanReviewOnHead(ctx, repo, method, sanitize)
+		var rate *githubutil.RateLimitError
+		if !h.WaitForGitHub || h.ResumeIssueWorkspace || !errors.As(err, &rate) {
+			return err
+		}
+		h.logf("stage=review status=waiting action=github_rate_limit retry_at=%s", rate.RetryAt.UTC().Format(time.RFC3339))
+		if waitErr := h.GitHubCooldown.Wait(ctx, rate.RetryAt); waitErr != nil {
+			return errors.Join(err, waitErr)
+		}
+	}
+}
+
+func (h Harness) mergeCleanReviewOnHead(ctx context.Context, repo repoWorkspace, method string, sanitize bool) error {
 	receipt := *repo.ReviewReceipt
 	gh := h.reviewGH(repo.Dir, sanitize)
 	if err := githubutil.VerifyReviewedHeadCI(ctx, gh, receipt); err != nil {
@@ -5908,7 +5951,8 @@ func (h Harness) fail(exitCode int, stage string, err error, runDir string) Resu
 
 func (h Harness) failWithRepos(exitCode int, stage string, err error, runDir string, repos []repoWorkspace) Result {
 	status := "error"
-	if errors.Is(err, ErrChecksUnavailable) {
+	var rate *githubutil.RateLimitError
+	if errors.Is(err, ErrChecksUnavailable) || errors.As(err, &rate) {
 		status = "waiting"
 	}
 	h.logf("stage=%s status=%s err=%q", stage, status, err)
@@ -5961,7 +6005,8 @@ func (h Harness) runCommandUnchecked(ctx context.Context, phase string, cmd exec
 	// gh api --include can emit sensitive HTTP headers. The GitHub cooldown
 	// reads them from the buffered response and returns only the body.
 	includesHeaders := cmd.Name == "gh" && len(cmd.Args) >= 2 && cmd.Args[0] == "api" && cmd.Args[1] == "--include"
-	if streamRunner, ok := h.Runner.(execx.StreamRunner); ok && !includesHeaders {
+	trace := githubutil.HasCLITrace(ctx) && cmd.Name == "gh"
+	if streamRunner, ok := h.Runner.(execx.StreamRunner); ok && !includesHeaders && !trace {
 		var stdoutBuf strings.Builder
 		var stderrBuf strings.Builder
 		streamOnLine := func(stream, line string) {
@@ -5981,8 +6026,9 @@ func (h Harness) runCommandUnchecked(ctx context.Context, phase string, cmd exec
 	} else {
 		res, err = h.Runner.Run(ctx, cmd)
 		output := res
-		if includesHeaders {
+		if includesHeaders || trace {
 			output.Stdout = ""
+			output.Stderr = ""
 		}
 		emitBufferedOutput(output, onLine)
 	}
@@ -6030,17 +6076,60 @@ func (h Harness) runPRChecksAnyWatch(ctx context.Context, repoDir, prURL string)
 }
 
 func (h Harness) runPRChecksWatchCommand(ctx context.Context, cmd execx.Command) (execx.Result, error) {
-	timeout := h.prChecksWatchTimeout()
-	if timeout <= 0 {
-		return h.runCheckQuery(ctx, "checks", cmd, 0)
+	waitForReset := h.WaitForGitHub && !h.ResumeIssueWorkspace
+	h.WaitForGitHub = false
+	for {
+		res, err := h.watchPRChecks(ctx, cmd)
+		var rate *githubutil.RateLimitError
+		if !waitForReset || !errors.As(err, &rate) {
+			return res, err
+		}
+		h.logf("stage=checks status=waiting action=github_rate_limit retry_at=%s", rate.RetryAt.UTC().Format(time.RFC3339))
+		if waitErr := h.GitHubCooldown.Wait(ctx, rate.RetryAt); waitErr != nil {
+			return res, errors.Join(err, waitErr)
+		}
 	}
-	watchCtx, cancel := context.WithTimeoutCause(ctx, timeout, errPRChecksWatchTimeout)
-	defer cancel()
-	res, err := h.runCheckQuery(watchCtx, "checks", cmd, 0)
+}
+
+func (h Harness) watchPRChecks(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+	watchCtx := ctx
+	if timeout := h.prChecksWatchTimeout(); timeout > 0 {
+		var cancel context.CancelFunc
+		watchCtx, cancel = context.WithTimeoutCause(ctx, timeout, errPRChecksWatchTimeout)
+		defer cancel()
+	}
+	var res execx.Result
+	var err error
+	if h.GitHubCooldown.TracksRequests() {
+		// Give each check read its own permit so gh cannot keep polling
+		// internally after another client has observed a cooldown.
+		cmd.Args = cmd.Args[:3]
+		res, err = h.pollPRChecks(watchCtx, cmd)
+	} else {
+		res, err = h.runCheckQuery(watchCtx, "checks", cmd, 0)
+	}
 	if errors.Is(context.Cause(watchCtx), errPRChecksWatchTimeout) {
 		return res, errPRChecksWatchTimeout
 	}
 	return res, err
+}
+
+func (h Harness) pollPRChecks(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+	sleep := h.Sleep
+	if sleep == nil {
+		sleep = sleepWithContext
+	}
+	for {
+		res, err := h.runCheckQuery(ctx, "checks", cmd, checkQueryTimeout)
+		var exit interface{ ExitCode() int }
+		// gh pr checks exits 8 while checks are still pending.
+		if !errors.As(err, &exit) || exit.ExitCode() != 8 {
+			return res, err
+		}
+		if err := sleep(ctx, prChecksWatchIntervalSeconds*time.Second); err != nil {
+			return res, err
+		}
+	}
 }
 
 func (h Harness) prChecksWatchTimeout() time.Duration {

@@ -186,9 +186,15 @@ func (e *issueExecution) finish(ctx context.Context, state string, result app.Re
 			if result.PRURL != "" {
 				record.PRURL = result.PRURL
 			}
-			record.Failures++
-			record.NextAttemptAt = e.policy.RetryDeadline(stoppedAt, record.ID, record.Failures, result.Err)
-			record.Error = fmt.Sprintf("Waiting for GitHub check verification. Retry after %s.", record.NextAttemptAt.UTC().Format(time.RFC3339))
+			var rate *githubutil.RateLimitError
+			if errors.As(result.Err, &rate) {
+				record.NextAttemptAt = rate.RetryAt
+				record.Error = fmt.Sprintf("Waiting for GitHub quota. Retry after %s.", rate.RetryAt.UTC().Format(time.RFC3339))
+			} else {
+				record.Failures++
+				record.NextAttemptAt = e.policy.RetryDeadline(stoppedAt, record.ID, record.Failures, result.Err)
+				record.Error = fmt.Sprintf("Waiting for GitHub check verification. Retry after %s.", record.NextAttemptAt.UTC().Format(time.RFC3339))
+			}
 		}
 		if journalErr != nil || ((state == "error" || state == "interrupted") &&
 			(workspace.IsDiskFull(result.Err) || errors.Is(result.Err, workspace.ErrUnsuitableStorage))) {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/githubutil"
 )
 
 const githubIssueCommandTimeout = 30 * time.Second
@@ -19,7 +20,7 @@ func (s Server) runIssueGH(ctx context.Context, cmd execx.Command) (execx.Result
 	}
 	ctx, cancel := context.WithTimeout(ctx, githubIssueCommandTimeout)
 	defer cancel()
-	return s.GitHubCooldown.Run(ctx, s.GitHubIssueRunner, cmd, s.IssueRecovery != nil)
+	return s.GitHubCooldown.Run(githubutil.WithDefaultCaller(ctx, "issue_admission"), s.GitHubIssueRunner, cmd, s.IssueRecovery != nil)
 }
 
 func (s Server) issueGitHubLogin(ctx context.Context) (string, error) {

@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/githubutil"
 )
 
 func (s Server) handleWorkflowPROptions(w http.ResponseWriter, r *http.Request) {
@@ -21,12 +23,22 @@ func (s Server) handleWorkflowPROptions(w http.ResponseWriter, r *http.Request) 
 		workflowError(w, http.StatusBadRequest, fmt.Errorf("repo must be owner/name"))
 		return
 	}
-	assignees, err := s.workflowPROptionNames(r.Context(), repo, "assignees", "login")
+	allowed, err := s.RepositoryAllowed(r.Context(), repo)
+	if err != nil {
+		workflowError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !allowed {
+		workflowError(w, http.StatusForbidden, errors.New("repository is disabled in Settings"))
+		return
+	}
+	ctx := githubutil.WithCaller(r.Context(), "workflow_options")
+	assignees, err := s.workflowPROptionNames(ctx, repo, "assignees", "login")
 	if err != nil {
 		workflowError(w, http.StatusBadGateway, err)
 		return
 	}
-	labels, err := s.workflowPROptionNames(r.Context(), repo, "labels", "name")
+	labels, err := s.workflowPROptionNames(ctx, repo, "labels", "name")
 	if err != nil {
 		workflowError(w, http.StatusBadGateway, err)
 		return

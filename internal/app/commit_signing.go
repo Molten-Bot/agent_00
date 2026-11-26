@@ -9,10 +9,21 @@ import (
 	"strings"
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/githubutil"
 	"github.com/Molten-Bot/agent_00/internal/gitsigning"
 )
 
 func (h Harness) runCommand(ctx context.Context, phase string, cmd execx.Command) (execx.Result, error) {
+	if cmd.Name == "gh" && h.GitHubCooldown.TracksRequests() {
+		switch phase {
+		case "checks", "issue", "pr", "review", "workflow":
+			return h.runGitHubCommand(githubutil.WithDefaultCaller(ctx, "worker_"+phase), h.GitHubCooldown, phase, cmd)
+		case "auth":
+			if len(cmd.Args) > 1 && cmd.Args[1] == "status" {
+				return h.runGitHubCommand(githubutil.WithDefaultCaller(ctx, "worker_auth"), h.GitHubCooldown, phase, cmd)
+			}
+		}
+	}
 	if h.Signing == nil || cmd.Name != "git" {
 		return h.runCommandUnchecked(ctx, phase, cmd)
 	}

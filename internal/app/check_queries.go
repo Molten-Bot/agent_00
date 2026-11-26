@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -24,7 +25,66 @@ type checkQueryRunner struct {
 }
 
 func (r checkQueryRunner) Run(ctx context.Context, cmd execx.Command) (execx.Result, error) {
-	return r.h.runCommand(ctx, r.phase, cmd)
+	return r.h.runCommandUnchecked(ctx, r.phase, cmd)
+}
+
+func (h Harness) runGitHubCommand(ctx context.Context, cooldown *githubutil.Cooldown, phase string, cmd execx.Command) (execx.Result, error) {
+	for {
+		res, err := cooldown.Run(ctx, checkQueryRunner{h, phase}, cmd, false)
+		var rate *githubutil.RateLimitError
+		if !h.WaitForGitHub || !errors.As(err, &rate) ||
+			(!isGitHubReadCommand(cmd) && (!rate.Rejected || !isIndependentGitHubWrite(cmd))) {
+			return res, err
+		}
+		h.logf("stage=%s status=waiting action=github_rate_limit retry_at=%s", phase, rate.RetryAt.UTC().Format(time.RFC3339))
+		if err := cooldown.Wait(ctx, rate.RetryAt); err != nil {
+			return res, errors.Join(rate, err)
+		}
+	}
+}
+
+func isGitHubReadCommand(cmd execx.Command) bool {
+	if len(cmd.Args) < 2 {
+		return false
+	}
+	switch cmd.Args[0] {
+	case "auth":
+		return cmd.Args[1] == "status"
+	case "api":
+		// Review writes require fresh head evidence before retrying.
+		if index := slices.Index(cmd.Args, "--method"); index >= 0 && index+1 < len(cmd.Args) {
+			return cmd.Args[index+1] == "GET"
+		}
+		if slices.Contains(cmd.Args, "graphql") {
+			return slices.ContainsFunc(cmd.Args, func(arg string) bool {
+				query, ok := strings.CutPrefix(arg, "query=")
+				query = strings.TrimSpace(query)
+				return ok && (strings.HasPrefix(query, "query") || strings.HasPrefix(query, "{"))
+			})
+		}
+		return !slices.Contains(cmd.Args, "-f") && !slices.Contains(cmd.Args, "-F") && !slices.Contains(cmd.Args, "--input")
+	case "issue", "pr", "repo", "run", "workflow":
+		switch cmd.Args[1] {
+		case "view", "list", "checks", "diff":
+			return true
+		}
+	}
+	return false
+}
+
+// These writes do not depend on previously read review evidence. A definite
+// rejection allows retry without repeating a successful write.
+func isIndependentGitHubWrite(cmd execx.Command) bool {
+	switch {
+	case len(cmd.Args) >= 4 && slices.Equal(cmd.Args[:3], []string{"api", "--method", "POST"}):
+		return strings.HasSuffix(cmd.Args[3], "/labels") || strings.HasSuffix(cmd.Args[3], "/assignees")
+	case len(cmd.Args) >= 2:
+		switch cmd.Args[0] + " " + cmd.Args[1] {
+		case "issue edit", "pr draft", "pr edit", "pr comment", "repo fork", "workflow run":
+			return true
+		}
+	}
+	return false
 }
 
 func (h Harness) runCheckQuery(ctx context.Context, phase string, cmd execx.Command, timeout time.Duration) (execx.Result, error) {
@@ -41,13 +101,22 @@ func (h Harness) runCheckQuery(ctx context.Context, phase string, cmd execx.Comm
 		if timeout > 0 {
 			queryCtx, cancel = context.WithTimeout(ctx, timeout)
 		}
-		res, err := h.GitHubCooldown.Run(queryCtx, checkQueryRunner{h, phase}, cmd, h.ResumeIssueWorkspace)
+		res, err := h.GitHubCooldown.Run(githubutil.WithCaller(queryCtx, "worker_checks"), checkQueryRunner{h, phase}, cmd, h.ResumeIssueWorkspace)
 		cancel()
 		if ctx.Err() != nil {
 			return res, ctx.Err()
 		}
 		var rate *githubutil.RateLimitError
 		if errors.As(err, &rate) {
+			if h.WaitForGitHub && !h.ResumeIssueWorkspace {
+				h.logf("stage=%s status=waiting action=github_rate_limit retry_at=%s", phase, rate.RetryAt.UTC().Format(time.RFC3339))
+				if waitErr := h.GitHubCooldown.Wait(ctx, rate.RetryAt); waitErr == nil {
+					attempt = -1
+					continue
+				} else {
+					err = errors.Join(err, waitErr)
+				}
+			}
 			// Let recovery schedule the next read. A server retry deadline can
 			// outlive this worker's entire check budget.
 			return res, fmt.Errorf("%w: %w", ErrChecksUnavailable, err)
