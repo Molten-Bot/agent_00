@@ -349,6 +349,7 @@ func (s Server) Handler() http.Handler {
 	mux.HandleFunc("/api/github/issues/", s.handleGitHubIssues)
 	mux.HandleFunc("/api/review-settings", s.handleReviewSettings)
 	mux.HandleFunc("/api/workflows", s.handleWorkflows)
+	mux.HandleFunc("/api/workflows/pr-options", s.handleWorkflowPROptions)
 	mux.HandleFunc("/api/workflows/preview", s.handleWorkflowPreview)
 	mux.HandleFunc("/api/workflows/schedules", s.handleWorkflowSchedules)
 	mux.Handle("/api/workflows/scan", http.NewCrossOriginProtection().Handler(http.HandlerFunc(s.handleWorkflowScan)))

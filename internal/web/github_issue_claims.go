@@ -876,6 +876,7 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		}
 	}
 	branchRecovery := requiresIssueBranchRecovery(previous)
+	metadataRetry := app.IsWorkflowPRMetadataFailure(previous.FailureDetail())
 	var verificationPRURL string
 	if s.IssueRecovery != nil && remote.Claim.ID != "" {
 		claimedIssue := &config.GitHubIssueConfig{Repository: repository, Number: number, Claim: &remote.Claim}
@@ -886,7 +887,13 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		if err := pr.recoveryBlocker(claimedIssue); err != nil {
 			return issueRetryResult{}, http.StatusConflict, err
 		}
-		if previous.Version == 2 && previous.InstanceID == s.instanceID() && !branchRecovery && pr.resumesVerification(previous) {
+		if metadataRetry {
+			if pr.URL == "" || !strings.EqualFold(pr.URL, previous.PRURL) ||
+				pr.Closed || pr.Merged || previous.InstanceID != s.instanceID() {
+				return issueRetryResult{}, http.StatusConflict, fmt.Errorf("PR metadata retry requires the original pull request and its local claim")
+			}
+			verificationPRURL = pr.URL
+		} else if previous.Version == 2 && previous.InstanceID == s.instanceID() && !branchRecovery && pr.resumesVerification(previous) {
 			verificationPRURL = pr.URL
 		}
 		if pr.URL != "" && verificationPRURL == "" && (automatic || branchRecovery || workflowRecovery || ownedWorkflowRetry) {
@@ -1000,6 +1007,14 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 	runIssue := *run.GitHubIssue
 	run.GitHubIssue = &runIssue
 	runIssue.Claim = claim
+	if metadataRetry {
+		if verificationPRURL == "" || run.Workflow == nil {
+			return issueRetryResult{}, http.StatusConflict, fmt.Errorf("PR metadata retry requires the original pull request and workflow")
+		}
+		policy := *run.Workflow
+		policy.ResumePRURL = verificationPRURL
+		run.Workflow = &policy
+	}
 	run.BaseBranch = base
 	setGitHubIssuePrompt(&run, issue)
 	if err := githubassets.Validate(run.Assets); err != nil {

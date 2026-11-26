@@ -18,6 +18,10 @@ func (s Server) submitInputWorkflow(ctx context.Context, body []byte, source str
 	_ = json.Unmarshal(body, &header)
 	c, err := localruntime.ParseRunConfigJSON(body)
 	// Check both the resolved config form and the normalized input, which also accepts a JSON string.
+	if (header.Workflow != nil && header.Workflow.ResumePRURL != "") ||
+		(err == nil && c.Workflow != nil && c.Workflow.ResumePRURL != "") {
+		return "", fmt.Errorf("the runtime selects the original pull request for workflow retries")
+	}
 	if (header.Workflow != nil && header.Workflow.PolicyHash != "") ||
 		(err == nil && c.Workflow != nil && c.Workflow.PolicyHash != "") {
 		return "", fmt.Errorf("workflow policy fingerprints are assigned by the runtime")
@@ -73,7 +77,11 @@ func (s Server) submitInputWorkflow(ctx context.Context, body []byte, source str
 		return "", err
 	}
 	return s.Workflows.DispatchInput(ctx, w, func(run workflow.Run) (string, error) {
-		c.Workflow = &config.WorkflowRunConfig{ID: w.ID, Name: w.Name, EventID: run.ID, Instructions: c.Prompt, ReviewCycles: w.ReviewCycles, ReviewAgent: w.ReviewAgent, PolicyHash: w.ExecutionPolicyHash()}
+		c.Workflow = &config.WorkflowRunConfig{
+			ID: w.ID, Name: w.Name, EventID: run.ID, Instructions: c.Prompt,
+			ReviewCycles: w.ReviewCycles, ReviewAgent: w.ReviewAgent,
+			PRAssignee: w.Task.PRAssignee, PRLabels: w.Task.PRLabels, PolicyHash: w.ExecutionPolicyHash(),
+		}
 		data, err := json.Marshal(c)
 		if err != nil {
 			return "", err

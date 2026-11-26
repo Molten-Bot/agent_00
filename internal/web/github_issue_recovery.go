@@ -455,6 +455,12 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	if cooling || record.State == "fulfilled" {
 		return nil
 	}
+	if app.IsWorkflowPRMetadataFailure(record.FailureDetail()) {
+		record.State = "blocked"
+		record.Error = record.FailureDetail()
+		record.NextAttemptAt = time.Time{}
+		return s.IssueClaims.Save(record)
+	}
 	// Branch conflicts need explicit recovery with evidence from the saved
 	// workspace before a matching PR can fulfill the claim.
 	ownsBranch := remote.Claim.ID == record.ID && record.BranchReserved
