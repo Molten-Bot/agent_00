@@ -827,6 +827,63 @@ func TestLabeledIssueDraftVerificationRetryKeepsWorkflowPolicy(t *testing.T) {
 	}
 }
 
+func TestIssueRecoveryPreservesFailedVerificationAfterExternalMerge(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"restart", "explicit retry", "legacy fulfilled record"} {
+		t.Run(mode, func(t *testing.T) {
+			s, f := recoveryServer(t)
+			reconcileOrAdmitTestIssue(t.Context(), s)
+			record := completeRecoveryRecord(t, s, "error", 1)
+			const failure = "pr_verification: reviewed patch evidence is truncated"
+			const prURL = "https://github.com/acme/repo/pull/42"
+			record.PRVerification = "Verify CI and submitted review on the published head."
+			record.RunError, record.Error = failure, failure
+			record.PriorRunFailures = 1
+			if err := s.IssueClaims.Save(record); err != nil {
+				t.Fatal(err)
+			}
+			f.prs = recoveryPR("open", "null", record.Run.GitHubIssue.Claim.Branch, "main")
+			if err := s.ReconcileIssueWork(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if pending := latestRecoveryRecord(t, s); pending.State != "retry_wait" || pending.RequestID != record.RequestID {
+				t.Fatalf("open draft lost its retry state: %+v", pending)
+			}
+			expireIssueRetry(t, s, record.ID)
+			if mode == "legacy fulfilled record" {
+				if err := s.IssueClaims.Update(record.ID, func(r *localruntime.IssueClaimRecord) error {
+					r.State, r.PRURL, r.VerifiedAt = "fulfilled", prURL, time.Now()
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f.prs = recoveryPR("closed", `"2026-01-01T00:00:00Z"`, record.Run.GitHubIssue.Claim.Branch, "main")
+			restarted := automationServer(t, f.automationGitHub)
+			restarted.IssueClaims = &localruntime.IssueClaimStore{Root: s.IssueClaims.Root}
+			restarted.GitHubIssueRunner, restarted.IssueRecovery, restarted.Workflows = f, s.IssueRecovery, s.Workflows
+			if mode == "explicit retry" {
+				if response := retryIssue(t, restarted, record.ID, true); response.Code != http.StatusConflict ||
+					!strings.Contains(response.Body.String(), mergedUnverifiedIssueError) {
+					t.Fatalf("retry after merge: status=%d body=%s", response.Code, response.Body.String())
+				}
+			}
+			for range 2 {
+				if err := restarted.ReconcileIssueWork(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got := latestRecoveryRecord(t, restarted)
+			if got.State != localruntime.IssueStateMergedUnverified || got.Error != mergedUnverifiedIssueError ||
+				got.ID != record.ID || got.RequestID != record.RequestID || got.Outcome != "error" || got.FailureDetail() != failure ||
+				got.PRVerification != record.PRVerification || got.PRURL != prURL || !got.VerifiedAt.IsZero() || !got.NextAttemptAt.IsZero() ||
+				got.UnlockPending || issueRunFailures(got) != 2 || len(f.submissions) != 1 || len(restarted.Broker.verifiedTaskPRs) != 0 {
+				t.Fatalf("external merge lost failed verification history: %+v, submissions=%d", got, len(f.submissions))
+			}
+		})
+	}
+}
+
 func testLabeledIssueDraftVerificationRetry(t *testing.T, outcome string) {
 	t.Helper()
 	s, f := recoveryServer(t)
@@ -916,8 +973,12 @@ func testLabeledIssueDraftVerificationRetry(t *testing.T, outcome string) {
 	prior, retry := previous.Run.Workflow, current.Run.Workflow
 	if len(f.submissions) != 2 || current.RequestID != previous.RequestID || current.PRVerification != previous.PRVerification || !current.PublicationReady ||
 		current.Run.GitHubIssue.Claim.Branch != previous.Run.GitHubIssue.Claim.Branch || current.AgentAttempts != 1 ||
-		retry.ID != prior.ID || retry.PolicyHash != prior.PolicyHash || retry.EventID == prior.EventID {
+		retry.ID != prior.ID || retry.PolicyHash != prior.PolicyHash || retry.EventID == prior.EventID || current.PRURL != prURL {
 		t.Fatalf("verification retry lost its accepted work or workflow policy: %+v", current)
+	}
+	retained, err := s.IssueClaims.Load(previous.ID)
+	if err != nil || retained.Outcome != previous.Outcome || retained.RunError != previous.RunError || current.PriorRunFailures != issueRunFailures(retained) {
+		t.Fatalf("verification retry lost the prior attempt outcome: %+v, %v", retained, err)
 	}
 	if tasks := s.Broker.TaskList(); len(tasks) != 1 || tasks[0].RequestID != previous.RequestID ||
 		tasks[0].Status != "pending" || tasks[0].Error != "" || tasks[0].ExitCode != 0 {

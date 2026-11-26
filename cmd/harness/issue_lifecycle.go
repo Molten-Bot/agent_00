@@ -154,6 +154,9 @@ func (e *issueExecution) finish(ctx context.Context, state string, result app.Re
 		} else if result.PRVerificationPassed {
 			record.PRVerification = ""
 		}
+		if record.PRVerification != "" && result.PRURL != "" {
+			record.PRURL = result.PRURL
+		}
 		record.NoChangeEvidence = result.NoChangeEvidence
 		if state == "interrupted" && errors.Is(context.Cause(ctx), context.Canceled) {
 			record.Incident = "service_shutdown"

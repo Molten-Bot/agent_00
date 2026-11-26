@@ -17,6 +17,14 @@ import (
 )
 
 var errDraftChecksPending = fmt.Errorf("%w: waiting for checks on the reviewed pull request head", ErrReviewPending)
+var errMergedBeforeDraftVerification = fmt.Errorf("pull request merged before draft verification passed: %w", githubutil.ErrReviewInterrupted)
+
+func stoppedDraftReview(repo repoWorkspace) (int, string, error) {
+	if repo.PRVerification != "" {
+		return ExitPR, "pr_verification", errMergedBeforeDraftVerification
+	}
+	return ExitSuccess, "", nil
+}
 
 const (
 	draftHandoffPrefix       = "Draft handoff:"
@@ -52,7 +60,8 @@ func (h Harness) verifyDraftHandoff(ctx context.Context, repo repoWorkspace, run
 	if len(opts.Env) == 0 {
 		opts.Env = os.Environ()
 	}
-	opts.Env = environWithoutKeys(opts.Env, "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", reviewCheckTokenEnv)
+	opts.Env = environWithoutKeys(opts.Env, "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN",
+		"GH_CONFIG_DIR", "GIT_ASKPASS", "SSH_ASKPASS", "SSH_AUTH_SOCK", reviewCheckTokenEnv)
 	invocation := newAgentInvocationLogMetadata(runtime, "pr_verification", 1, repo.RelDir, repo.RelDir, repo.RelDir)
 	result, err := h.runCodexWithHeartbeat(ctx, runtime, repo.Dir, prompt, opts, invocation.withRuntimeDefaults(runtime))
 	if err != nil {
@@ -68,8 +77,8 @@ func (h Harness) verifyDraftHandoff(ctx context.Context, repo repoWorkspace, run
 	if outcome.Status != "passed" {
 		return fmt.Errorf("draft pull request verification did not pass: %s", truncateForPrompt(outcome.Evidence, maxErrorDetailChars))
 	}
-	h.logf("stage=pr_verification status=ok")
-	return nil
+	_, err = repo.ReviewedPatch.verify(evidence.commits)
+	return err
 }
 
 type draftVerificationEvidence struct {
@@ -79,6 +88,7 @@ type draftVerificationEvidence struct {
 		State             string          `json:"state"`
 		IsDraft           bool            `json:"isDraft"`
 		BaseRefName       string          `json:"baseRefName"`
+		BaseRefOID        string          `json:"baseRefOid,omitempty"`
 		HeadRefName       string          `json:"headRefName"`
 		HeadRefOID        string          `json:"headRefOid"`
 		ReviewDecision    json.RawMessage `json:"reviewDecision,omitempty"`
@@ -93,6 +103,7 @@ type draftVerificationEvidence struct {
 	}
 	requiredChecks []string
 	review         githubutil.SubmittedReview
+	commits        draftPatchCommits
 }
 
 // The coordinator gathers the reviewed head's evidence before starting the
@@ -145,6 +156,9 @@ func (h Harness) collectDraftVerificationEvidence(ctx context.Context, repo repo
 	state := &evidence.metadata
 	if err := json.Unmarshal([]byte(rawMetadata), state); err != nil {
 		return nil, fmt.Errorf("decode draft pull request evidence: %w", err)
+	}
+	if state.State == "MERGED" {
+		return nil, errMergedBeforeDraftVerification
 	}
 	if state.Number <= 0 || state.State != "OPEN" || !state.IsDraft || state.URL != repo.PRURL || state.URL != receipt.PRURL ||
 		state.BaseRefName != repo.BaseBranch || state.HeadRefName != repo.Branch {
@@ -262,12 +276,17 @@ func draftVerificationPrompt(repo repoWorkspace, evidence *draftVerificationEvid
 	if len(filesJSON) > maxReviewDiffStatChars {
 		return "", fmt.Errorf("live changed-file inventory exceeds the draft verification evidence limit (%d bytes). Reduce the size of the pull request and retry verification", maxReviewDiffStatChars)
 	}
-	if repo.ReviewedDiffPatchTruncated {
-		return "", fmt.Errorf("reviewed patch exceeds the draft verification evidence limit (%d bytes). Reduce the size of the pull request and retry verification", maxReviewDiffPatchChars)
+	if evidence.commits.Head != state.HeadRefOID {
+		return "", fmt.Errorf("draft head changed while collecting patch evidence: %w", ErrReviewHeadChanged)
 	}
-	if strings.TrimSpace(repo.ReviewedDiffPatch) == "" {
-		return "", fmt.Errorf("%w: missing patch for the reviewed draft head; collect the reviewed patch and retry", ErrReviewPending)
+	patch, err := repo.ReviewedPatch.verify(evidence.commits)
+	if err != nil {
+		return "", err
 	}
+	if len(patch) > maxReviewDiffPatchChars {
+		patch = repo.ReviewedPatch.reference()
+	}
+	state.BaseRefOID = evidence.commits.Base
 	state.Files = nil
 	metadataJSON, _ := json.Marshal(state)
 	requiredChecksJSON, _ := json.Marshal(evidence.requiredChecks)
@@ -282,5 +301,5 @@ func draftVerificationPrompt(repo repoWorkspace, evidence *draftVerificationEvid
 		"Report passed if the supplied evidence is consistent and establishes the criteria. Report blocked only for a concrete unmet criterion or specific missing or inconsistent evidence. Do not report blocked because GitHub is inaccessible.\n"+
 		"Return one JSON object with status (passed or blocked) and a nonempty evidence string. Do not edit files or GitHub.\n\n"+
 		"Requested criteria:\n%s\n\nSupplied pull request metadata and checks:\n%s\n\nConfigured CI check names:\n%s\n\nSupplied submitted clean review:\n%s\n\nSupplied changed-file inventory:\n%s\n\nGit diff patch prepared for the same-head review:\n%s",
-		repo.PRVerification, metadataJSON, requiredChecksJSON, reviewJSON, filesJSON, repo.ReviewedDiffPatch), nil
+		repo.PRVerification, metadataJSON, requiredChecksJSON, reviewJSON, filesJSON, patch), nil
 }

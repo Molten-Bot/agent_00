@@ -899,6 +899,15 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		if err := pr.recoveryBlocker(claimedIssue); err != nil {
 			return issueRetryResult{}, http.StatusConflict, err
 		}
+		if previous.State == localruntime.IssueStateMergedUnverified {
+			return issueRetryResult{}, http.StatusConflict, errors.New(mergedUnverifiedIssueError)
+		}
+		if previous.Version == 2 && previous.InstanceID == remote.InstanceID && previous.InstanceID == s.instanceID() && pr.mergedUnverified(previous) {
+			if err := s.recordMergedUnverifiedIssuePR(previous, pr); err != nil {
+				return issueRetryResult{}, http.StatusServiceUnavailable, err
+			}
+			return issueRetryResult{}, http.StatusConflict, errors.New(mergedUnverifiedIssueError)
+		}
 		if metadataRetry {
 			if pr.URL == "" || !strings.EqualFold(pr.URL, previous.PRURL) ||
 				pr.Closed || pr.Merged || previous.InstanceID != s.instanceID() {
@@ -1091,6 +1100,9 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		record.CheckoutComplete = record.CheckoutComplete || previous.CheckoutComplete || previous.PublicationReady
 		record.PublicationReady = previous.PublicationReady
 		record.PRVerification = previous.PRVerification
+		if record.PRVerification != "" {
+			record.PRURL = verificationPRURL
+		}
 		if (record.PRVerification != "" || resumeReview) && previous.InstanceID == record.InstanceID {
 			record.RequestID = previous.RequestID
 		}

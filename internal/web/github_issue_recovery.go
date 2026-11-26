@@ -51,6 +51,8 @@ func (s Server) WakeIssueRecovery() {
 
 var errIssueRecoveryDeferred = errors.New("issue recovery deferred during memory pressure")
 
+const mergedUnverifiedIssueError = "pull request merged before draft verification passed"
+
 func (s Server) runIssueRecovery(ctx context.Context) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
@@ -283,9 +285,14 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	if record.Incident == workflowIssueRecoveryIncident {
 		return nil
 	}
-	if record.State == "fulfilled" && !record.UnlockPending {
-		s.publishVerifiedIssuePR(record)
-		return nil
+	if !record.UnlockPending {
+		if record.Fulfilled() {
+			s.publishVerifiedIssuePR(record)
+			return nil
+		}
+		if record.State == localruntime.IssueStateMergedUnverified {
+			return nil
+		}
 	}
 	if record.State == "blocked" && record.Incident == localruntime.IssueIncidentBranchRecovery && !record.UnlockPending {
 		return nil
@@ -463,7 +470,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 			return s.deferIssueUnlock(record.ID, err)
 		}
 	}
-	if cooling || record.State == "fulfilled" {
+	if cooling || record.Fulfilled() || record.State == localruntime.IssueStateMergedUnverified {
 		return nil
 	}
 	if app.IsWorkflowPRMetadataFailure(record.FailureDetail()) ||
@@ -488,6 +495,9 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 			}
 		}
 		if ownsBranch && pr.URL != "" && !pr.Closed && pr.BaseBranch == issue.Claim.BaseBranch && !pr.resumesVerification(record) {
+			if pr.mergedUnverified(record) {
+				return s.recordMergedUnverifiedIssuePR(record, pr)
+			}
 			if record.Outcome == "interrupted" {
 				if err := s.verifyRecoveredIssuePR(ctx, record, pr); err != nil {
 					return s.deferIssueRecord(record, err)
@@ -639,6 +649,18 @@ func (s Server) recordVerifiedIssuePR(record localruntime.IssueClaimRecord, pr i
 	return nil
 }
 
+func (s Server) recordMergedUnverifiedIssuePR(record localruntime.IssueClaimRecord, pr issuePullRequest) error {
+	record.RunError = record.FailureDetail()
+	record.PRURL = pr.URL
+	record.PRTitle = strings.TrimSpace(pr.Title)
+	record.VerifiedAt = time.Time{}
+	record.State = localruntime.IssueStateMergedUnverified
+	record.Error = mergedUnverifiedIssueError
+	record.NextAttemptAt = time.Time{}
+	record.UnlockPending = record.LabelAdded
+	return s.IssueClaims.Save(record)
+}
+
 func (s Server) publishVerifiedIssuePR(record localruntime.IssueClaimRecord) {
 	if s.Broker != nil {
 		s.Broker.recordVerifiedTaskPR(record.RequestID, verifiedTaskPR{
@@ -668,7 +690,7 @@ func (s Server) ValidateIssueOwnership(ctx context.Context, run config.Config) e
 // Count a terminal outcome once per claim. Each automatic successor carries
 // the previous count, including runs that never reached the agent step.
 func issueRunFailures(record localruntime.IssueClaimRecord) int {
-	if record.State == "fulfilled" {
+	if record.Fulfilled() {
 		return 0
 	}
 	failures := record.PriorRunFailures
@@ -827,6 +849,10 @@ type issuePullRequest struct {
 	BaseBranch string
 	Closed     bool
 	Merged     bool
+}
+
+func (pr issuePullRequest) mergedUnverified(record localruntime.IssueClaimRecord) bool {
+	return pr.URL != "" && pr.Merged && record.PRVerification != ""
 }
 
 func (pr issuePullRequest) resumesVerification(record localruntime.IssueClaimRecord) bool {

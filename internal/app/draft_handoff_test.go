@@ -2,12 +2,14 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -24,9 +26,16 @@ func TestVerifyDraftHandoffWithSuppliedEvidence(t *testing.T) {
 	const prURL = "https://github.com/acme/repo/pull/42"
 	repo := repoWorkspace{
 		Dir: t.TempDir(), PRVerification: draftHandoffStandard,
-		ReviewedDiffPatch: "diff --git a/work.txt b/work.txt\n--- a/work.txt\n+++ b/work.txt\n@@ -1 +1 @@\n-base\n+implemented",
 	}
+	const patchText = "diff --git a/work.txt b/work.txt\n--- a/work.txt\n+++ b/work.txt\n@@ -1 +1 @@\n-base\n+implemented\n"
+	commits := draftPatchCommits{Base: "reviewed-base", Head: "reviewed-head"}
+	patch := &draftReviewPatch{commits: commits, path: filepath.Join(repo.Dir, "reviewed.patch"), size: len(patchText), digest: sha256.Sum256([]byte(patchText))}
+	if err := os.WriteFile(patch.path, []byte(patchText), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	repo.ReviewedPatch = patch
 	evidence := draftVerificationEvidence{
+		commits:        commits,
 		requiredChecks: []string{"CI"},
 		review: githubutil.SubmittedReview{
 			ID: 1, Head: "reviewed-head", URL: prURL + "#pullrequestreview-1", State: "COMMENTED",
@@ -62,10 +71,60 @@ func TestVerifyDraftHandoffWithSuppliedEvidence(t *testing.T) {
 	if err := h.verifyDraftHandoff(t.Context(), repo, agentruntime.Default(), opts, &evidence); err != nil {
 		t.Fatal(err)
 	}
+
+	for _, tc := range []struct {
+		name, data, want string
+		commits          draftPatchCommits
+		sentinel         error
+	}{
+		{name: "missing", commits: commits, want: "missing reviewed patch evidence file", sentinel: ErrReviewPending},
+		{name: "truncated", data: patchText[:30], commits: commits, want: "reviewed patch evidence is truncated", sentinel: ErrReviewPending},
+		{name: "replaced", data: strings.Replace(patchText, "implemented", "substituted", 1), commits: commits, want: "does not match the captured patch digest", sentinel: ErrReviewPending},
+		{name: "stale base", data: patchText, commits: draftPatchCommits{Base: "new-base", Head: commits.Head}, want: "has a stale draft base", sentinel: ErrReviewPending},
+		{name: "different head", data: patchText, commits: draftPatchCommits{Base: commits.Base, Head: "new-head"}, want: "draft head changed", sentinel: ErrReviewHeadChanged},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.data == "" {
+				if err := os.Remove(patch.path); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(patch.path, []byte(tc.data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			evidence.commits = tc.commits
+			err := h.verifyDraftHandoff(t.Context(), repo, agentruntime.Default(), opts, &evidence)
+			if !errors.Is(err, tc.sentinel) || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("verification error = %v, want %s (%v)", err, tc.want, tc.sentinel)
+			}
+		})
+	}
+}
+
+func TestPrepareDraftReviewPatchBoundsArtifact(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	repo := repoWorkspace{Dir: filepath.Join(root, "repo")}
+	h := New(issueBranchRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		if cmd.Args[0] == "rev-parse" {
+			return execx.Result{Stdout: "base"}, nil
+		}
+		if _, err := cmd.StdoutWriter.Write(make([]byte, maxDraftPatchBytes)); err != nil {
+			return execx.Result{}, err
+		}
+		_, err := cmd.StdoutWriter.Write([]byte("oversized"))
+		return execx.Result{}, err
+	}))
+	patch, _, err := h.prepareDraftReviewPatch(t.Context(), repo, "origin/main", "head")
+	if patch != nil || !errors.Is(err, errDraftPatchTooLarge) {
+		t.Fatalf("oversized patch should be rejected with a retryable diagnostic: %v, %v", patch, err)
+	}
+	if entries, err := os.ReadDir(root); len(entries) != 0 || err != nil {
+		t.Fatalf("oversized patch should be removed: %v, %v", entries, err)
+	}
 }
 
 func TestClaimedIssueDraftHandoff(t *testing.T) {
-	credentialKeys := []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", reviewCheckTokenEnv}
+	credentialKeys := []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_CONFIG_DIR", "SSH_AUTH_SOCK", reviewCheckTokenEnv}
 	for _, key := range credentialKeys {
 		t.Setenv(key, "test-token")
 	}
@@ -96,7 +155,11 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 		checksFail             bool
 		filesPartial           bool
 		filesTruncated         bool
-		patchTruncated         bool
+		largePatch             bool
+		baseMoved              bool
+		baseMovedAfterEvidence bool
+		publishedBaseMoved     bool
+		mergedDuringEvidence   bool
 		reviewStale            bool
 		reviewTruncated        bool
 		verifierBlocked        bool
@@ -149,8 +212,12 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 		{name: "changed-file evidence unavailable", answer: localSuccess, change: true, filesPartial: true, wantExit: ExitPR},
 		{name: "changed-file inventory exceeds evidence limit", answer: localSuccess, change: true, filesTruncated: true, wantExit: ExitPR,
 			wantEvidenceError: "live changed-file inventory exceeds the draft verification evidence limit"},
-		{name: "reviewed patch exceeds evidence limit", answer: localSuccess, change: true, patchTruncated: true, wantExit: ExitPR,
-			wantEvidenceError: "reviewed patch exceeds the draft verification evidence limit"},
+		{name: "verify complete large patch offline", answer: localSuccess, change: true, largePatch: true, requiredChecks: `{"contexts":["CI"]}`},
+		{name: "base changed after review", answer: localSuccess, change: true, baseMoved: true, wantExit: ExitPR,
+			wantEvidenceError: "reviewed patch evidence has a stale draft base"},
+		{name: "base changed during offline verification", answer: localSuccess, change: true, baseMovedAfterEvidence: true, wantExit: ExitPR},
+		{name: "published base moves while PR metadata is stale", answer: localSuccess, change: true, publishedBaseMoved: true, wantExit: ExitPR},
+		{name: "external merge during offline verification", answer: localSuccess, change: true, mergedDuringEvidence: true, wantExit: ExitPR},
 		{name: "submitted review stale", answer: localSuccess, change: true, reviewStale: true, wantExit: ExitPR},
 		{name: "submitted review body exceeds evidence limit", answer: localSuccess, change: true, reviewTruncated: true, wantExit: ExitPR,
 			wantEvidenceError: "submitted review 1 body exceeds the draft verification evidence limit"},
@@ -198,6 +265,8 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			labels := []string{"existing label"}
 			assignees := []string{"creator"}
 			var savedRequirement string
+			var artifactPath string
+			liveBase := base
 			hasGitHubCredential := func(cmd execx.Command) bool {
 				if cmd.Env == nil {
 					return os.Getenv("GH_TOKEN") != "" || os.Getenv("GITHUB_TOKEN") != ""
@@ -230,6 +299,8 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 					switch {
 					case args == "--help":
 						return execx.Result{}, nil
+					case args == "--version":
+						return execx.Result{Stdout: "codex-cli test"}, nil
 					case strings.Contains(cmd.Stdin, "Verify the requested draft-handoff criteria"):
 						verifications++
 						if hasGitHubCredential(cmd) || !strings.Contains(args, "network={enabled=false}") || !slices.Contains(cmd.Args, `web_search="disabled"`) {
@@ -241,8 +312,31 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 							!strings.Contains(cmd.Stdin, `"commit_id":"`+api.head+`"`) ||
 							!strings.Contains(cmd.Stdin, "#pullrequestreview-1") || !strings.Contains(cmd.Stdin, "No material issues found.") ||
 							(len(tc.checkRollups) == 0 && !strings.Contains(cmd.Stdin, `"conclusion":"SUCCESS"`)) || !strings.Contains(cmd.Stdin, `"path":"work.txt"`) ||
-							!strings.Contains(cmd.Stdin, "+implemented") {
+							(!tc.largePatch && !strings.Contains(cmd.Stdin, "+implemented")) {
 							t.Error("verification started before draft and submitted evidence were available")
+						}
+						if tc.largePatch {
+							_, ref, _ := strings.Cut(cmd.Stdin, "Read the complete patch in the read-only file ")
+							quotedPath, _, _ := strings.Cut(ref, ". Read it")
+							var err error
+							artifactPath, err = strconv.Unquote(quotedPath)
+							if err != nil {
+								t.Fatal(err)
+							}
+							artifact, err := os.ReadFile(artifactPath)
+							if err != nil {
+								t.Fatal(err)
+							}
+							expected, err := (execx.OSRunner{}).Run(ctx, gitCommand(cmd.Dir, "diff", "--binary", base+"..."+api.head))
+							if err != nil || string(artifact) != expected.Stdout || len(artifact) <= 55000 ||
+								!strings.Contains(string(artifact), "+last line of evidence\n") || strings.Contains(cmd.Stdin, "+implemented") ||
+								!strings.Contains(cmd.Stdin, fmt.Sprintf("SHA-256: %x", sha256.Sum256(artifact))) {
+								t.Errorf("offline artifact does not contain the exact reviewed patch (%d bytes): %v", len(artifact), err)
+							}
+							info, err := os.Stat(artifactPath)
+							if err != nil || info.Mode().Perm() != 0o400 {
+								t.Errorf("reviewed patch is not read-only: %v, %v", info, err)
+							}
 						}
 						if !strings.Contains(cmd.Stdin, "Do not use gh, GitHub APIs, browser, web search") ||
 							strings.Contains(cmd.Stdin, "AGENTS.md") || strings.Contains(cmd.Stdin, "Backpressure") {
@@ -263,6 +357,13 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 						if tc.headMovedAfterEvidence && verifications == 1 {
 							api.head = "new-head"
 						}
+						if tc.baseMovedAfterEvidence {
+							liveBase = "different-base"
+						}
+						if tc.publishedBaseMoved {
+							git(seed, "commit", "--allow-empty", "-m", "advance draft base")
+							git(seed, "push", remote, "main")
+						}
 						if tc.publishedHeadMoved {
 							git(remote, "update-ref", "refs/heads/"+branch, base)
 						}
@@ -282,8 +383,8 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 						}
 						if tc.change {
 							content := "implemented\n"
-							if tc.patchTruncated {
-								content += strings.Repeat("extra line\n", maxReviewDiffPatchChars/len("extra line\n")+1)
+							if tc.largePatch {
+								content += strings.Repeat("extra line\n", 5000) + "last line of evidence\n"
 							}
 							if err := os.WriteFile(filepath.Join(cmd.Dir, "work.txt"), []byte(content), 0o600); err != nil {
 								return execx.Result{}, err
@@ -293,6 +394,15 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 					}
 				case "gh":
 					switch {
+					case slices.Equal(cmd.Args, []string{"api", "repos/acme/repo/pulls/42", "--jq", draftPatchCommitsQuery}):
+						if !hasGitHubCredential(cmd) {
+							return execx.Result{}, errors.New("private draft commit metadata requires authentication")
+						}
+						if tc.baseMoved {
+							liveBase = "different-base"
+						}
+						return execx.Result{Stdout: fmt.Sprintf(`{"base":%q,"head":%q,"baseRef":"main","headRef":%q,"state":"open","merged":%t,"draft":%t}`,
+							liveBase, api.head, branch, tc.mergedDuringEvidence && verifications > 0, draft)}, nil
 					case args == fmt.Sprintf("api repos/acme/repo/pulls/42/reviews/%d", api.review.ID):
 						if !hasGitHubCredential(cmd) {
 							return execx.Result{}, errors.New("private draft review requires authentication")
@@ -402,7 +512,11 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 							if tc.headMoved && api.posts == 1 && evidenceReads > tc.pendingChecks {
 								head = "new-head"
 							}
-							files := []string{`{"path":"work.txt","additions":1,"deletions":1}`}
+							additions := 1
+							if tc.largePatch {
+								additions = 5002
+							}
+							files := []string{fmt.Sprintf(`{"path":"work.txt","additions":%d,"deletions":1}`, additions)}
 							if tc.filesTruncated {
 								for i := range 80 {
 									path := fmt.Sprintf("%sextra-%d.txt", strings.Repeat("directory/", 20), i)
@@ -446,6 +560,10 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				Claim: &config.GitHubIssueClaim{ID: "claim", Branch: branch, BaseBranch: "main", ExclusionLabel: "claimed", Attempt: 1}}
 			if tc.metadataError != "" {
 				cfg.Workflow = &config.WorkflowRunConfig{ID: "route", EventID: "route-event", PRAssignee: "maintainer", PRLabels: []string{"tracking", "priority, high"}}
+			}
+			if tc.largePatch {
+				h.FinalReviewPasses = 10
+				cfg.Workflow = &config.WorkflowRunConfig{ID: "delivery", EventID: "delivery-event", ReviewAgent: config.ReviewAgentConfig{Complexity: "easy"}}
 			}
 			result := h.Run(t.Context(), cfg)
 			if result.ExitCode != tc.wantExit {
@@ -494,6 +612,18 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			if tc.headMovedAfterEvidence || tc.publishedHeadMoved {
 				if creates != 1 || api.posts != 1 || verifications != 1 || !errors.Is(result.Err, ErrReviewHeadChanged) {
 					t.Fatalf("head movement after collecting evidence must invalidate the verified review: %+v", result)
+				}
+				return
+			}
+			if tc.baseMovedAfterEvidence || tc.publishedBaseMoved {
+				if verifications != 1 || !errors.Is(result.Err, ErrReviewPending) || !strings.Contains(result.Err.Error(), "stale draft base") {
+					t.Fatalf("base movement during verification must keep the draft gated: %+v", result)
+				}
+				return
+			}
+			if tc.mergedDuringEvidence {
+				if verifications != 1 || !result.ReviewInterrupted || !errors.Is(result.Err, githubutil.ErrReviewInterrupted) {
+					t.Fatalf("external merge during verification must fail the handoff: %+v", result)
 				}
 				return
 			}
@@ -554,6 +684,14 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				implementations != 1 || creates != 1 || api.posts != wantReviews || result.ReviewReceipt.Head != api.head || verifications != wantVerifications || ready != 1 || draft {
 				t.Fatalf("implementation/create/review/verify/ready = %d/%d/%d/%d/%d, draft=%t, result=%+v",
 					implementations, creates, api.posts, verifications, ready, draft, result)
+			}
+			if tc.largePatch {
+				if policy := result.ReviewReceipt.Policy; policy.FixPasses != 10 || policy.Complexity != "easy" {
+					t.Fatalf("large-patch delivery used the wrong review policy: %+v", policy)
+				}
+				if _, err := os.Stat(artifactPath); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("temporary reviewed patch still exists: %v", err)
+				}
 			}
 		})
 	}
