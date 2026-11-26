@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"github.com/Molten-Bot/agent_00/internal/config"
 	"testing"
 )
 
@@ -95,5 +96,37 @@ func TestRetryAfterRetirementUsesOnlyMatchingMergePolicy(t *testing.T) {
 	runs, err := e.Runs()
 	if err != nil || merged != 1 || len(runs) != 0 {
 		t.Fatalf("retry should merge once and leave no activation: merged=%d runs=%v err=%v", merged, runs, err)
+	}
+}
+
+func TestMetadataRetryOnlyAllowsRoutingCorrections(t *testing.T) {
+	t.Parallel()
+	for _, unrelated := range []bool{false, true} {
+		w := definition("routing")
+		w.Task.PRAssignee = "former"
+		w.Task.PRLabels = []string{"old"}
+		e, _, _ := testEngine(t, w)
+		saved := config.WorkflowRunConfig{ID: w.ID, PolicyHash: w.ExecutionPolicyHash(), PRAssignee: w.Task.PRAssignee, PRLabels: w.Task.PRLabels}
+		w.Task.PRAssignee = "replacement"
+		w.Task.PRLabels = []string{"new"}
+		if unrelated {
+			w.Merge.RequireApproval = !w.Merge.RequireApproval
+		}
+		doc, err := e.Store.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		doc.Workflows[0] = w
+		if _, err := e.Store.Save(doc); err != nil {
+			t.Fatal(err)
+		}
+		got, err := e.PRMetadataRetryPolicy(saved)
+		if unrelated {
+			if err == nil {
+				t.Fatal("accepted unrelated merge policy edit")
+			}
+		} else if err != nil || got.PRAssignee != "replacement" || got.PRLabels[0] != "new" || got.PolicyHash != w.ExecutionPolicyHash() {
+			t.Fatalf("routing correction = %+v, %v", got, err)
+		}
 	}
 }

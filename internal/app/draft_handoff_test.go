@@ -31,6 +31,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 		change              bool
 		agentErr            error
 		retry               bool
+		metadataError       string
 		findings            bool
 		headMoved           bool
 		filesPartial        bool
@@ -44,6 +45,8 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 	}{
 		{name: "verify private draft from supplied evidence", answer: localSuccess, change: true},
 		{name: "retry verification on the same draft", answer: localSuccess, change: true, retry: true, wantExit: ExitPR},
+		{name: "retry rejected assignee on the same draft", answer: localSuccess, change: true, metadataError: "assignee", wantExit: ExitPR},
+		{name: "retry rejected label on the same draft", answer: localSuccess, change: true, metadataError: "label", wantExit: ExitPR},
 		{name: "findings keep the draft blocked", answer: localSuccess, change: true, findings: true, wantExit: ExitPR},
 		{name: "head changed before verification", answer: localSuccess, change: true, headMoved: true, wantExit: ExitPR},
 		{name: "changed-file evidence unavailable", answer: localSuccess, change: true, filesPartial: true, wantExit: ExitPR},
@@ -92,7 +95,10 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 
 			api := &reviewAPIStub{t: t}
 			var implementations, creates, verifications, ready int
-			var draft, accepted bool
+			var draft, accepted, metadataRetry bool
+			savedResume := ""
+			labels := []string{"existing label"}
+			assignees := []string{"creator"}
 			var savedRequirement string
 			hasGitHubCredential := func(cmd execx.Command) bool {
 				if cmd.Env == nil {
@@ -104,6 +110,9 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			}
 			runner := issueBranchRunner(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
 				args := strings.Join(cmd.Args, " ")
+				if cmd.Name == "gh" && strings.Contains(args, "--method POST repos/acme/repo/issues/42/") && savedResume != prURL {
+					t.Fatal("metadata mutation preceded saved retry target")
+				}
 				if res, ok, err := api.handle(cmd); ok {
 					return res, err
 				}
@@ -200,6 +209,36 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 						}
 						git(remote, "update-ref", "refs/pull/42/head", api.head)
 						return execx.Result{Stdout: prURL}, nil
+					case strings.HasPrefix(args, "api --method POST repos/acme/repo/issues/42/"):
+						if !draft || creates != 1 {
+							t.Fatal("routing must target the published draft")
+						}
+						var body map[string][]string
+						if err := json.Unmarshal([]byte(cmd.Stdin), &body); err != nil {
+							t.Fatal(err)
+						}
+						values := &labels
+						switch {
+						case strings.Contains(args, "/assignees "):
+							values = &assignees
+							if tc.metadataError != "assignee" || metadataRetry {
+								if !slices.Contains(*values, body["assignees"][0]) {
+									*values = append(*values, body["assignees"][0])
+								}
+							}
+						case strings.Contains(args, "/labels "):
+							label := body["labels"][0]
+							if tc.metadataError == "label" && !metadataRetry && label == "priority, high" {
+								return execx.Result{Stderr: "HTTP 422: label rejected"}, errors.New("exit status 1")
+							}
+							if !slices.Contains(*values, label) {
+								*values = append(*values, label)
+							}
+						default:
+							t.Fatalf("unexpected metadata endpoint: %s", args)
+						}
+						data, err := json.Marshal(*values)
+						return execx.Result{Stdout: string(data)}, err
 					case strings.HasPrefix(args, "pr ready "):
 						if !slices.Contains(cmd.Args, "--undo") {
 							ready++
@@ -244,6 +283,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				return execx.Result{}, fmt.Errorf("unexpected command %s %s", cmd.Name, args)
 			})
 			h := New(runner)
+			h.SaveWorkflowPRResume = func(url string) error { savedResume = url; return nil }
 			h.Workspace = workspace.Manager{Root: root, NewGUID: func() string { return "issue-workspace" }}
 			if tc.queued {
 				h.IssuePRVerification = requirement
@@ -260,6 +300,9 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			cfg.RepoURL, cfg.TargetSubdir = repoURL, ""
 			cfg.GitHubIssue = &config.GitHubIssueConfig{Repository: "acme/repo", Number: 17, URL: "https://github.com/acme/repo/issues/17",
 				Claim: &config.GitHubIssueClaim{ID: "claim", Branch: branch, BaseBranch: "main", ExclusionLabel: "claimed", Attempt: 1}}
+			if tc.metadataError != "" {
+				cfg.Workflow = &config.WorkflowRunConfig{ID: "route", EventID: "route-event", PRAssignee: "maintainer", PRLabels: []string{"tracking", "priority, high"}}
+			}
 			result := h.Run(t.Context(), cfg)
 			if result.ExitCode != tc.wantExit {
 				t.Fatalf("issue run exit = %d, want %d: %v", result.ExitCode, tc.wantExit, result.Err)
@@ -295,14 +338,28 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				return
 			}
 			wantVerifications := 1
-			if tc.retry {
+			if tc.metadataError != "" {
+				if result.PRURL != prURL || !errors.Is(result.Err, ErrWorkflowPRMetadata) ||
+					!strings.Contains(result.Err.Error(), tc.metadataError+` "`) || verifications != 0 {
+					t.Fatalf("expected failed %s update on the original draft: %+v", tc.metadataError, result)
+				}
+				cfg.Workflow.ResumePRURL = result.PRURL
+				metadataRetry = true
+			}
+			if tc.retry || metadataRetry {
 				h.ResumeIssueWorkspace = true
 				h.IssueCheckoutComplete = true
 				h.IssuePublicationReady = accepted
 				h.IssuePRVerification = savedRequirement
 				cfg.GitHubIssue.Claim.Attempt++
 				result = h.Run(t.Context(), cfg)
-				wantVerifications++
+				if tc.retry {
+					wantVerifications++
+				}
+			}
+			if metadataRetry && (!slices.Equal(labels, []string{"existing label", "tracking", "priority, high"}) ||
+				!slices.Equal(assignees, []string{"creator", "maintainer"})) {
+				t.Fatalf("retry did not preserve and add metadata: labels %v, assignees %v", labels, assignees)
 			}
 			if result.Err != nil || result.PRURL != prURL || !result.ReviewRequired || result.ReviewReceipt == nil || !result.PRVerificationPassed ||
 				implementations != 1 || creates != 1 || api.posts != 1 || verifications != wantVerifications || ready != 1 || draft {

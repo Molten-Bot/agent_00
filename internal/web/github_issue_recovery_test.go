@@ -181,7 +181,7 @@ func TestExplicitIssueRecoveryUsesPersistentOwner(t *testing.T) {
 			w := &doc.Workflows[0]
 			w.Merge.Enabled = true
 			w.ReviewCycles = 2
-			if _, err := s.Workflows.Store.Save(doc); err != nil {
+			if doc, err = s.Workflows.Store.Save(doc); err != nil {
 				t.Fatal(err)
 			}
 			reconcileOrAdmitTestIssue(context.Background(), s)
@@ -2072,5 +2072,154 @@ func TestPreparedIssueRecoveryRechecksEligibility(t *testing.T) {
 				t.Fatalf("ineligible issue resumed: %v submissions=%d", err, len(f.submissions))
 			}
 		})
+	}
+}
+
+func TestIssuePRMetadataFailureBlocksFulfillmentAndRetriesOriginalPR(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	doc, err := s.Workflows.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := doc.Workflows[0]
+	run := issueRunConfig(GitHubRepo{FullName: w.Repository, DefaultBranch: "main"}, f.issue, "reference")
+	run.Workflow = &config.WorkflowRunConfig{ID: w.ID, EventID: "original", PolicyHash: w.ExecutionPolicyHash(), PRAssignee: "maintainer"}
+	if _, err := s.SubmitWorkflowRun(t.Context(), run, f.submit); err != nil {
+		t.Fatal(err)
+	}
+	previous := completeRecoveryRecord(t, s, "error", 1)
+	const prURL = "https://github.com/acme/repo/pull/42"
+	f.prs = recoveryPR("open", "null", previous.Run.GitHubIssue.Claim.Branch, "main")
+	f.closingPRURL = prURL
+	previous.PRURL = prURL
+	previous.RunError = "pr: workflow PR metadata update failed: GitHub did not apply assignee"
+	if err := s.IssueClaims.Save(previous); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReconcileIssueWork(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if current := latestRecoveryRecord(t, s); current.State != "blocked" || current.Error != previous.RunError {
+		t.Fatalf("metadata failure must remain visible: state=%s error=%q", current.State, current.Error)
+	}
+	response := retryIssue(t, s, previous.ID, true)
+	if response.Code != http.StatusAccepted || len(f.submissions) != 2 {
+		t.Fatalf("retry = %d %s, submissions=%d", response.Code, response.Body.String(), len(f.submissions))
+	}
+	policy := f.submissions[1].Workflow
+	if policy.ResumePRURL != previous.PRURL || policy.PRAssignee != run.Workflow.PRAssignee ||
+		policy.PolicyHash != run.Workflow.PolicyHash || policy.EventID == run.Workflow.EventID {
+		t.Fatalf("retry lost the original PR or workflow policy: %+v", policy)
+	}
+}
+
+func TestIssuePRMetadataTaskRerunWithRoutingCorrection(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	doc, err := s.Workflows.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc.Workflows[0].Task.PRAssignee = "maintainer"
+	if doc, err = s.Workflows.Store.Save(doc); err != nil {
+		t.Fatal(err)
+	}
+	w := doc.Workflows[0]
+	run := issueRunConfig(GitHubRepo{FullName: w.Repository, DefaultBranch: "main"}, f.issue, "reference")
+	run.Workflow = &config.WorkflowRunConfig{ID: w.ID, EventID: "original", PolicyHash: w.ExecutionPolicyHash(), PRAssignee: "maintainer"}
+	if _, err := s.SubmitWorkflowRun(t.Context(), run, f.submit); err != nil {
+		t.Fatal(err)
+	}
+	previous := completeRecoveryRecord(t, s, "error", 1)
+	const prURL = "https://github.com/acme/repo/pull/42"
+	f.prs = recoveryPR("open", "null", previous.Run.GitHubIssue.Claim.Branch, "main")
+	f.closingPRURL = prURL
+	previous.PRURL = prURL
+	previous.RunError = "pr: workflow PR metadata update failed: GitHub did not apply assignee"
+	if err := s.IssueClaims.Save(previous); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReconcileIssueWork(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if current := latestRecoveryRecord(t, s); current.State != "blocked" || current.Error != previous.RunError {
+		t.Fatalf("metadata failure must remain visible: state=%s error=%q", current.State, current.Error)
+	}
+	doc.Workflows[0].Task.PRAssignee = "replacement"
+	doc.Workflows[0].Task.PRLabels = []string{"tracking"}
+	if doc, err = s.Workflows.Store.Save(doc); err != nil {
+		t.Fatal(err)
+	}
+	originalSettings := s.ReviewSettingsStatus
+	s.ReviewSettingsStatus = func(ctx context.Context) (ReviewSettingsState, error) {
+		settings, err := originalSettings(ctx)
+		settings.GitHubIssuesEnabled = false
+		return settings, err
+	}
+	id, err := s.submitParsedWithIssueClaim(t.Context(), nil, previous.Run, f.submit)
+	if err != nil || id == "" || len(f.submissions) != 2 {
+		t.Fatalf("task rerun failed: %q %v", id, err)
+	}
+	policy := f.submissions[1].Workflow
+	if policy.ResumePRURL != previous.PRURL || policy.PRAssignee != "replacement" || len(policy.PRLabels) != 1 ||
+		policy.PolicyHash != doc.Workflows[0].ExecutionPolicyHash() || policy.EventID == run.Workflow.EventID {
+		t.Fatalf("retry lost the original PR or workflow policy: %+v", policy)
+	}
+}
+
+func TestIssuePRMetadataStoppedTaskRerunWithRoutingCorrection(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	doc, err := s.Workflows.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc.Workflows[0].Task.PRAssignee = "maintainer"
+	if doc, err = s.Workflows.Store.Save(doc); err != nil {
+		t.Fatal(err)
+	}
+	w := doc.Workflows[0]
+	run := issueRunConfig(GitHubRepo{FullName: w.Repository, DefaultBranch: "main"}, f.issue, "reference")
+	run.Workflow = &config.WorkflowRunConfig{ID: w.ID, EventID: "original", PolicyHash: w.ExecutionPolicyHash(), PRAssignee: "maintainer"}
+	if _, err := s.SubmitWorkflowRun(t.Context(), run, f.submit); err != nil {
+		t.Fatal(err)
+	}
+	previous := completeRecoveryRecord(t, s, "error", 1)
+	const prURL = "https://github.com/acme/repo/pull/42"
+	f.prs = recoveryPR("open", "null", previous.Run.GitHubIssue.Claim.Branch, "main")
+	f.closingPRURL = prURL
+	previous.PRURL = prURL
+	previous.Outcome = "stopped"
+	previous.RunError = "operator stopped task"
+	previous.Run.Workflow.ResumePRURL = prURL
+	if err := s.IssueClaims.Save(previous); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReconcileIssueWork(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if current := latestRecoveryRecord(t, s); current.State != "blocked" || current.Error != previous.RunError {
+		t.Fatalf("metadata failure must remain visible: state=%s error=%q", current.State, current.Error)
+	}
+	doc.Workflows[0].Task.PRAssignee = "replacement"
+	doc.Workflows[0].Task.PRLabels = []string{"tracking"}
+	if doc, err = s.Workflows.Store.Save(doc); err != nil {
+		t.Fatal(err)
+	}
+	originalSettings := s.ReviewSettingsStatus
+	s.ReviewSettingsStatus = func(ctx context.Context) (ReviewSettingsState, error) {
+		settings, err := originalSettings(ctx)
+		settings.GitHubIssuesEnabled = false
+		return settings, err
+	}
+	id, err := s.submitParsedWithIssueClaim(t.Context(), nil, previous.Run, f.submit)
+	if err != nil || id == "" || len(f.submissions) != 2 {
+		t.Fatalf("task rerun failed: %q %v", id, err)
+	}
+	policy := f.submissions[1].Workflow
+	if policy.ResumePRURL != previous.PRURL || policy.PRAssignee != "replacement" || len(policy.PRLabels) != 1 ||
+		policy.PolicyHash != doc.Workflows[0].ExecutionPolicyHash() || policy.EventID == run.Workflow.EventID {
+		t.Fatalf("retry lost the original PR or workflow policy: %+v", policy)
 	}
 }

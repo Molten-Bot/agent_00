@@ -63,6 +63,8 @@ type Task struct {
 	BaseBranch      string    `json:"baseBranch,omitempty"`
 	TargetSubdir    string    `json:"targetSubdir,omitempty"`
 	Reviewers       *[]string `json:"reviewers,omitempty"`
+	PRAssignee      string    `json:"prAssignee,omitempty"`
+	PRLabels        []string  `json:"prLabels,omitempty"`
 	Kind            string    `json:"kind"`
 	Instructions    string    `json:"instructions"`
 	AssignCreator   bool      `json:"assignCreator"`

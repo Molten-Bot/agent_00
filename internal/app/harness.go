@@ -176,6 +176,7 @@ type repoWorkspace struct {
 	RequiredBranchTask          string
 	BaselineHead                string
 	CreateWorkBranch            bool
+	ResumeWorkflowPR            bool
 	IssueClaimBranch            bool
 	Changed                     bool
 	BranchCollisionSuffix       string
@@ -221,6 +222,8 @@ type Harness struct {
 	OnPRTitle func(url, title string)
 	// OnPRCreated reports the URL and title of a newly created pull request.
 	OnPRCreated func(url, title string)
+	// SaveWorkflowPRResume persists the retry target before metadata mutations.
+	SaveWorkflowPRResume func(string) error
 
 	ResumeIssueWorkspace bool
 	// IssueCheckoutComplete records that the preserved checkout finished.
@@ -401,7 +404,31 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	runCfg := cfg
 	reviewRun := runCfg.Review != nil
 	feedbackPRURL := ""
-	if workflowRepair || isFreeTextPRFeedbackRun(runCfg) {
+	resumePR := runCfg.Workflow != nil && runCfg.Workflow.ResumePRURL != ""
+	var resumeState prStateView
+	var resumeFork string
+	if resumePR {
+		var err error
+		resumeState, err = h.loadWorkflowPRToResume(ctx, runCfg)
+		if err != nil {
+			return h.failWithRepos(ExitPR, "pr", err, runDir, []repoWorkspace{{PRURL: runCfg.Workflow.ResumePRURL}})
+		}
+		feedbackPRURL = resumeState.URL
+		// The exact PR head now pins publication. Fork retries first clone the
+		// upstream base, which is allowed to be the default branch.
+		runCfg.RequiresNonDefaultBranch = false
+		resumeFork = workflowPRFork(resumeState)
+		runCfg.BaseBranch = resumeState.HeadRefName
+		if resumeFork != "" {
+			runCfg.BaseBranch = resumeState.BaseRefName
+		}
+		if h.OnPRTitle != nil {
+			h.OnPRTitle(resumeState.URL, resumeState.Title)
+		}
+		if err := h.applyWorkflowPRMetadata(ctx, repoWorkspace{PRURL: feedbackPRURL}, runCfg.Workflow); err != nil {
+			return h.failWithRepos(ExitPR, "pr", err, runDir, []repoWorkspace{{PRURL: feedbackPRURL}})
+		}
+	} else if workflowRepair || isFreeTextPRFeedbackRun(runCfg) {
 		var err error
 		feedbackPRURL, err = h.preparePRFeedbackTarget(ctx, &runCfg)
 		if err != nil {
@@ -473,6 +500,23 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		runCfg.BaseBranch = repos[0].BaseBranch
 	}
 
+	if resumePR {
+		repo := &repos[0]
+		repo.Branch = resumeState.HeadRefName
+		repo.RequiredBranch = normalizeBranchRef(resumeState.HeadRefName)
+		repo.BaseBranch = resumeState.BaseRefName
+		runCfg.BaseBranch = repo.BaseBranch
+		repo.CreateWorkBranch = false
+		repo.ResumeWorkflowPR = true
+		repo.PRVerification = h.IssuePRVerification
+		repo.ReviewRequired = repo.PRVerification != ""
+		if resumeFork != "" {
+			if err := h.checkoutWorkflowPRFork(ctx, repo, resumeState, resumeFork); err != nil {
+				return h.failWithRepos(ExitGit, "git", err, runDir, repos)
+			}
+		}
+	}
+
 	targetDir, err := resolveTargetDir(repos[0].Dir, cfg.TargetSubdir)
 	if err != nil {
 		return h.fail(ExitConfig, "config", err, runDir)
@@ -485,6 +529,9 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	generatedBranch := slug.BranchName(cfg.Prompt, runNow, guid)
 	branchCollisionSuffix := runBranchCollisionSuffix(runNow, guid)
 	for i := range repos {
+		if resumePR {
+			break
+		}
 		branch := strings.TrimSpace(repos[i].BaseBranch)
 		if issueClaim != nil {
 			h.logf("stage=git status=ok action=issue_claim_branch branch=%s baseBranch=%s", issueClaim.Branch, issueClaim.BaseBranch)
@@ -513,7 +560,7 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	}
 	// Capture unpublished local work before preflight can import remote commits.
 	localPublicationPending := false
-	if h.ResumeIssueWorkspace && issueClaim != nil && h.IssuePublicationReady {
+	if !resumePR && h.ResumeIssueWorkspace && issueClaim != nil && h.IssuePublicationReady {
 		localPublicationPending, err = h.reservedIssueHasLocalWork(ctx, repos[0])
 		if err != nil {
 			return h.fail(ExitGit, "git", err, runDir)
@@ -521,6 +568,9 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	}
 	if !reviewRun {
 		for i := range repos {
+			if resumePR && resumeFork != "" {
+				continue
+			}
 			if err := h.preparePublishWorkflow(ctx, &repos[i]); err != nil {
 				return h.fail(ExitGit, "workflow", err, runDir)
 			}
@@ -544,7 +594,7 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	allowDraftHandoff := issueClaim != nil && !isReviewOnlyRun(runCfg) && !workflowRepair
 	verification := h.IssuePRVerification
 	publicationPending := false
-	if h.ResumeIssueWorkspace && issueClaim != nil {
+	if !resumePR && h.ResumeIssueWorkspace && issueClaim != nil {
 		status, statusErr := h.runCommand(ctx, "git", statusCommand(repos[0].Dir))
 		if statusErr != nil {
 			return h.fail(ExitGit, "git", statusErr, runDir)
@@ -651,6 +701,18 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		codexBasePrompt = withBackpressurePrompt(codexBasePrompt, h.collectBackpressureRequirements(repos, cfg.TargetSubdir))
 	}
 	codexTargetLabel := codexTargetLabel(cfg.TargetSubdir, len(repos) > 1)
+	if resumePR {
+		repo := &repos[0]
+		repo.Changed = true
+		if code, stage, err := h.checkPublishedPullRequest(ctx, runCfg, repo, runtime, codexDir, codexOpts, codexBasePrompt, agentsPath, codexTargetLabel, agentStage, false); err != nil {
+			return h.failWithRepos(code, stage, err, runDir, repos)
+		}
+		if code, stage, err := h.finishPublishedPullRequest(ctx, runCfg, repo, runtime, codexDir, codexOpts, codexBasePrompt, agentsPath, codexTargetLabel, agentStage, false); err != nil {
+			return h.failWithRepos(code, stage, err, runDir, repos)
+		}
+		return buildResult(runDir, repos, false)
+	}
+
 	initialRepo, initialRepoDir := initialAgentInvocationRepoMetadata(repos)
 	initialAgentInvocation := newAgentInvocationLogMetadata(runtime, invocationMode, 1, initialRepo, initialRepoDir, codexTargetLabel)
 
@@ -882,6 +944,19 @@ func (h Harness) processChangedRepo(
 	if err != nil || isReviewOnlyRun(cfg) || repo == nil || !repo.Changed || strings.TrimSpace(repo.PRURL) == "" {
 		return exitCode, stage, err
 	}
+	return h.finishPublishedPullRequest(ctx, cfg, repo, runtime, codexDir, codexOpts, codexBasePrompt, agentsPath, codexTargetLabel, agentStage, multiRepo)
+}
+
+func (h Harness) finishPublishedPullRequest(
+	ctx context.Context,
+	cfg config.Config,
+	repo *repoWorkspace,
+	runtime agentruntime.Runtime,
+	codexDir string,
+	codexOpts codexRunOptions,
+	codexBasePrompt, agentsPath, codexTargetLabel, agentStage string,
+	multiRepo bool,
+) (int, string, error) {
 	// Check after publishing/CI and before review, including reused PR branches.
 	if exitCode, stage, err := h.ensurePullRequestMergeable(ctx, cfg, repo, runtime, codexDir, codexOpts, codexBasePrompt, agentsPath, codexTargetLabel, agentStage); err != nil {
 		return exitCode, stage, err
@@ -932,7 +1007,7 @@ func (h Harness) finalizePullRequestReview(
 		h.logFinalReviewStoppedForMergedPR(*repo, 0, h.FinalReviewPasses)
 		return ExitSuccess, "", nil
 	}
-	if repo.CreateWorkBranch {
+	if repo.CreateWorkBranch || repo.ResumeWorkflowPR {
 		hasNetDiff, diffErr := h.repoHasEffectivePullRequestDiff(ctx, *repo)
 		if diffErr != nil {
 			return ExitGit, "git", diffErr
@@ -1083,6 +1158,7 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 			return ExitSuccess, "", nil
 		}
 	}
+	applyPRMetadata := false
 	if repo.PRVerification != "" && repo.PRURL == "" {
 		pr, err := h.lookupPRByRefs(ctx, *repo, repoPRTargetRepo(*repo), repo.BaseBranch, "open")
 		if err != nil {
@@ -1090,6 +1166,7 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 		}
 		repo.PRURL = pr.URL
 		if pr.URL != "" {
+			applyPRMetadata = true
 			if err := h.ensurePullRequestDraft(ctx, *repo); err != nil {
 				return ExitPR, "pr", err
 			}
@@ -1166,6 +1243,7 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 			return ExitPR, "pr", err
 		}
 		repo.PRURL = prURL
+		applyPRMetadata = true
 		if repo.PRVerification != "" {
 			// Creation can also recover an already-open pull request.
 			if err := h.ensurePullRequestDraft(ctx, *repo); err != nil {
@@ -1189,6 +1267,24 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 		)
 	}
 
+	if applyPRMetadata {
+		if err := h.applyWorkflowPRMetadata(ctx, *repo, cfg.Workflow); err != nil {
+			return ExitPR, "pr", err
+		}
+	}
+	return h.checkPublishedPullRequest(ctx, cfg, repo, runtime, codexDir, codexOpts, codexBasePrompt, agentsPath, codexTargetLabel, agentStage, multiRepo)
+}
+
+func (h Harness) checkPublishedPullRequest(
+	ctx context.Context,
+	cfg config.Config,
+	repo *repoWorkspace,
+	runtime agentruntime.Runtime,
+	codexDir string,
+	codexOpts codexRunOptions,
+	codexBasePrompt, agentsPath, codexTargetLabel, agentStage string,
+	multiRepo bool,
+) (int, string, error) {
 	preserveIssueTitle := cfg.GitHubIssue != nil
 	for attempt := 0; ; attempt++ {
 		remainingTitlePropagationRetries := 0
@@ -1691,6 +1787,9 @@ func (h Harness) recreatePullRequestIfClosed(ctx context.Context, repo *repoWork
 		oldPRURL,
 		repo.PRURL,
 	)
+	if err := h.applyWorkflowPRMetadata(ctx, *repo, cfg.Workflow); err != nil {
+		return false, err
+	}
 	return true, nil
 }
 

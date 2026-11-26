@@ -269,6 +269,7 @@ func TestRunHappyPathCreatesPR(t *testing.T) {
 	t.Parallel()
 
 	cfg := sampleConfig()
+	cfg.Workflow = &config.WorkflowRunConfig{ID: "delivery", EventID: "trigger", PRAssignee: "maintainer", PRLabels: []string{"tracking"}}
 	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
 	guid := "abcdef123456"
 	runDir := testRunDir(guid)
@@ -295,6 +296,16 @@ func TestRunHappyPathCreatesPR(t *testing.T) {
 		{cmd: commitCommand(repoDir, cfg.CommitMessage)},
 		{cmd: pushCommand(repoDir, branch)},
 		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stdout: prURL + "\n"}},
+		{
+			cmd: execx.Command{Name: "gh", Dir: repoDir, Stdin: `{"assignees":["maintainer"]}`,
+				Args: []string{"api", "--method", "POST", "repos/acme/repo/issues/42/assignees", "--input", "-", "--jq", "[.assignees[].login]"}},
+			res: execx.Result{Stdout: `["creator","maintainer"]`},
+		},
+		{
+			cmd: execx.Command{Name: "gh", Dir: repoDir, Stdin: `{"labels":["tracking"]}`,
+				Args: []string{"api", "--method", "POST", "repos/acme/repo/issues/42/labels", "--input", "-", "--jq", "[.[].name]"}},
+			res: execx.Result{Stdout: `["automation","tracking"]`},
+		},
 		{cmd: prChecksCommand(repoDir, prURL)},
 	}}
 
