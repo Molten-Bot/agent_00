@@ -34,6 +34,7 @@ type IssueClaimRecord struct {
 	ExitCode         int           `json:"exitCode,omitempty"`
 	CheckoutComplete bool          `json:"checkoutComplete,omitempty"`
 	PublicationReady bool          `json:"publicationReady,omitempty"`
+	PRVerification   string        `json:"prVerification,omitempty"`
 	Step             string        `json:"step,omitempty"`
 	StepStartedAt    time.Time     `json:"stepStartedAt,omitempty"`
 	StartedAt        time.Time     `json:"startedAt,omitempty"`

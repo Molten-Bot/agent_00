@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -189,6 +190,7 @@ type repoWorkspace struct {
 	PendingReviewGate           *githubutil.PendingReviewGate
 	ReviewRequired              bool
 	ReviewSanitize              bool
+	PRVerification              string
 }
 
 type codexRunOptions = agentruntime.RunOptions
@@ -219,8 +221,10 @@ type Harness struct {
 	IssueCheckoutComplete bool
 	// IssuePublicationReady records that a prior attempt accepted the agent result.
 	IssuePublicationReady bool
+	// IssuePRVerification is the accepted PR-scoped work carried across attempts.
+	IssuePRVerification string
 	// SaveIssuePublicationReady checkpoints agent acceptance before publication.
-	SaveIssuePublicationReady func(bool) error
+	SaveIssuePublicationReady func(ready bool, verification string) error
 
 	Signing          *gitsigning.Snapshot
 	LoadSigning      func(context.Context) (*gitsigning.Snapshot, error)
@@ -366,7 +370,7 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	// Read-only sandboxes replace /dev, hiding RAM checkouts under /dev/shm.
 	// Allocate on disk before cloning, including implementation runs that
 	// will later enter a read-only review pass. Keep the sandbox read-only.
-	if cfg.Review != nil || h.FinalReviewPasses > 0 || workflowRepair {
+	if cfg.Review != nil || h.FinalReviewPasses > 0 || workflowRepair || (cfg.GitHubIssue != nil && cfg.GitHubIssue.Claim != nil) {
 		h.Workspace.PreferDisk = true
 	}
 	runDir, guid, err := h.Workspace.CreateRunDir()
@@ -527,6 +531,8 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		}
 	}
 
+	allowDraftHandoff := issueClaim != nil && !isReviewOnlyRun(runCfg) && !workflowRepair
+	verification := h.IssuePRVerification
 	publicationPending := false
 	if h.ResumeIssueWorkspace && issueClaim != nil {
 		status, statusErr := h.runCommand(ctx, "git", statusCommand(repos[0].Dir))
@@ -538,7 +544,7 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 			return h.fail(ExitGit, "git", err, runDir)
 		}
 		hasPendingWork := publicationPending
-		publicationPending = localPublicationPending && h.IssuePublicationReady
+		publicationPending = h.IssuePublicationReady && (localPublicationPending || (verification != "" && hasPendingWork))
 		if issueClaim.Attempt > 1 && !hasPendingWork {
 			// A dependency may have merged since the issue branch was reserved.
 			// Incorporate the fetched base before the agent tests the branch.
@@ -642,7 +648,31 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	codexStart := time.Now()
 	if !publicationPending {
 		h.step("agent")
-		agentRes, err = h.runCodexCapture(ctx, runtime, codexDir, codexBasePrompt, codexOpts, agentsPath, agentResponseMode, initialAgentInvocation)
+		initialHarness := h
+		initialPrompt := codexBasePrompt
+		if allowDraftHandoff {
+			initialPrompt += draftHandoffInstructions
+			if verification != "" {
+				initialPrompt += "\n\nPR verification already queued for this issue:\n" + verification
+			}
+			initialHarness.SaveIssuePublicationReady = nil
+			if h.SaveIssuePublicationReady != nil {
+				if err := h.SaveIssuePublicationReady(false, ""); err != nil {
+					return h.fail(ExitCodex, agentStage, fmt.Errorf("clear issue publication readiness: %w", err), runDir)
+				}
+			}
+		}
+		agentRes, err = initialHarness.runCodexCapture(ctx, runtime, codexDir, initialPrompt, codexOpts, agentsPath, agentResponseMode, initialAgentInvocation)
+		if err == nil && allowDraftHandoff {
+			if request, ok := draftHandoffRequest(agentRes.Stdout); ok {
+				if request != "" && !slices.Contains(strings.Split(verification, "\n"), request) {
+					verification = strings.TrimSpace(verification + "\n" + request)
+				}
+				if request == "" || len(verification) > maxPRVerificationLength {
+					err = fmt.Errorf("draft handoff requires a concise PR verification request")
+				}
+			}
+		}
 	} else {
 		h.logf("stage=git status=ok action=resume_publication")
 	}
@@ -708,6 +738,18 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		res := buildResult(runDir, repos, true)
 		res.ExitCode = ExitSuccess
 		return res
+	}
+	if allowDraftHandoff && changedCount > 0 {
+		if !publicationPending && h.SaveIssuePublicationReady != nil {
+			if err := h.SaveIssuePublicationReady(true, verification); err != nil {
+				return h.fail(ExitCodex, agentStage, fmt.Errorf("record issue publication readiness: %w", err), runDir)
+			}
+		}
+		if verification != "" {
+			repos[0].PRVerification = verification
+			repos[0].ReviewRequired = true
+			h.logf("stage=pr status=ok action=accept_draft_handoff")
+		}
 	}
 	noChangePRsRepaired := false
 	verifyNoChangePRs := func() (int, string, error) {
@@ -893,10 +935,19 @@ func (h Harness) finalizePullRequestReview(
 			repo.RelDir,
 			repo.PRURL,
 		)
+		if repo.PRVerification != "" {
+			return ExitPR, "review", err
+		}
 		return ExitSuccess, "", nil
 	}
 	if repo.ReviewReceipt == nil {
 		return ExitPR, "review", fmt.Errorf("waiting for a submitted clean review receipt")
+	}
+	if repo.PRVerification != "" {
+		if err := h.verifyDraftHandoff(ctx, *repo, runtime, codexOpts, agentsPath); err != nil {
+			repo.ReviewReceipt = nil
+			return ExitPR, "pr_verification", err
+		}
 	}
 	if err := h.completeCleanReviewGate(ctx, cfg, repo, !cfg.Draft); err != nil {
 		return ExitPR, "review", h.reviewPublicationError(ctx, repo, 0, h.FinalReviewPasses, err)
@@ -998,8 +1049,12 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 	); err != nil {
 		return exitCode, stage, err
 	}
-	if alreadyCommitted {
-		if hasDelta, err := h.repoHasPullRequestDelta(ctx, *repo); err != nil {
+	if alreadyCommitted || repo.PRVerification != "" {
+		checkDelta := h.repoHasPullRequestDelta
+		if repo.PRVerification != "" {
+			checkDelta = h.repoHasEffectivePullRequestDiff
+		}
+		if hasDelta, err := checkDelta(ctx, *repo); err != nil {
 			return ExitGit, "git", err
 		} else if !hasDelta {
 			repo.Changed = false
@@ -1011,6 +1066,21 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 				repo.BaseBranch,
 			)
 			return ExitSuccess, "", nil
+		}
+	}
+	if repo.PRVerification != "" && repo.PRURL == "" {
+		pr, err := h.lookupPRByRefs(ctx, *repo, repoPRTargetRepo(*repo), repo.BaseBranch, "open")
+		if err != nil {
+			return ExitPR, "pr", err
+		}
+		repo.PRURL = pr.URL
+		if pr.URL != "" {
+			if err := h.ensurePullRequestDraft(ctx, *repo); err != nil {
+				return ExitPR, "pr", err
+			}
+			if h.OnPRTitle != nil {
+				h.OnPRTitle(pr.URL, pr.Title)
+			}
 		}
 	}
 	if exitCode, stage, err := h.pushWithSyncAndConflictResolution(
@@ -1061,7 +1131,7 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 		}
 		prURL, err := h.createPullRequestURL(ctx, *repo, cfg, createWorkBranch, headRef, targetRepo)
 		if err != nil {
-			if errors.Is(err, errPRCreatePermissionDenied) {
+			if errors.Is(err, errPRCreatePermissionDenied) && repo.PRVerification == "" {
 				if cfg.AssignCreatorEnabled() {
 					if err := h.assignGitHubIssueCreator(ctx, *repo, cfg.GitHubIssue); err != nil {
 						return ExitPR, "pr", err
@@ -1081,6 +1151,12 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 			return ExitPR, "pr", err
 		}
 		repo.PRURL = prURL
+		if repo.PRVerification != "" {
+			// Creation can also recover an already-open pull request.
+			if err := h.ensurePullRequestDraft(ctx, *repo); err != nil {
+				return ExitPR, "pr", err
+			}
+		}
 	}
 	if cfg.AssignCreatorEnabled() {
 		if err := h.assignGitHubIssueCreator(ctx, *repo, cfg.GitHubIssue); err != nil {
@@ -2901,7 +2977,7 @@ func (h Harness) createPullRequestURL(
 	headRef,
 	targetRepo string,
 ) (string, error) {
-	cfg.Draft = cfg.Draft || h.autoDraftForReviewCycle(cfg)
+	cfg.Draft = cfg.Draft || h.autoDraftForReviewCycle(cfg) || repo.PRVerification != ""
 	var cmd execx.Command
 	if createWorkBranch {
 		cmd = prCreateWithOptionsCommand(repo.Dir, cfg, repo.BaseBranch, headRef, targetRepo)
@@ -4316,6 +4392,10 @@ func (h Harness) runFinalReviewCycle(
 		reviewAgent = cfg.Workflow.ReviewAgent
 	}
 	reviewHarness := h
+	if repo.PRVerification != "" {
+		// A read-only review must not invalidate the accepted implementation.
+		reviewHarness.SaveIssuePublicationReady = nil
+	}
 
 	// Allow one extra pass beyond FinalReviewPasses so a fix applied on the
 	// final configured pass is always confirmed clean by a follow-up review
@@ -6102,7 +6182,7 @@ func (h Harness) runCodexCapture(
 	invocation agentInvocationLogMetadata,
 ) (execx.Result, error) {
 	if h.SaveIssuePublicationReady != nil {
-		if err := h.SaveIssuePublicationReady(false); err != nil {
+		if err := h.SaveIssuePublicationReady(false, ""); err != nil {
 			return execx.Result{}, fmt.Errorf("clear issue publication readiness: %w", err)
 		}
 	}
@@ -6167,7 +6247,7 @@ func (h Harness) runCodexCapture(
 		)
 	}
 	if err == nil && h.SaveIssuePublicationReady != nil {
-		if saveErr := h.SaveIssuePublicationReady(true); saveErr != nil {
+		if saveErr := h.SaveIssuePublicationReady(true, ""); saveErr != nil {
 			err = fmt.Errorf("record issue publication readiness: %w", saveErr)
 		}
 	}
@@ -6741,6 +6821,9 @@ func (h Harness) runCodexWithHeartbeat(
 			}
 			if failed {
 				detail, fullDetail := codexFailureDetailWithErrorDetails(run.res, detail)
+				if _, handoff := draftHandoffRequest(run.res.Stdout); handoff || invocation.Mode == "pr_verification" {
+					return run.res, fmt.Errorf("%s reported failure: %s", agentStage, detail)
+				}
 				if isImplementationTargetFailure(detail) {
 					return run.res, fmt.Errorf("%s reported failure: %s", agentStage, detail)
 				}
@@ -6774,6 +6857,9 @@ func (h Harness) runCodexWithHeartbeat(
 				return run.res, fmt.Errorf("%s reported failure: %s", agentStage, detail)
 			}
 			if run.err != nil {
+				if _, handoff := draftHandoffRequest(run.res.Stdout); handoff || invocation.Mode == "pr_verification" {
+					return run.res, run.err
+				}
 				if isCodexExecutionTransportFailure(run.res, run.err) {
 					return run.res, run.err
 				}

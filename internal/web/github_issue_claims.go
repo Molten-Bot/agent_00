@@ -139,13 +139,14 @@ func (s Server) submitParsedWithIssueClaim(ctx context.Context, body []byte, run
 }
 
 type issueClaimTarget struct {
-	ID         string
-	BaseBranch string
-	SHA        string
-	Linked     int
-	ClosingPRs int
-	BlockedBy  int
-	Branches   []string
+	ID               string
+	BaseBranch       string
+	SHA              string
+	Linked           int
+	ClosingPRs       int
+	OnlyClosingPRURL string
+	BlockedBy        int
+	Branches         []string
 }
 
 func (s Server) issueClaimTarget(ctx context.Context, repository string, number int) (issueClaimTarget, error) {
@@ -153,7 +154,7 @@ func (s Server) issueClaimTarget(ctx context.Context, repository string, number 
 	if !ok {
 		return issueClaimTarget{}, fmt.Errorf("invalid issue repository")
 	}
-	const query = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){defaultBranchRef{name target{oid}} issue(number:$number){id linkedBranches(first:100){totalCount nodes{ref{name}}} closedByPullRequestsReferences(first:100,includeClosedPrs:true){totalCount nodes{state merged}} issueDependenciesSummary{blockedBy}}}}`
+	const query = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){defaultBranchRef{name target{oid}} issue(number:$number){id linkedBranches(first:100){totalCount nodes{ref{name}}} closedByPullRequestsReferences(first:100,includeClosedPrs:true){totalCount nodes{url state merged}} issueDependenciesSummary{blockedBy}}}}`
 	result, err := s.runIssueGH(ctx, execx.Command{Name: "gh", Args: []string{"api", "graphql", "-f", "query=" + query, "-f", "owner=" + owner, "-f", "name=" + name, "-F", fmt.Sprintf("number=%d", number)}})
 	if err != nil {
 		return issueClaimTarget{}, err
@@ -177,6 +178,7 @@ func (s Server) issueClaimTarget(ctx context.Context, repository string, number 
 					ClosedByPullRequestsReferences struct {
 						TotalCount int
 						Nodes      []struct {
+							URL    string
 							State  string
 							Merged bool
 						}
@@ -198,12 +200,17 @@ func (s Server) issueClaimTarget(ctx context.Context, repository string, number 
 	}
 	closing := repo.Issue.ClosedByPullRequestsReferences
 	blockingPRs := closing.TotalCount - len(closing.Nodes)
+	var closingPRURL string
 	for _, pr := range closing.Nodes {
 		if strings.EqualFold(pr.State, "OPEN") || pr.Merged {
 			blockingPRs++
+			closingPRURL = pr.URL
 		}
 	}
 	target := issueClaimTarget{ID: repo.Issue.ID, BaseBranch: repo.DefaultBranchRef.Name, SHA: repo.DefaultBranchRef.Target.OID, Linked: repo.Issue.LinkedBranches.TotalCount, ClosingPRs: blockingPRs, BlockedBy: repo.Issue.IssueDependenciesSummary.BlockedBy}
+	if blockingPRs == 1 {
+		target.OnlyClosingPRURL = closingPRURL
+	}
 	for _, node := range repo.Issue.LinkedBranches.Nodes {
 		if node.Ref != nil {
 			target.Branches = append(target.Branches, node.Ref.Name)
@@ -869,6 +876,7 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		}
 	}
 	branchRecovery := requiresIssueBranchRecovery(previous)
+	var verificationPRURL string
 	if s.IssueRecovery != nil && remote.Claim.ID != "" {
 		claimedIssue := &config.GitHubIssueConfig{Repository: repository, Number: number, Claim: &remote.Claim}
 		pr, err := s.findIssuePR(ctx, claimedIssue)
@@ -878,7 +886,10 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		if err := pr.recoveryBlocker(claimedIssue); err != nil {
 			return issueRetryResult{}, http.StatusConflict, err
 		}
-		if pr.URL != "" && (automatic || branchRecovery || workflowRecovery || ownedWorkflowRetry) {
+		if previous.Version == 2 && previous.InstanceID == s.instanceID() && !branchRecovery && pr.resumesVerification(previous) {
+			verificationPRURL = pr.URL
+		}
+		if pr.URL != "" && verificationPRURL == "" && (automatic || branchRecovery || workflowRecovery || ownedWorkflowRetry) {
 			if !automatic && !workflowRecovery && branchRecovery && previous.Version == 2 &&
 				previous.InstanceID == remote.InstanceID && previous.InstanceID == s.instanceID() {
 				if err := s.verifyRecoveredIssuePR(ctx, previous, pr); err != nil {
@@ -910,7 +921,8 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 	if (automatic || workflowRecovery || ownedWorkflowRetry) && target.BlockedBy > 0 {
 		return issueRetryResult{}, 409, fmt.Errorf("issue is blocked by %d open issue(s)", target.BlockedBy)
 	}
-	if (automatic || branchRecovery || workflowRecovery || ownedWorkflowRetry) && target.ClosingPRs > 0 {
+	closingVerificationPR := verificationPRURL != "" && strings.EqualFold(verificationPRURL, target.OnlyClosingPRURL)
+	if (automatic || branchRecovery || workflowRecovery || ownedWorkflowRetry) && target.ClosingPRs > 0 && !closingVerificationPR {
 		return issueRetryResult{}, 409, fmt.Errorf("%w: reconcile the issue's existing pull requests before using Recover / retry", app.ErrIssueBranchRecovery)
 	}
 	branch := fmt.Sprintf("agent00-issue-%d", number)
@@ -1004,9 +1016,12 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 			return issueRetryResult{}, status, err
 		}
 	}
-	if workflowRecovery || ownedWorkflowRetry {
+	// A stopped verifier can retry on the published draft, or before PR creation
+	// if the publication response was lost. Retain the original workflow policy.
+	verificationWorkflowRetry := automatic && previous.PRVerification != "" && run.Workflow != nil
+	if workflowRecovery || ownedWorkflowRetry || verificationWorkflowRetry {
 		var retryOf string
-		if ownedWorkflowRetry {
+		if ownedWorkflowRetry || verificationWorkflowRetry {
 			// A stopped task can remain in the broker after its workflow run was
 			// pruned. Give its replacement a distinct, restart-stable event.
 			prior := *run.Workflow
@@ -1041,6 +1056,7 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		}
 		record.CheckoutComplete = record.CheckoutComplete || previous.CheckoutComplete || previous.PublicationReady
 		record.PublicationReady = previous.PublicationReady
+		record.PRVerification = previous.PRVerification
 		if automatic {
 			record.AgentAttempts = previous.AgentAttempts
 			record.PriorRunFailures = issueRunFailures(previous)
@@ -1070,7 +1086,7 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		if err != nil {
 			return issueRetryResult{}, 409, err
 		}
-		if workflowRecovery || ownedWorkflowRetry {
+		if workflowRecovery || ownedWorkflowRetry || verificationWorkflowRetry {
 			s.Workflows.RequestScan()
 		}
 		return issueRetryResult{RequestID: requestID}, http.StatusAccepted, nil

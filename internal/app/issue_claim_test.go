@@ -363,7 +363,7 @@ func TestClaimedIssueResumesOnlyAcceptedPublication(t *testing.T) {
 			h.ResumeIssueWorkspace = true
 			h.IssuePublicationReady = tc.ready
 			var checkpoints []bool
-			h.SaveIssuePublicationReady = func(ready bool) error {
+			h.SaveIssuePublicationReady = func(ready bool, _ string) error {
 				checkpoints = append(checkpoints, ready)
 				return nil
 			}
@@ -391,7 +391,7 @@ func TestIssueConflictAgentRestoresPublicationReadiness(t *testing.T) {
 				return execx.Result{Stdout: "Resolved merge conflicts."}, nil
 			}))
 			var checkpoints []bool
-			h.SaveIssuePublicationReady = func(ready bool) error { checkpoints = append(checkpoints, ready); return nil }
+			h.SaveIssuePublicationReady = func(ready bool, _ string) error { checkpoints = append(checkpoints, ready); return nil }
 			runtime := agentruntime.Default()
 			_, err := h.runCodexCapture(context.Background(), runtime, t.TempDir(), "Resolve conflicts", codexRunOptions{}, "", "off", newAgentInvocationLogMetadata(runtime, "base_sync_conflict", 1, "repo", "repo", "."))
 			want := []bool{false, true}

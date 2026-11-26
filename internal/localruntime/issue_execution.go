@@ -176,7 +176,7 @@ func (r IssueRunner) check(ctx context.Context, cmd execx.Command) error {
 		return nil
 	}
 	for _, arg := range cmd.Args {
-		if arg == "push" || arg == "create" || arg == "merge" || arg == "edit" {
+		if arg == "push" || arg == "create" || arg == "merge" || arg == "edit" || arg == "ready" {
 			return r.Check(ctx)
 		}
 	}

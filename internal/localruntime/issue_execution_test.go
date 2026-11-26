@@ -2,6 +2,7 @@ package localruntime
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -10,7 +11,20 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Molten-Bot/agent_00/internal/execx"
 )
+
+func TestIssueRunnerChecksOwnershipBeforeChangingDraftState(t *testing.T) {
+	t.Parallel()
+	ownerChanged := errors.New("issue ownership changed")
+	runner := IssueRunner{Check: func(context.Context) error { return ownerChanged }}
+	for _, args := range [][]string{{"pr", "ready", "42"}, {"pr", "ready", "42", "--undo"}} {
+		if _, err := runner.Run(t.Context(), execx.Command{Name: "gh", Args: args}); !errors.Is(err, ownerChanged) {
+			t.Fatalf("gh %v returned %v, want ownership failure", args, err)
+		}
+	}
+}
 
 func TestIssueWorkerLockSurvivesParentDescriptorClose(t *testing.T) {
 	if os.Getenv("ISSUE_LOCK_CHILD") == "1" {
