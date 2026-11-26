@@ -3030,23 +3030,20 @@
       }
     }
 
-    function scheduleAgentAuthRefresh() {
+    function scheduleAgentAuthRefresh(retry = false) {
       if (agentAuthRefreshTimer !== null) {
         clearTimeout(agentAuthRefreshTimer);
         agentAuthRefreshTimer = null;
       }
-      if (isManualConfigureState()) {
-        return;
-      }
       const needsChallenge = state.agentAuth.required && !state.agentAuth.ready &&
         (!state.agentAuth.authURL || !state.agentAuth.deviceCode);
-      if (!needsChallenge && !state.agentAuth.ready) {
+      if (!retry && (isManualConfigureState() || (!needsChallenge && !state.agentAuth.ready))) {
         return;
       }
       agentAuthRefreshTimer = window.setTimeout(() => {
         agentAuthRefreshTimer = null;
         loadAgentAuthStatus();
-      }, state.agentAuth.ready ? 5000 : 700);
+      }, state.agentAuth.ready && !retry ? 5000 : 700);
     }
 
     function clearAgentAuthAutoSubmitTimer() {
@@ -3858,19 +3855,26 @@
         return;
       }
       const generation = state.agentAuthGeneration;
+      let auth;
       try {
-        const auth = await requestAgentAuth("/api/agent-auth", "GET");
-        if (state.agentAuthBusy || generation !== state.agentAuthGeneration) return;
-        applyAgentAuthGate(auth);
+        auth = await requestAgentAuth("/api/agent-auth", "GET");
       } catch (err) {
         if (state.agentAuthBusy || generation !== state.agentAuthGeneration) return;
+        if (err instanceof TypeError) {
+          // A failed fetch during a restart provides no new authorization state.
+          scheduleAgentAuthRefresh(true);
+          return;
+        }
         applyAgentAuthGate({
           required: true,
           ready: false,
           state: "error",
           message: err && err.message ? `Auth status failed: ${err.message}` : "Auth status failed.",
         });
+        return;
       }
+      if (state.agentAuthBusy || generation !== state.agentAuthGeneration) return;
+      applyAgentAuthGate(auth);
     }
 
     async function startAgentDeviceAuth() {
