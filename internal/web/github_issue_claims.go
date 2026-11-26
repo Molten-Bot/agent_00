@@ -20,6 +20,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/githubassets"
 	"github.com/Molten-Bot/agent_00/internal/githubutil"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
+	"github.com/Molten-Bot/agent_00/internal/workflow"
 )
 
 type issueAutomationState struct {
@@ -1015,7 +1016,9 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 	runIssue := *run.GitHubIssue
 	run.GitHubIssue = &runIssue
 	runIssue.Claim = claim
-	if metadataRetry {
+	resumeReview := previous.Outcome == workflow.OutcomeReviewPending && previous.PRVerification == "" &&
+		verificationPRURL != "" && run.Workflow != nil
+	if metadataRetry || resumeReview {
 		if verificationPRURL == "" || run.Workflow == nil {
 			return issueRetryResult{}, http.StatusConflict, fmt.Errorf("PR metadata retry requires the original pull request and workflow")
 		}
@@ -1045,7 +1048,8 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 	}
 	// A stopped verifier can retry on the published draft, or before PR creation
 	// if the publication response was lost. Retain the original workflow policy.
-	verificationWorkflowRetry := automatic && previous.PRVerification != "" && run.Workflow != nil
+	verificationWorkflowRetry := automatic && run.Workflow != nil &&
+		(previous.PRVerification != "" || previous.Outcome == workflow.OutcomeReviewPending)
 	if workflowRecovery || ownedWorkflowRetry || verificationWorkflowRetry {
 		var retryOf string
 		if ownedWorkflowRetry || verificationWorkflowRetry {

@@ -19,6 +19,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/githubassets"
 	"github.com/Molten-Bot/agent_00/internal/githubutil"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
+	"github.com/Molten-Bot/agent_00/internal/workflow"
 	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
 
@@ -466,7 +467,8 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		return nil
 	}
 	if app.IsWorkflowPRMetadataFailure(record.FailureDetail()) ||
-		(record.Outcome != "" && record.Outcome != "completed" && record.Run.Workflow != nil && record.Run.Workflow.ResumePRURL != "") {
+		(record.Outcome != "" && record.Outcome != "completed" && record.Outcome != workflow.OutcomeReviewPending &&
+			record.Run.Workflow != nil && record.Run.Workflow.ResumePRURL != "") {
 		record.State = "blocked"
 		record.Error = record.FailureDetail()
 		record.NextAttemptAt = time.Time{}
@@ -828,7 +830,8 @@ type issuePullRequest struct {
 }
 
 func (pr issuePullRequest) resumesVerification(record localruntime.IssueClaimRecord) bool {
-	return pr.URL != "" && !pr.Closed && !pr.Merged && record.PRVerification != "" &&
+	return pr.URL != "" && !pr.Closed && !pr.Merged && (record.PRVerification != "" ||
+		(record.Outcome == workflow.OutcomeReviewPending && record.PRURL == pr.URL)) &&
 		pr.BaseBranch == record.Run.GitHubIssue.Claim.BaseBranch
 }
 

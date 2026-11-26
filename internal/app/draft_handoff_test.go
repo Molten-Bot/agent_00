@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
@@ -34,6 +35,8 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 		metadataError       string
 		findings            bool
 		headMoved           bool
+		pendingChecks       int
+		checksFail          bool
 		filesPartial        bool
 		filesTruncated      bool
 		patchTruncated      bool
@@ -44,6 +47,10 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 		wantTruncationError string
 	}{
 		{name: "verify private draft from supplied evidence", answer: localSuccess, change: true},
+		{name: "wait for pending checks on reviewed head", answer: localSuccess, change: true, pendingChecks: 1},
+		{name: "pending checks outlive the wait budget", answer: localSuccess, change: true, pendingChecks: 3, wantExit: ExitPR},
+		{name: "head moves while checks are pending", answer: localSuccess, change: true, pendingChecks: 1, headMoved: true, wantExit: ExitPR},
+		{name: "failed checks block verification", answer: localSuccess, change: true, checksFail: true, wantExit: ExitPR},
 		{name: "retry verification on the same draft", answer: localSuccess, change: true, retry: true, wantExit: ExitPR},
 		{name: "retry rejected assignee on the same draft", answer: localSuccess, change: true, metadataError: "assignee", wantExit: ExitPR},
 		{name: "retry rejected label on the same draft", answer: localSuccess, change: true, metadataError: "label", wantExit: ExitPR},
@@ -94,7 +101,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			base := git(seed, "rev-parse", "HEAD")
 
 			api := &reviewAPIStub{t: t}
-			var implementations, creates, verifications, ready int
+			var implementations, creates, verifications, ready, evidenceReads, waits int
 			var draft, accepted, metadataRetry bool
 			savedResume := ""
 			labels := []string{"existing label"}
@@ -253,11 +260,19 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 					case strings.HasPrefix(args, "pr view "):
 						head := api.head
 						fileEvidence := ""
+						check := `"conclusion":"SUCCESS"`
 						if strings.Contains(args, "statusCheckRollup") && strings.Contains(args, "changedFiles,files") {
 							if !hasGitHubCredential(cmd) {
 								return execx.Result{}, errors.New("private draft file metadata requires authentication")
 							}
-							if tc.headMoved {
+							evidenceReads++
+							switch {
+							case tc.pendingChecks >= evidenceReads:
+								check = `"status":"IN_PROGRESS"`
+							case tc.checksFail:
+								check = `"conclusion":"FAILURE"`
+							}
+							if tc.headMoved && evidenceReads > tc.pendingChecks {
 								head = "new-head"
 							}
 							files := []string{`{"path":"work.txt","additions":1,"deletions":1}`}
@@ -273,7 +288,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 							}
 							fileEvidence = fmt.Sprintf(`,"changedFiles":%d,"files":[%s]`, fileCount, strings.Join(files, ","))
 						}
-						return execx.Result{Stdout: fmt.Sprintf(`{"number":42,"url":%q,"state":"OPEN","mergeable":"MERGEABLE","baseRefName":"main","headRefName":%q,"headRefOid":%q,"isDraft":%t,"statusCheckRollup":[{"name":"CI","conclusion":"SUCCESS"}]%s}`, prURL, branch, head, draft, fileEvidence)}, nil
+						return execx.Result{Stdout: fmt.Sprintf(`{"number":42,"url":%q,"state":"OPEN","mergeable":"MERGEABLE","baseRefName":"main","headRefName":%q,"headRefOid":%q,"isDraft":%t,"statusCheckRollup":[{"name":"CI",%s}]%s}`, prURL, branch, head, draft, check, fileEvidence)}, nil
 					case strings.Contains(args, "api repos/acme/repo/pulls?") && creates > 0:
 						return execx.Result{Stdout: fmt.Sprintf(`[{"html_url":%q,"title":"Issue","state":"open","head":{"ref":%q,"repo":{"full_name":"acme/repo"}},"base":{"ref":"main"}}]`, prURL, branch)}, nil
 					case strings.HasPrefix(args, "api "):
@@ -283,6 +298,8 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				return execx.Result{}, fmt.Errorf("unexpected command %s %s", cmd.Name, args)
 			})
 			h := New(runner)
+			h.PRChecksWatchTimeout = 10 * time.Second
+			h.Sleep = func(context.Context, time.Duration) error { waits++; return nil }
 			h.SaveWorkflowPRResume = func(url string) error { savedResume = url; return nil }
 			h.Workspace = workspace.Manager{Root: root, NewGUID: func() string { return "issue-workspace" }}
 			if tc.queued {
@@ -328,7 +345,16 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				}
 				return
 			}
-			if tc.findings || tc.headMoved || tc.reviewStale {
+			if tc.pendingChecks > 0 && waits != 1 {
+				t.Fatalf("waits = %d, want one pending check retry", waits)
+			}
+			if tc.pendingChecks > 1 && !errors.Is(result.Err, ErrReviewPending) {
+				t.Fatalf("expected pending verification after retry budget, got %v", result.Err)
+			}
+			if tc.checksFail && !strings.Contains(fmt.Sprint(result.Err), "checks failed on the reviewed pull request head") {
+				t.Fatalf("expected failed checks to block verification, got %v", result.Err)
+			}
+			if tc.findings || tc.headMoved || tc.reviewStale || tc.checksFail || tc.pendingChecks > 1 {
 				if creates != 1 || api.posts != 1 || verifications != 0 {
 					t.Fatal("expected one submitted review and verification blocked")
 				}

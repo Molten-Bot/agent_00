@@ -820,7 +820,7 @@ func TestIssueRecoveryRetriesUnlockAndAdmissionAfterRestart(t *testing.T) {
 
 func TestLabeledIssueDraftVerificationRetryKeepsWorkflowPolicy(t *testing.T) {
 	t.Parallel()
-	for _, outcome := range []string{"error", "completed"} {
+	for _, outcome := range []string{"error", "completed", workflow.OutcomeReviewPending} {
 		t.Run(outcome, func(t *testing.T) {
 			testLabeledIssueDraftVerificationRetry(t, outcome)
 		})
@@ -857,17 +857,22 @@ func testLabeledIssueDraftVerificationRetry(t *testing.T, outcome string) {
 	previous := completeRecoveryRecord(t, s, outcome, 1)
 	previous.PublicationReady, previous.CheckoutComplete = true, true
 	previous.PRVerification = "Verify CI and the submitted review on the published head."
+	const prURL = "https://github.com/acme/repo/pull/42"
 	const verificationFailure = "pr_verification: draft verification did not pass"
-	if outcome == "error" {
+	status := "failed"
+	if outcome == workflow.OutcomeReviewPending {
+		status = workflow.OutcomeReviewPending
+		previous.PRURL = prURL
+	}
+	if outcome == "error" || outcome == workflow.OutcomeReviewPending {
 		previous.RunError = verificationFailure
 	}
 	if err := s.IssueClaims.Save(previous); err != nil {
 		t.Fatal(err)
 	}
-	const prURL = "https://github.com/acme/repo/pull/42"
 	f.prs = recoveryPR("open", "null", previous.Run.GitHubIssue.Claim.Branch, "main")
 	f.closingPRURL = prURL
-	if err := engine.Complete(previous.Run.Workflow.EventID, workflow.Outcome{Status: "failed", PRURL: prURL, Reason: verificationFailure, ReviewRequired: true}); err != nil {
+	if err := engine.Complete(previous.Run.Workflow.EventID, workflow.Outcome{Status: status, PRURL: prURL, Reason: verificationFailure, ReviewRequired: true}); err != nil {
 		t.Fatal(err)
 	}
 	merges := 0

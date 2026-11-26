@@ -50,6 +50,40 @@ func TestOlderWorkflowJournalDoesNotTreatCleanFlagAsReceipt(t *testing.T) {
 	}
 }
 
+func TestPendingReviewRetainsActivationWithoutUsingReviewEvidence(t *testing.T) {
+	t.Parallel()
+	w := definition("pending-review")
+	w.ReviewCycles, w.Merge.Enabled = 1, true
+	e, _, _ := testEngine(t, w)
+	state, err := e.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := Item{Repository: w.Repository, Kind: "issue", Number: 1}
+	prURL := "https://github.com/acme/repo/pull/12"
+	state.Runs = []Run{{ID: "pending", Workflow: w, Item: item, Status: "running", Outcome: &Outcome{
+		Status: OutcomeReviewPending, PRURL: prURL, Reason: "Waiting for the reviewed head",
+		ReviewReceipt: fixtureReviewReceipt(w, prURL),
+	}}}
+	if err := e.save(state); err != nil {
+		t.Fatal(err)
+	}
+	e.InspectPR = func(context.Context, string, string) (Item, error) {
+		t.Fatal("pending review reached merge eligibility")
+		return Item{}, nil
+	}
+	tick(t, e)
+	tick(t, e)
+	state, err = e.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := state.run("pending")
+	if run == nil || run.Status != awaitingReview || run.MergeHead != "" || state.busy(item) {
+		t.Fatalf("pending review did not retain a retryable activation: %+v", run)
+	}
+}
+
 func TestReviewOutcomeSurvivesWorkspaceCleanup(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

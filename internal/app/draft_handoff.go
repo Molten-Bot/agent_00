@@ -3,13 +3,18 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/githubutil"
 	"github.com/Molten-Bot/agent_00/internal/stringsx"
 )
+
+var errDraftChecksPending = fmt.Errorf("%w: waiting for checks on the reviewed pull request head", ErrReviewPending)
 
 const (
 	draftHandoffPrefix       = "Draft handoff:"
@@ -35,7 +40,7 @@ func draftHandoffRequest(stdout string) (string, bool) {
 
 func (h Harness) verifyDraftHandoff(ctx context.Context, repo repoWorkspace, runtime agentruntime.Runtime, opts codexRunOptions, agentsPath string) error {
 	h.logf("stage=pr_verification status=start")
-	prompt, err := h.draftVerificationPrompt(ctx, repo)
+	prompt, err := h.waitForDraftVerificationPrompt(ctx, repo)
 	if err != nil {
 		return err
 	}
@@ -66,7 +71,33 @@ func (h Harness) verifyDraftHandoff(ctx context.Context, repo repoWorkspace, run
 	return nil
 }
 
-func (h Harness) draftVerificationPrompt(ctx context.Context, repo repoWorkspace) (string, error) {
+func (h Harness) waitForDraftVerificationPrompt(ctx context.Context, repo repoWorkspace) (string, error) {
+	const interval = 10 * time.Second
+	timeout := h.PRChecksWatchTimeout
+	if timeout == 0 {
+		timeout = defaultPRChecksWatchTimeout
+	}
+	sleep := h.Sleep
+	if sleep == nil {
+		sleep = sleepWithContext
+	}
+	requireChecks := false
+	for remaining := timeout; ; {
+		prompt, err := h.draftVerificationPrompt(ctx, repo, requireChecks)
+		if !errors.Is(err, errDraftChecksPending) || remaining <= 0 {
+			return prompt, err
+		}
+		h.logf("stage=pr_verification status=retry action=wait_for_reviewed_head_checks")
+		delay := min(remaining, interval)
+		if err := sleep(ctx, delay); err != nil {
+			return "", err
+		}
+		remaining -= delay
+		requireChecks = true
+	}
+}
+
+func (h Harness) draftVerificationPrompt(ctx context.Context, repo repoWorkspace, requireChecks bool) (string, error) {
 	receipt := repo.ReviewReceipt
 	if receipt == nil || !receipt.Clean() {
 		return "", fmt.Errorf("waiting for a submitted clean review receipt for draft verification")
@@ -104,6 +135,30 @@ func (h Harness) draftVerificationPrompt(ctx context.Context, repo repoWorkspace
 	if state.State != "OPEN" || !state.IsDraft || state.HeadRefOID != receipt.Head || state.URL != receipt.PRURL ||
 		state.BaseRefName != repo.BaseBranch || state.HeadRefName != repo.Branch {
 		return "", fmt.Errorf("cannot verify handoff without an open draft on the reviewed pull request head")
+	}
+
+	if receipt.Pass > 1 {
+		if err := h.confirmPublishedReviewHead(ctx, repo, receipt.Head); err != nil {
+			return "", err
+		}
+	}
+
+	var checks []githubutil.StatusCheck
+	if len(state.StatusCheckRollup) > 0 {
+		if err := json.Unmarshal(state.StatusCheckRollup, &checks); err != nil {
+			return "", fmt.Errorf("decode reviewed head checks: %w", err)
+		}
+	}
+	if requireChecks || slices.ContainsFunc(checks, func(check githubutil.StatusCheck) bool {
+		return check.Name != githubutil.ReviewCheckName && check.Context != githubutil.ReviewCheckName
+	}) {
+		passed, failed := githubutil.CIStatus(checks)
+		if failed {
+			return "", fmt.Errorf("checks failed on the reviewed pull request head")
+		}
+		if !passed {
+			return "", errDraftChecksPending
+		}
 	}
 
 	rawReview, err := readGH("api", fmt.Sprintf("%s/%d", githubutil.ReviewEndpoint(receipt.PRURL), receipt.ReviewID))

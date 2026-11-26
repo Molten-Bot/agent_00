@@ -704,8 +704,12 @@ func runServer(args []string) int {
 				if outcome.Result.Err != nil {
 					reviewOutcome.Reason = outcome.Result.Err.Error()
 				}
+				if outcome.State == "error" && errors.Is(outcome.Result.Err, app.ErrReviewPending) {
+					reviewOutcome.Status = workflow.OutcomeReviewPending
+				}
+
 				var reviewArchiveErr error
-				if reviewOutcome.ReviewReceipt != nil || reviewOutcome.ReviewInterrupted || reviewOutcome.ReviewRequired {
+				if reviewOutcome.ReviewReceipt != nil || reviewOutcome.ReviewInterrupted || reviewOutcome.ReviewRequired || reviewOutcome.Status == workflow.OutcomeReviewPending {
 					reviewArchiveErr = workflow.SaveReviewOutcome(filepath.Dir(cfg.RuntimeConfigPath), requestID, reviewOutcome)
 					if reviewArchiveErr != nil {
 						daemonLogger("task status=warn action=save_review_outcome request_id=%s err=%q", requestID, reviewArchiveErr)

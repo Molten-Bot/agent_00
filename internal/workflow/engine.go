@@ -182,6 +182,10 @@ type State struct {
 	Baselines    map[string]bool           `json:"baselines"`
 	Runs         []Run                     `json:"runs"`
 }
+
+// OutcomeReviewPending retains an activation while allowing fresh review work.
+const OutcomeReviewPending = "review_pending"
+
 type Outcome struct {
 	ReviewReceipt     *githubutil.ReviewReceipt `json:"reviewReceipt,omitempty"`
 	ReviewInterrupted bool                      `json:"reviewInterrupted,omitempty"`
@@ -738,13 +742,19 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		} else {
 			o = e.Status(r.RequestID)
 		}
-		if o.Status == "failed" || o.Status == "succeeded" {
+		if o.Status == "failed" || o.Status == "succeeded" || o.Status == OutcomeReviewPending {
 			r.Outcome = &o
 		}
 		if o.ReviewInterrupted {
 			r.PRURL = o.PRURL
 			r.Status = "failed"
 			r.Reason = "Pull request merged externally during review"
+		} else if o.Status == OutcomeReviewPending {
+			r.PRURL, r.Status, r.Reason = o.PRURL, awaitingReview, o.Reason
+			r.MergeHead = ""
+			if r.Reason == "" {
+				r.Reason = "Waiting for review to resume"
+			}
 		} else if o.Status == "failed" {
 			r.Status = "failed"
 			r.Reason = o.Reason
@@ -765,6 +775,15 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 			}
 		}
 	}
+	if r.Status == awaitingReview && r.Outcome != nil && r.Outcome.Status == OutcomeReviewPending {
+		if !exists {
+			r.Status, r.Reason = "completed", "Originating workflow removed before review resumed"
+		} else if original.Status == awaitingReview {
+			return nil
+		}
+		return finish()
+	}
+
 	if r.Status == awaitingReview && r.Outcome != nil && r.Outcome.PendingReviewGate != nil {
 		if !exists {
 			r.Status, r.Reason = "completed", "Originating workflow removed before review writeback"
@@ -971,6 +990,10 @@ func (e *Engine) PrepareIssueRecovery(workflowID, policy, eventID, retryOf strin
 				return fmt.Errorf("issue already has an active workflow run")
 			}
 			now := e.now()
+			if previous := s.run(retryOf); previous != nil && previous.Status == awaitingReview &&
+				previous.Outcome != nil && previous.Outcome.Status == OutcomeReviewPending {
+				previous.Status, previous.Reason, previous.UpdatedAt = "completed", "Review resumed by issue recovery", now
+			}
 			s.Runs = append(s.Runs, Run{ID: eventID, RetryOf: retryOf, Workflow: w, Item: item, Status: "pending_issue", Reason: "Waiting for issue claim recovery", StartedAt: &now, UpdatedAt: now})
 			return nil
 		})
@@ -984,6 +1007,9 @@ func (e *Engine) Complete(id string, outcome Outcome) error {
 		r := s.run(id)
 		if r == nil {
 			return ErrActivationNotFound
+		}
+		if r.Status == awaitingReview && r.Outcome != nil && r.Outcome.Status == OutcomeReviewPending {
+			r.Status = "running"
 		}
 		r.Outcome = &outcome
 		return nil
