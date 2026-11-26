@@ -68,12 +68,21 @@ func TestRequiredCheckConfirmationUsesCurrentHeadAndRules(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name, head, rollup, want string
+		nextPage                 string
 		unavailable              bool
 	}{
-		{name: "current required results", head: "current", rollup: `[{"name":"build","conclusion":"SUCCESS"},{"context":"lint","state":"SUCCESS"}]`},
-		{name: "changed head", head: "older", rollup: `[{"name":"build","conclusion":"SUCCESS"},{"context":"lint","state":"SUCCESS"}]`, want: "head changed", unavailable: true},
-		{name: "missing ruleset check", head: "current", rollup: `[{"name":"build","conclusion":"SUCCESS"}]`, want: "required check \"lint\"", unavailable: true},
-		{name: "actual failed check", head: "current", rollup: `[{"name":"build","conclusion":"FAILURE"}]`, want: "failed on the current pull request head"},
+		{name: "current required results", head: "current", rollup: `[{"name":"build","conclusion":"SUCCESS","isRequired":true},{"context":"lint","state":"SUCCESS","isRequired":true}]`},
+		{name: "changed head", head: "older", rollup: `[{"name":"build","conclusion":"SUCCESS","isRequired":true},{"context":"lint","state":"SUCCESS","isRequired":true}]`, want: "head changed", unavailable: true},
+		{name: "missing ruleset check", head: "current", rollup: `[{"name":"build","conclusion":"SUCCESS","isRequired":true}]`, want: "required check \"lint\"", unavailable: true},
+		{name: "same-name optional pass with missing required check", head: "current", rollup: `[{"name":"build","conclusion":"SUCCESS","isRequired":false},{"context":"lint","state":"SUCCESS","isRequired":true}]`, want: "required check \"build\"", unavailable: true},
+		{name: "same-name optional pass with pending required check", head: "current", rollup: `[{"name":"build","isRequired":true},{"name":"build","conclusion":"SUCCESS","isRequired":false},{"context":"lint","state":"SUCCESS","isRequired":true}]`, want: "required check \"build\"", unavailable: true},
+		{name: "same-name optional pending with passing required check", head: "current", rollup: `[{"name":"build","isRequired":false},{"name":"build","conclusion":"SUCCESS","isRequired":true},{"context":"lint","state":"SUCCESS","isRequired":true}]`},
+		{name: "required check on later page", head: "current", rollup: `[{"name":"build","conclusion":"SUCCESS","isRequired":true}]`,
+			nextPage: checkRollupPageJSON("task", "current", "current", `[{"context":"lint","state":"SUCCESS","isRequired":true}]`)},
+		{name: "later page reports a different commit", head: "current", rollup: `[{"name":"build","conclusion":"SUCCESS","isRequired":true}]`,
+			nextPage: checkRollupPageJSON("task", "current", "older", `[{"context":"lint","state":"SUCCESS","isRequired":true}]`),
+			want:     "rollup did not match", unavailable: true},
+		{name: "actual failed check", head: "current", rollup: `[{"name":"build","conclusion":"FAILURE","isRequired":true}]`, want: "failed on the current pull request head"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -81,8 +90,11 @@ func TestRequiredCheckConfirmationUsesCurrentHeadAndRules(t *testing.T) {
 			h := New(issueBranchRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
 				args := strings.Join(cmd.Args, " ")
 				switch {
-				case strings.Contains(args, "statusCheckRollup"):
-					return execx.Result{Stdout: fmt.Sprintf(`{"state":"OPEN","headRefName":"task","baseRefName":"main","headRefOid":%q,"statusCheckRollup":%s}`, tc.head, tc.rollup)}, nil
+				case strings.HasPrefix(args, "pr view "):
+					return execx.Result{Stdout: fmt.Sprintf(`{"id":"PR_id","state":"OPEN","headRefName":"task","baseRefName":"main","headRefOid":%q}`, tc.head)}, nil
+				case strings.HasPrefix(args, "api graphql --paginate --jq .data.node -f id=PR_id ") &&
+					strings.Contains(args, "isRequired(pullRequestId: $id)"):
+					return execx.Result{Stdout: checkRollupPageJSON("task", tc.head, tc.head, tc.rollup) + "\n" + tc.nextPage}, nil
 				case strings.Contains(args, "/protection/required_status_checks"):
 					return execx.Result{Stdout: `{"contexts":["build"]}`}, nil
 				case strings.Contains(args, "/rules/branches/"):
@@ -98,4 +110,10 @@ func TestRequiredCheckConfirmationUsesCurrentHeadAndRules(t *testing.T) {
 			}
 		})
 	}
+}
+
+func checkRollupPageJSON(branch, head, commit, rollup string) string {
+	return fmt.Sprintf(`{"state":"OPEN","baseRefName":"main","headRefName":%q,"headRefOid":%q,
+		"commits":{"nodes":[{"commit":{"oid":%q,"statusCheckRollup":{"contexts":{"nodes":%s}}}}]}}`,
+		branch, head, commit, rollup)
 }

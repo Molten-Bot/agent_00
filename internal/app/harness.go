@@ -1848,15 +1848,15 @@ func (h Harness) checkPublishedPullRequest(
 }
 
 type prStateView struct {
-	StatusCheckRollup []githubutil.StatusCheck `json:"statusCheckRollup"`
-	URL               string                   `json:"url"`
-	Title             string                   `json:"title"`
-	State             string                   `json:"state"`
-	MergedAt          string                   `json:"mergedAt"`
-	BaseRefName       string                   `json:"baseRefName"`
-	HeadRefName       string                   `json:"headRefName"`
-	HeadRefOID        string                   `json:"headRefOid"`
-	HeadRepository    struct {
+	ID             string `json:"id"`
+	URL            string `json:"url"`
+	Title          string `json:"title"`
+	State          string `json:"state"`
+	MergedAt       string `json:"mergedAt"`
+	BaseRefName    string `json:"baseRefName"`
+	HeadRefName    string `json:"headRefName"`
+	HeadRefOID     string `json:"headRefOid"`
+	HeadRepository struct {
 		Name          string `json:"name"`
 		NameWithOwner string `json:"nameWithOwner"`
 	} `json:"headRepository"`
@@ -9921,6 +9921,9 @@ func (h Harness) reconcileChecksAfterFailure(ctx context.Context, repo repoWorks
 
 func (h Harness) latestChecksAreAllPassing(ctx context.Context, repo repoWorkspace, requiredOnly bool) (bool, string, error) {
 	snapshot, err := h.latestChecks(ctx, repo, requiredOnly)
+	if err != nil && !errors.Is(err, ErrChecksUnavailable) {
+		err = fmt.Errorf("%w: %w", ErrChecksUnavailable, err)
+	}
 	if err == nil && repo.IssueClaimBranch && !snapshot.AllPassing && !snapshot.HasFailures {
 		err = fmt.Errorf("%w: current check results are pending or missing", ErrChecksUnavailable)
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -103,16 +104,95 @@ func checkHeadMatches(state prStateView, expected string) error {
 	return nil
 }
 
-func (h Harness) confirmCurrentRequiredChecks(ctx context.Context, repo repoWorkspace, expected string) error {
-	state, err := h.readCheckPRState(ctx, prStateViewCommand(repo.Dir, repo.PRURL, "statusCheckRollup"))
-	if err != nil {
-		return err
-	}
+func checkPRMatches(state prStateView, repo repoWorkspace, expected string) error {
 	if err := checkHeadMatches(state, expected); err != nil {
 		return err
 	}
 	if state.BaseRefName != repo.BaseBranch || state.HeadRefName != repo.Branch {
 		return fmt.Errorf("%w: pull request branches changed while verifying checks", ErrIssueBranchRecovery)
+	}
+	return nil
+}
+
+// Read GitHub's required flag alongside the commit OID so that a same-name
+// optional check or a result from a different commit cannot satisfy the gate.
+const prCheckRollupQuery = `query($id: ID!, $endCursor: String) {
+  node(id: $id) {
+    ... on PullRequest {
+      state baseRefName headRefName headRefOid
+      commits(last: 1) {
+        nodes {
+          commit {
+            oid
+            statusCheckRollup {
+              contexts(first: 100, after: $endCursor) {
+                pageInfo { hasNextPage endCursor }
+                nodes {
+                  ... on CheckRun { name conclusion isRequired(pullRequestId: $id) }
+                  ... on StatusContext { context state isRequired(pullRequestId: $id) }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}`
+
+type prCheckRollupEntry struct {
+	githubutil.StatusCheck
+	IsRequired bool
+}
+
+func (h Harness) readPRCheckRollup(ctx context.Context, repo repoWorkspace, id, expected string) ([]prCheckRollupEntry, error) {
+	cmd := ghCommand(repo.Dir, "api", "graphql", "--paginate", "--jq", ".data.node", "-f", "id="+id, "-f", "query="+prCheckRollupQuery)
+	res, err := h.runCheckQuery(ctx, "checks", cmd, checkQueryTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("read pull request check rollup: %w", err)
+	}
+
+	var checks []prCheckRollupEntry
+	decoder := json.NewDecoder(strings.NewReader(res.Stdout))
+	for pageNumber := 0; ; pageNumber++ {
+		var page struct {
+			prStateView
+			Commits struct {
+				Nodes []struct {
+					Commit struct {
+						OID               string
+						StatusCheckRollup struct {
+							Contexts struct{ Nodes []prCheckRollupEntry }
+						}
+					}
+				}
+			}
+		}
+		if err := decoder.Decode(&page); err == io.EOF && pageNumber > 0 {
+			return checks, nil
+		} else if err != nil {
+			return nil, fmt.Errorf("%w: decode pull request check rollup: %w", ErrChecksUnavailable, err)
+		}
+		if err := checkPRMatches(page.prStateView, repo, expected); err != nil {
+			return nil, err
+		}
+		if len(page.Commits.Nodes) != 1 || page.Commits.Nodes[0].Commit.OID != expected {
+			return nil, fmt.Errorf("%w: check rollup did not match the current pull request head", ErrChecksUnavailable)
+		}
+		checks = append(checks, page.Commits.Nodes[0].Commit.StatusCheckRollup.Contexts.Nodes...)
+	}
+}
+
+func (h Harness) confirmCurrentRequiredChecks(ctx context.Context, repo repoWorkspace, expected string) error {
+	state, err := h.readCheckPRState(ctx, prStateViewCommand(repo.Dir, repo.PRURL, "id"))
+	if err != nil {
+		return err
+	}
+	if err := checkPRMatches(state, repo, expected); err != nil {
+		return err
+	}
+	if state.ID == "" {
+		return fmt.Errorf("%w: pull request ID was missing", ErrChecksUnavailable)
 	}
 	target := githubutil.PullRequestRepository(repo.PRURL)
 	required, err := h.configuredRequiredStatusChecks(ctx, repo.Dir, target, repo.BaseBranch, false)
@@ -127,15 +207,22 @@ func (h Harness) confirmCurrentRequiredChecks(ctx context.Context, repo repoWork
 		return fmt.Errorf("load required ruleset checks: %w", err)
 	}
 	required = append(required, rules...)
-	passing := make(map[string]bool, len(state.StatusCheckRollup))
-	for _, check := range state.StatusCheckRollup {
+	checks, err := h.readPRCheckRollup(ctx, repo, state.ID, expected)
+	if err != nil {
+		return err
+	}
+	passing := make(map[string]bool, len(required))
+	for _, check := range checks {
 		name := check.Name
 		if name == "" {
 			name = check.Context
 		}
-		passed, failed := githubutil.CIStatus([]githubutil.StatusCheck{check})
+		passed, failed := githubutil.CIStatus([]githubutil.StatusCheck{check.StatusCheck})
 		if failed {
 			return fmt.Errorf("check %q failed on the current pull request head", name)
+		}
+		if !check.IsRequired {
+			continue
 		}
 		if previous, seen := passing[name]; seen {
 			passed = passed && previous

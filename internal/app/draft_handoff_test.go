@@ -492,6 +492,8 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 							return execx.Result{Stdout: tc.ruleset}, nil
 						}
 						return execx.Result{Stdout: "[]"}, nil
+					case strings.HasPrefix(args, "api graphql --paginate --jq .data.node -f id=PR_id "):
+						return execx.Result{Stdout: checkRollupPageJSON(branch, api.head, api.head, `[{"name":"CI","conclusion":"SUCCESS","isRequired":true}]`)}, nil
 					case args == "api --paginate repos/acme/repo/commits/"+api.head+"/check-runs?per_page=100":
 						if tc.checkRuns != "" {
 							return execx.Result{Stdout: tc.checkRuns}, nil
@@ -549,7 +551,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 							}
 							fileEvidence = fmt.Sprintf(`,"changedFiles":%d,"files":[%s]`, fileCount, strings.Join(files, ","))
 						}
-						return execx.Result{Stdout: fmt.Sprintf(`{"number":42,"url":%q,"state":"OPEN","mergeable":"MERGEABLE","baseRefName":"main","headRefName":%q,"headRefOid":%q,"isDraft":%t,"statusCheckRollup":%s%s}`, prURL, branch, head, draft, rollup, fileEvidence)}, nil
+						return execx.Result{Stdout: fmt.Sprintf(`{"id":"PR_id","number":42,"url":%q,"state":"OPEN","mergeable":"MERGEABLE","baseRefName":"main","headRefName":%q,"headRefOid":%q,"isDraft":%t,"statusCheckRollup":%s%s}`, prURL, branch, head, draft, rollup, fileEvidence)}, nil
 					case strings.Contains(args, "api repos/acme/repo/pulls?") && creates > 0:
 						return execx.Result{Stdout: fmt.Sprintf(`[{"html_url":%q,"title":"Issue","state":"open","head":{"ref":%q,"repo":{"full_name":"acme/repo"}},"base":{"ref":"main"}}]`, prURL, branch)}, nil
 					case strings.HasPrefix(args, "api "):
