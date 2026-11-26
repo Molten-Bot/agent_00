@@ -76,7 +76,11 @@ func workflowRunConfigWithLibrary(r workflow.Run, resolve workflowLibraryResolve
 	if w.Task.Reviewers != nil {
 		c.Reviewers = append([]string(nil), (*w.Task.Reviewers)...)
 	}
-	c.Workflow = &config.WorkflowRunConfig{Instructions: resolvedPrompt, ID: w.ID, EventID: r.ID, Name: w.Name, ReviewCycles: w.ReviewCycles, ReviewAgent: w.ReviewAgent, PolicyHash: w.ExecutionPolicyHash()}
+	c.Workflow = &config.WorkflowRunConfig{
+		Instructions: resolvedPrompt, ID: w.ID, EventID: r.ID, Name: w.Name,
+		ReviewCycles: w.ReviewCycles, ReviewAgent: w.ReviewAgent,
+		PRAssignee: w.Task.PRAssignee, PRLabels: w.Task.PRLabels, PolicyHash: w.ExecutionPolicyHash(),
+	}
 	if i.Kind == "issue" {
 		c.PRTitle = i.Title
 		c.GitHubIssue = &config.GitHubIssueConfig{Repository: w.Repository, Number: i.Number, Title: i.Title, URL: i.URL, LinkMode: w.Task.IssueLinkMode}
@@ -238,6 +242,21 @@ func retryWorkflowTask(ctx context.Context, engine *workflow.Engine, task web.Ta
 	case "error", "invalid", "stopped", "duplicate":
 	default:
 		return submit(cfg)
+	}
+	if cfg.GitHubIssue == nil && (cfg.Workflow.ResumePRURL != "" || app.IsWorkflowPRMetadataFailure(task.Error)) {
+		target := cfg.Workflow.ResumePRURL
+		if target == "" {
+			target = task.PRURL
+		}
+		if target == "" {
+			return "", fmt.Errorf("the original pull request is required to retry workflow PR metadata")
+		}
+		policy, err := engine.PRMetadataRetryPolicy(*cfg.Workflow)
+		if err != nil {
+			return "", err
+		}
+		policy.ResumePRURL = target
+		cfg.Workflow = &policy
 	}
 	item := workflow.Item{Repository: workflow.CanonicalRepository(cfg.RepoURL)}
 	if cfg.GitHubIssue != nil {

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -41,14 +42,44 @@ func TestFinalReviewModeUsesConfiguredReviewCounts(t *testing.T) {
 		want   string
 	}{
 		{passes: 0, want: "off"},
+		{passes: 1, want: "custom"},
 		{passes: 2, want: "low"},
+		{passes: 3, want: "custom"},
+		{passes: 4, want: "custom"},
 		{passes: 5, want: "medium"},
+		{passes: 6, want: "custom"},
+		{passes: 7, want: "custom"},
+		{passes: 8, want: "custom"},
+		{passes: 9, want: "custom"},
 		{passes: 10, want: "high"},
 	}
 	for _, tt := range tests {
 		if got := finalReviewMode(tt.passes); got != tt.want {
 			t.Errorf("finalReviewMode(%d) = %q, want %q", tt.passes, got, tt.want)
 		}
+	}
+}
+
+func TestRunLogsCustomWorkflowReviewConfig(t *testing.T) {
+	t.Parallel()
+
+	preflightErr := errors.New("stop after configuration")
+	h := New(&fakeRunner{t: t, exps: []expectedRun{
+		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}, err: preflightErr},
+	}})
+	var logs []string
+	h.Logf = func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+	cfg := sampleConfig()
+	cfg.Workflow = &config.WorkflowRunConfig{ID: "workflow", EventID: "event", ReviewCycles: 1}
+
+	result := h.Run(t.Context(), cfg)
+	if result.ExitCode != ExitPreflight {
+		t.Fatalf("Run() exit = %d, err = %v, want preflight failure", result.ExitCode, result.Err)
+	}
+	if want := "stage=config status=ok review_mode=custom review_total=1"; !slices.Contains(logs, want) {
+		t.Fatalf("logs missing %q: %v", want, logs)
 	}
 }
 
@@ -117,9 +148,22 @@ func (r *cleanReviewCycleRunner) Run(_ context.Context, cmd execx.Command) (exec
 }
 
 func TestRunFinalReviewCycleStopsAfterCleanPass(t *testing.T) {
+	for _, passes := range []int{1, 3} {
+		t.Run(strconv.Itoa(passes), func(t *testing.T) {
+			testRunFinalReviewCycleStopsAfterCleanPass(t, passes)
+		})
+	}
+}
+
+func testRunFinalReviewCycleStopsAfterCleanPass(t *testing.T, passes int) {
+	t.Helper()
 	runner := &cleanReviewCycleRunner{t: t}
 	h := New(runner)
-	h.FinalReviewPasses = 3
+	h.FinalReviewPasses = passes
+	var logs []string
+	h.Logf = func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
 
 	repoDir := filepath.Join(t.TempDir(), "repo")
 	if err := os.MkdirAll(repoDir, 0o755); err != nil {
@@ -154,8 +198,14 @@ func TestRunFinalReviewCycleStopsAfterCleanPass(t *testing.T) {
 	if runner.reviews != 1 || runner.comments != 1 {
 		t.Fatalf("review/comment counts = %d/%d, want 1/1", runner.reviews, runner.comments)
 	}
+	for _, status := range []string{"start", "ok"} {
+		want := fmt.Sprintf("stage=review status=%s action=pass review_mode=custom pass=1 total=%d ", status, passes)
+		if !slices.ContainsFunc(logs, func(line string) bool { return strings.HasPrefix(line, want) }) {
+			t.Fatalf("logs missing prefix %q: %v", want, logs)
+		}
+	}
 	for i, prompt := range runner.prompts {
-		if !strings.Contains(prompt, "The harness alone publishes the review") || !strings.Contains(prompt, fmt.Sprintf("Post-task review pass %d/3", i+1)) {
+		if !strings.Contains(prompt, "The harness alone publishes the review") || !strings.Contains(prompt, fmt.Sprintf("Post-task review pass %d/%d", i+1, passes)) {
 			t.Fatalf("review prompt %d did not include skill and pass context", i+1)
 		}
 	}
@@ -982,5 +1032,50 @@ func TestProcessChangedRepoRejectsEmptyNetDiffWhenFinalReviewFindingsRemain(t *t
 	}
 	if runner.drafted != 1 {
 		t.Fatalf("drafted count = %d, want 1 before rejecting empty net diff", runner.drafted)
+	}
+}
+
+func TestMetadataResumeRejectsEmptyNetDiffAfterReviewCycle(t *testing.T) {
+	runner := &finalFindingReviewCycleRunner{t: t, emptyNetDiff: true}
+	h := New(runner)
+	h.FinalReviewPasses = 1
+
+	repoDir := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	repo := &repoWorkspace{
+		URL:                "https://github.com/acme/repo.git",
+		Dir:                repoDir,
+		RelDir:             "repo",
+		Branch:             "feature",
+		BaseBranch:         "main",
+		PRURL:              "https://github.com/acme/repo/pull/7",
+		Changed:            true,
+		CreateWorkBranch:   false,
+		ResumeWorkflowPR:   true,
+		WriteAccessChecked: true,
+		WriteAccessAllowed: true,
+		PushRemote:         publishRemoteOrigin,
+	}
+
+	exitCode, stage, err := h.processChangedRepo(
+		context.Background(),
+		config.Config{Prompt: "Implement the requested behavior.", CommitMessage: "do the work"},
+		repo,
+		agentruntime.Default(),
+		repoDir,
+		codexRunOptions{},
+		"",
+		"",
+		"repo",
+		"codex",
+		false,
+	)
+	if err == nil || exitCode != ExitPR || stage != "review" || !strings.Contains(err.Error(), "no net changes against the base branch") {
+		t.Fatalf("processChangedRepo() = (%d, %q, %v), want empty-net-diff failure", exitCode, stage, err)
+	}
+	if runner.released != 0 {
+		t.Fatalf("released count = %d, want 0 for an empty net diff", runner.released)
 	}
 }

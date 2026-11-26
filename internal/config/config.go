@@ -203,6 +203,9 @@ type WorkflowRunConfig struct {
 	ReviewAgent  ReviewAgentConfig `json:"reviewAgent,omitzero"`
 	PolicyHash   string            `json:"policyHash,omitempty"`
 	RepairPRURL  string            `json:"repairPrUrl,omitempty"`
+	PRAssignee   string            `json:"prAssignee,omitempty"`
+	PRLabels     []string          `json:"prLabels,omitempty"`
+	ResumePRURL  string            `json:"resumePrUrl,omitempty"`
 }
 
 type ReviewAgentConfig struct {
@@ -424,6 +427,9 @@ func (c Config) Validate() error {
 	if c.Workflow != nil {
 		if c.Workflow.ID == "" || c.Workflow.EventID == "" || c.Workflow.ReviewCycles < 0 || c.Workflow.ReviewCycles > 10 {
 			return fmt.Errorf("invalid workflow run snapshot")
+		}
+		if c.Workflow.ResumePRURL != "" && (c.Workflow.RepairPRURL != "" || c.Review != nil) {
+			return fmt.Errorf("a workflow PR metadata retry cannot also be a repair or review task")
 		}
 		if err := c.Workflow.ReviewAgent.Validate(); err != nil {
 			return err

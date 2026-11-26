@@ -891,3 +891,39 @@ test('task complexity can override the application default and return to inherit
   assert.equal(await complexity.getAttribute('aria-valuetext'), 'Use settings default (Standard)');
   assert.equal(getDocument().workflows[0].task.complexity, undefined);
 });
+
+test('workflow saves and clears repository PR routing options', async t => {
+ const {page,getDocument}=await openEditor(t);
+ let loads=0;
+ await page.route('**/api/workflows/pr-options?repo=*', route => {
+  assert.equal(new URL(route.request().url()).searchParams.get('repo'), 'acme/repo');
+  if (++loads === 1) return route.fulfill({status:502,json:{error:'GitHub unavailable'}});
+  return route.fulfill({json:{assignees:['maintainer','teammate'],labels:['tracking','priority, high']}});
+ });
+ await selectRepository(page,'acme/repo');
+ await page.getByRole('button',{name:'Implement issues',exact:true}).click();
+ await page.locator('[data-id="task"]').click();
+ await page.getByRole('button',{name:'Retry loading PR options'}).click();
+ await page.getByLabel('PR assignee (optional)',{exact:true}).selectOption('maintainer');
+ await page.getByLabel('Additional PR labels',{exact:true}).selectOption(['tracking','priority, high']);
+ await page.getByLabel('Create draft pull request').check();
+ await waitForSaved(page);
+ let saved=getDocument().workflows[0];
+ assert.equal(saved.task.prAssignee,'maintainer');
+ assert.deepEqual(saved.task.prLabels,['tracking','priority, high']);
+ assert.equal(saved.task.draft,true);
+ await page.reload();
+ await selectRepository(page,'acme/repo');
+ await page.locator('.wf-step').first().click();
+ await page.locator('[data-id="task"]').click();
+ const assignee=page.getByLabel('PR assignee (optional)',{exact:true});
+ const labels=page.getByLabel('Additional PR labels',{exact:true});
+ assert.equal(await assignee.inputValue(),'maintainer');
+ assert.deepEqual(await labels.evaluate(el=>Array.from(el.selectedOptions,option=>option.value)),['tracking','priority, high']);
+ await assignee.selectOption('');
+ await labels.selectOption([]);
+ await waitForSaved(page);
+ saved=getDocument().workflows[0];
+ assert.equal(saved.task.prAssignee,undefined);
+ assert.equal(saved.task.prLabels,undefined);
+});

@@ -147,6 +147,9 @@ func (e *issueExecution) finish(ctx context.Context, state string, result app.Re
 		if state == "interrupted" && errors.Is(context.Cause(ctx), context.Canceled) {
 			record.Incident = "service_shutdown"
 		}
+		if errors.Is(result.Err, app.ErrWorkflowPRMetadata) {
+			record.PRURL = result.PRURL
+		}
 		if errors.Is(result.Err, app.ErrIssueBranchRecovery) {
 			record.Incident = localruntime.IssueIncidentBranchRecovery
 		}
@@ -222,6 +225,22 @@ func (e *issueExecution) configure(ctx context.Context, h *app.Harness) (context
 			}
 			return nil
 		})
+	}
+	saveResume := h.SaveWorkflowPRResume
+	h.SaveWorkflowPRResume = func(url string) error {
+		if err := e.store.Update(e.record.ID, func(record *localruntime.IssueClaimRecord) error {
+			policy := *record.Run.Workflow
+			policy.ResumePRURL = url
+			record.Run.Workflow = &policy
+			record.PRURL = url
+			return nil
+		}); err != nil {
+			return err
+		}
+		if saveResume != nil {
+			return saveResume(url)
+		}
+		return nil
 	}
 	startedAgent := false
 	h.OnStep = func(step string) {

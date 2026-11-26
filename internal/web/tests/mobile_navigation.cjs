@@ -354,6 +354,27 @@ test('workflow-triggered tasks start with the Workflow icon and keep their task 
   assert.match(await reviewSteps.and(current).getAttribute('title'), /^Code Review: current\./);
 });
 
+test('issue task shows a configured one-cycle review before and during its pass', async t => {
+  const now = new Date().toISOString();
+  const task = {
+    request_id: 'issue-custom-review', source: 'github_issues', agent_harness: 'codex',
+    prompt: 'Update navigation', repo: 'example/project', started_at: now, updated_at: now,
+    status: 'running', stage: 'checks', pr_url: 'https://github.com/example/project/pull/10',
+    logs: [{ stream: 'meta', text: 'task stage=config status=ok review_mode=custom review_total=1' }],
+  };
+  const { page } = await openPage(t, 'current-work', undefined, true, [task]);
+  const card = page.locator('#task-list .task[data-request-id="issue-custom-review"]');
+  await card.locator('.task-progress-step[title^="Review: upcoming"]').waitFor({ state: 'visible' });
+
+  task.stage = 'review';
+  task.logs.push({
+    stream: 'meta',
+    text: 'task stage=review status=start action=pass review_mode=custom pass=1 total=1 repo_dir=.',
+  });
+  await page.evaluate(task => render({ ...state.snapshot, tasks: [task] }), task);
+  await card.locator('.task-progress-step.current[title^="Review (pass 1):"]').waitFor({ state: 'visible' });
+});
+
 test('issue task adds review and fix markers as each pass starts', async t => {
   const now = new Date().toISOString();
   const task = {

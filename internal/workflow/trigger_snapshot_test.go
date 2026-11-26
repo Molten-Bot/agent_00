@@ -10,6 +10,46 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/execx"
 )
 
+func TestWorkflowPollingPreservesRunsAndObservationsDuringMemoryPressure(t *testing.T) {
+	t.Parallel()
+	w := definition("issues")
+	w.IncludeBacklog = true
+	e, items, submitted := testEngine(t, w)
+	*items = []Item{{Number: 1, Repository: w.Repository, Kind: "issue", Open: true, Labels: []string{"ready"}}}
+	fetch := e.Fetch
+	polls := 0
+	e.Fetch = func(ctx context.Context, repo string, needs ScanNeeds) ([]Item, error) {
+		polls++
+		return fetch(ctx, repo, needs)
+	}
+	tick(t, e)
+	runs, err := e.Runs()
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("initial runs = %+v, %v", runs, err)
+	}
+	paused := true
+	e.MemoryPressure = func() bool { return paused }
+	*items = append(*items, Item{Number: 2, Repository: w.Repository, Kind: "issue", Open: true, Labels: []string{"ready"}})
+	tick(t, e)
+	if polls != 1 || *submitted != 1 {
+		t.Fatalf("paused workflow: %d polls, %d submissions", polls, *submitted)
+	}
+	if err := e.Complete(runs[0].ID, Outcome{Status: "succeeded"}); err != nil {
+		t.Fatal(err)
+	}
+	runs, err = e.Runs()
+	if err != nil || len(runs) != 1 || runs[0].Outcome == nil || runs[0].Outcome.Status != "succeeded" {
+		t.Fatalf("recording the outcome while paused: runs=%+v, err=%v", runs, err)
+	}
+	paused = false
+	tick(t, e)
+	tick(t, e)
+	runs, err = e.Runs()
+	if err != nil || len(runs) != 1 || runs[0].Item.Number != 2 || *submitted != 2 {
+		t.Fatalf("resumed workflow: runs=%+v, submissions=%d, err=%v", runs, *submitted, err)
+	}
+}
+
 func TestIssueTriggerContinuesWhenPullRequestSnapshotFails(t *testing.T) {
 	t.Parallel()
 	issueWorkflow := definition("issue")

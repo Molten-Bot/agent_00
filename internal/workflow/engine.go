@@ -211,6 +211,8 @@ type Engine struct {
 	Logf      func(string, ...any)
 
 	FinishReview func(context.Context, githubutil.ReviewReceipt, *githubutil.PendingReviewGate) error
+	// MemoryPressure defers background ticks while host memory is exhausted.
+	MemoryPressure func() bool
 
 	wakeOnce   sync.Once
 	wake       chan struct{}
@@ -310,11 +312,12 @@ func (e *Engine) logRun(r Run, event string) {
 	if strings.HasPrefix(r.Reason, "Review writeback pending:") {
 		reason = "review_writeback_pending"
 	}
-	var durationMS int64
-	if r.StartedAt != nil && (r.Status == "succeeded" || r.Status == "merged") {
-		durationMS = r.UpdatedAt.Sub(*r.StartedAt).Milliseconds()
+	durationMS := "unknown"
+	if terminal(r.Status) && r.StartedAt != nil && !r.StartedAt.IsZero() &&
+		!r.UpdatedAt.IsZero() && !r.UpdatedAt.Before(*r.StartedAt) {
+		durationMS = strconv.FormatInt(r.UpdatedAt.Sub(*r.StartedAt).Milliseconds(), 10)
 	}
-	e.Logf("workflow event=%s workflow_id=%q run_id=%q request_id=%q status=%s reason=%s duration_ms=%d", event, r.Workflow.ID, r.ID, r.RequestID, r.Status, reason, durationMS)
+	e.Logf("workflow event=%s workflow_id=%q run_id=%q request_id=%q status=%s reason=%s duration_ms=%s", event, r.Workflow.ID, r.ID, r.RequestID, r.Status, reason, durationMS)
 }
 func (e *Engine) Preview(ctx context.Context, w Definition) ([]Decision, error) {
 	if err := w.Validate(); err != nil {
@@ -384,6 +387,9 @@ func (e *Engine) Run(ctx context.Context) {
 func (e *Engine) Tick(ctx context.Context) error {
 	e.tickMu.Lock()
 	defer e.tickMu.Unlock()
+	if e.MemoryPressure != nil && e.MemoryPressure() {
+		return nil
+	}
 	featureEnabled := e.Enabled()
 	d, err := e.Store.Load()
 	if err != nil {
@@ -407,6 +413,9 @@ func (e *Engine) Tick(ctx context.Context) error {
 	}
 	var errs []error
 	for _, r := range runs {
+		if e.MemoryPressure != nil && e.MemoryPressure() {
+			return errors.Join(errs...)
+		}
 		w, exists := definitions[r.Workflow.ID]
 		if err := e.reconcileRun(ctx, r, w, exists, featureEnabled); err != nil {
 			errs = append(errs, err)
@@ -429,6 +438,9 @@ func (e *Engine) Tick(ctx context.Context) error {
 	cache := map[scanKey]snapshot{}
 	reportedErrors := map[scanKey]bool{}
 	for _, w := range d.Workflows {
+		if e.MemoryPressure != nil && e.MemoryPressure() {
+			break
+		}
 		if !featureEnabled || !w.Enabled || !e.Allowed(w.Repository) {
 			continue
 		}
@@ -670,6 +682,7 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		})
 	}
 	finish := func() error {
+		r.UpdatedAt = e.now()
 		if err := commit(); err != nil {
 			return err
 		}
@@ -808,7 +821,6 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 				r.Status, r.Reason = "succeeded", "Task completed"
 			}
 		}
-		r.UpdatedAt = e.now()
 		return finish()
 	}
 	waiting := r.Status == "waiting" || r.Status == awaitingReview
@@ -838,7 +850,6 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 				// entity against fresh review work.
 				r.Status = awaitingReview
 				r.Reason = "Waiting for a submitted clean review on the current pull request head"
-				r.UpdatedAt = e.now()
 				return finish()
 			}
 			r.MergeHead = receipt.Head
@@ -899,7 +910,6 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		}
 	}
 
-	r.UpdatedAt = e.now()
 	return finish()
 }
 

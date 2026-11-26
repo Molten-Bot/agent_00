@@ -153,6 +153,53 @@ function Field({ label, children }) {
     </label>
   );
 }
+function PullRequestRouting({ repository, task, onChange }) {
+  const [result, setResult] = useState(null);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    const controller = new AbortController();
+    api("/api/workflows/pr-options?" + new URLSearchParams({ repo: repository }), {
+      signal: controller.signal,
+      cache: "no-store",
+    }).then((options) => {
+      if (!controller.signal.aborted) setResult({ options });
+    }).catch(() => {
+      if (!controller.signal.aborted) setResult({ error: true });
+    });
+    return () => controller.abort();
+  }, [repository, attempt]);
+
+  const assignee = task.prAssignee || "";
+  const selectedLabels = task.prLabels || [];
+  const assignees = new Set([...(result?.options?.assignees || []), ...(assignee ? [assignee] : [])]);
+  const labels = new Set([...(result?.options?.labels || []), ...selectedLabels]);
+  return (
+    <>
+      <Field label="PR assignee (optional)">
+        <select aria-label="PR assignee (optional)" value={assignee} onChange={(e) => onChange("prAssignee", e.target.value || undefined)}>
+          <option value="">No additional assignee</option>
+          {[...assignees].map((login) => <option key={login} value={login}>@{login}</option>)}
+        </select>
+      </Field>
+      <Field label="Additional PR labels">
+        <select aria-label="Additional PR labels" multiple size={4} value={selectedLabels}
+          onChange={(e) => {
+            const values = Array.from(e.target.selectedOptions, (option) => option.value);
+            onChange("prLabels", values.length ? values : undefined);
+          }}>
+          {[...labels].map((label) => <option key={label} value={label}>{label}</option>)}
+        </select>
+      </Field>
+      {!result && <p className="wf-muted" role="status">Loading GitHub assignees and labels…</p>}
+      {result?.error && (
+        <div>
+          <p className="wf-muted" role="status">Could not load GitHub assignees and labels.</p>
+          <button type="button" onClick={() => { setResult(null); setAttempt(attempt + 1); }}>Retry loading PR options</button>
+        </div>
+      )}
+    </>
+  );
+}
 function Toggle({ label, value, onChange }) {
   return (
     <label className="wf-toggle">
@@ -1210,6 +1257,10 @@ function Editor({ defaultComplexity }) {
                     value={current.task.assignCreator}
                     onChange={(v) => updateTask("assignCreator", v)}
                   />
+                  {!current.trigger.event.startsWith("pr.") && (
+                    <PullRequestRouting key={current.repository} repository={current.repository}
+                      task={current.task} onChange={updateTask} />
+                  )}
                   <Toggle
                     label="Create draft pull request"
                     value={current.task.draft}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -19,7 +20,7 @@ func TestWorkflowRunConfigPolicies(t *testing.T) {
 	t.Parallel()
 	for _, kind := range []string{"implement", "review", "repair"} {
 		t.Run(kind, func(t *testing.T) {
-			w := workflow.Definition{ID: "one", Name: "Workflow", Repository: "acme/repo", ReviewCycles: 3, Task: workflow.Task{Complexity: "advanced", Kind: kind, Instructions: "Do the work", IssueLinkMode: "close"}}
+			w := workflow.Definition{ID: "one", Name: "Workflow", Repository: "acme/repo", ReviewCycles: 3, Task: workflow.Task{Complexity: "advanced", Kind: kind, Instructions: "Do the work", IssueLinkMode: "close", PRAssignee: "maintainer", PRLabels: []string{"tracking"}}}
 			w.ReviewAgent = config.ReviewAgentConfig{Complexity: "easy", Instructions: "Check for regressions"}
 			i := workflow.Item{Number: 12, Kind: "issue", URL: "https://github.com/acme/repo/issues/12", Title: "A task", HeadBranch: "feature"}
 			if kind != "implement" {
@@ -32,6 +33,9 @@ func TestWorkflowRunConfigPolicies(t *testing.T) {
 			}
 			if c.Complexity != "advanced" || c.Workflow.ReviewCycles != 3 || c.Workflow.ReviewAgent != w.ReviewAgent || c.Workflow.EventID != "event" || *c.AssignCreator {
 				t.Fatal(c)
+			}
+			if c.Workflow.PRAssignee != w.Task.PRAssignee || !slices.Equal(c.Workflow.PRLabels, w.Task.PRLabels) {
+				t.Fatalf("lost PR routing policy: %+v", c.Workflow)
 			}
 			if kind == "review" && (c.Review == nil || c.Review.AutoMerge || c.Review.Writeback != "summary-comment") {
 				t.Fatal("review must report outcome before merge", c)
@@ -166,5 +170,60 @@ func TestConfigureWorkflowsNeverImportsLegacyConfiguration(t *testing.T) {
 				t.Fatal("startup changed legacy settings", err)
 			}
 		})
+	}
+}
+
+func TestWorkflowMetadataRetryKeepsOriginalPullRequest(t *testing.T) {
+	t.Parallel()
+	store := &workflow.Store{Path: filepath.Join(t.TempDir(), "workflows.json")}
+	w := workflow.Definition{ID: "input", Name: "Input", Repository: "acme/repo", Trigger: workflow.Trigger{Event: "app.prompt"},
+		Filters: workflow.Filters{Mode: "all"}, Task: workflow.Task{Kind: "implement", IssueLinkMode: "reference", PRAssignee: "maintainer"},
+		Merge: workflow.Merge{Enabled: true, Method: "squash"}}
+	if err := store.Initialize(workflow.Document{Version: workflow.Version, Workflows: []workflow.Definition{w}}); err != nil {
+		t.Fatal(err)
+	}
+	engine := &workflow.Engine{Store: store, StatePath: filepath.Join(t.TempDir(), "state.json")}
+	cfg := config.Config{RepoURL: "https://github.com/acme/repo", Workflow: &config.WorkflowRunConfig{
+		ID: w.ID, EventID: "original", PolicyHash: w.ExecutionPolicyHash(), PRAssignee: w.Task.PRAssignee,
+	}}
+	task := web.Task{Status: "error", PRURL: "https://github.com/acme/repo/pull/42",
+		Error: "pr: workflow PR metadata update failed: GitHub did not apply assignee"}
+	id, err := retryWorkflowTask(t.Context(), engine, task, cfg, func(retry config.Config) (string, error) {
+		if retry.Workflow.ResumePRURL != task.PRURL || retry.Workflow.PolicyHash != cfg.Workflow.PolicyHash ||
+			retry.Workflow.EventID == cfg.Workflow.EventID || retry.Workflow.PRAssignee != cfg.Workflow.PRAssignee {
+			t.Fatalf("retry lost target or policy: %+v", retry.Workflow)
+		}
+		return "retry-request", nil
+	})
+	if err != nil || id != "retry-request" || cfg.Workflow.ResumePRURL != "" {
+		t.Fatalf("retry = %q, %v, original policy = %+v", id, err, cfg.Workflow)
+	}
+}
+
+func TestStoppedWorkflowMetadataRetryKeepsPersistedPullRequest(t *testing.T) {
+	t.Parallel()
+	store := &workflow.Store{Path: filepath.Join(t.TempDir(), "workflows.json")}
+	w := workflow.Definition{ID: "input", Name: "Input", Repository: "acme/repo", Trigger: workflow.Trigger{Event: "app.prompt"},
+		Filters: workflow.Filters{Mode: "all"}, Task: workflow.Task{Kind: "implement", IssueLinkMode: "reference", PRAssignee: "maintainer"},
+		Merge: workflow.Merge{Enabled: true, Method: "squash"}}
+	if err := store.Initialize(workflow.Document{Version: workflow.Version, Workflows: []workflow.Definition{w}}); err != nil {
+		t.Fatal(err)
+	}
+	engine := &workflow.Engine{Store: store, StatePath: filepath.Join(t.TempDir(), "state.json")}
+	cfg := config.Config{RepoURL: "https://github.com/acme/repo", Workflow: &config.WorkflowRunConfig{
+		ID: w.ID, EventID: "original", PolicyHash: w.ExecutionPolicyHash(), PRAssignee: w.Task.PRAssignee,
+	}}
+	cfg.Workflow.ResumePRURL = "https://github.com/acme/repo/pull/42"
+	task := web.Task{Status: "stopped", PRURL: "https://github.com/acme/repo/pull/42",
+		Error: "operator stopped task"}
+	id, err := retryWorkflowTask(t.Context(), engine, task, cfg, func(retry config.Config) (string, error) {
+		if retry.Workflow.ResumePRURL != task.PRURL || retry.Workflow.PolicyHash != cfg.Workflow.PolicyHash ||
+			retry.Workflow.EventID == cfg.Workflow.EventID || retry.Workflow.PRAssignee != cfg.Workflow.PRAssignee {
+			t.Fatalf("retry lost target or policy: %+v", retry.Workflow)
+		}
+		return "retry-request", nil
+	})
+	if err != nil || id != "retry-request" || cfg.Workflow.ResumePRURL != task.PRURL {
+		t.Fatalf("retry = %q, %v, original policy = %+v", id, err, cfg.Workflow)
 	}
 }

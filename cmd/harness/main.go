@@ -325,7 +325,8 @@ func runServer(args []string) int {
 		authGate = newAgentAuthGate(ctx, runner, runtimeCfg, cfg, daemonLogger)
 	}
 
-	scheduler := localruntime.NewAdaptiveScheduler(cfg.Scheduler, daemonLogger)
+	memoryPressure := localruntime.NewMemoryPressureCheck(daemonLogger)
+	scheduler := localruntime.NewAdaptiveScheduler(cfg.Scheduler, daemonLogger, localruntime.WithSchedulerMemoryPressure(memoryPressure))
 	diskHistory, err := openLocalTaskDiskHistory(cfg.RuntimeConfigPath)
 	if err != nil {
 		daemonLogger("scheduler status=warn action=load_task_disk_history err=%q", err)
@@ -760,11 +761,13 @@ func runServer(args []string) int {
 		uiServer.ConfiguredHarness = cfg.AgentHarness
 		uiServer.GitHubCooldown = githubCooldown
 		uiServer.GitHubIssueRunner = runner
+		uiServer.MemoryPressure = memoryPressure
 		if err := configureWorkflows(ctx, cfg, runner, &uiServer, monitorBroker, enqueueLocalRun, daemonLogger); err != nil {
 			daemonLogger("workflow status=error err=%q", err)
 			return app.ExitConfig
 		}
 		workflowEngine = uiServer.Workflows
+		workflowEngine.MemoryPressure = memoryPressure
 		brokerStatus := workflowEngine.Status
 		workflowEngine.Status = func(requestID string) workflow.Outcome {
 			// The worker can emit a terminal task log just before saving its
@@ -967,11 +970,12 @@ func runServer(args []string) int {
 			return app.ExitSuccess
 		}
 		prMonitor := &web.PRMergeMonitor{
-			Cooldown:    githubCooldown,
-			Runner:      runner,
-			Broker:      monitorBroker,
-			Logf:        daemonLogger,
-			CleanupTask: cleanupTaskLogs,
+			Cooldown:       githubCooldown,
+			Runner:         runner,
+			Broker:         monitorBroker,
+			Logf:           daemonLogger,
+			CleanupTask:    cleanupTaskLogs,
+			MemoryPressure: memoryPressure,
 		}
 		go func() {
 			if err := prMonitor.Run(ctx); err != nil {
@@ -1371,6 +1375,17 @@ func runLocalTask(
 	checkoutComplete := false
 	h.OnCheckout = func() { checkoutComplete = true }
 	if broker != nil {
+		h.SaveWorkflowPRResume = func(url string) error {
+			policy := *runCfg.Workflow
+			policy.ResumePRURL = url
+			saved := runCfg
+			saved.Workflow = &policy
+			body, err := json.Marshal(saved)
+			if err == nil {
+				broker.RecordTaskRunConfig(requestID, body)
+			}
+			return err
+		}
 		h.OnPRTitle = func(url, title string) {
 			broker.RecordTaskPRTitle(requestID, url, title)
 		}

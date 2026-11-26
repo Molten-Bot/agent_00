@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -18,7 +19,7 @@ import (
 func inputWorkflowServer(t *testing.T, source string) (Server, workflow.Definition) {
 	t.Helper()
 	root := t.TempDir()
-	w := workflow.Definition{ID: "input", Name: "Input", Enabled: true, Repository: "acme/repo", Trigger: workflow.Trigger{Event: "app." + source}, Filters: workflow.Filters{Mode: "all"}, Task: workflow.Task{Kind: "implement", Complexity: "easy", Instructions: "Run focused tests", IssueLinkMode: "reference"}, ReviewCycles: 2, Merge: workflow.Merge{Method: "squash", RequireApproval: true}}
+	w := workflow.Definition{ID: "input", Name: "Input", Enabled: true, Repository: "acme/repo", Trigger: workflow.Trigger{Event: "app." + source}, Filters: workflow.Filters{Mode: "all"}, Task: workflow.Task{Kind: "implement", Complexity: "easy", Instructions: "Run focused tests", IssueLinkMode: "reference", PRAssignee: "maintainer", PRLabels: []string{"tracking"}}, ReviewCycles: 2, Merge: workflow.Merge{Method: "squash", RequireApproval: true}}
 	w.ReviewAgent = config.ReviewAgentConfig{Complexity: "advanced", Instructions: "Check for regressions"}
 	store := &workflow.Store{Path: filepath.Join(root, "workflows.json")}
 	if err := store.Initialize(workflow.Document{Version: workflow.Version, Workflows: []workflow.Definition{w}}); err != nil {
@@ -50,6 +51,9 @@ func TestInputWorkflowsKeepPayloadAndJournalCompletion(t *testing.T) {
 			}
 			if got.Complexity != "easy" || got.Workflow == nil || got.Workflow.ReviewCycles != 2 || !strings.Contains(got.Prompt, "Fix the endpoint") || !strings.Contains(got.Prompt, "Run focused tests") || got.BaseBranch != "feature" || got.TargetSubdir != "src" || got.ResponseMode != "off" {
 				t.Fatalf("lost submission or policy: %+v", got)
+			}
+			if got.Workflow.PRAssignee != w.Task.PRAssignee || !slices.Equal(got.Workflow.PRLabels, w.Task.PRLabels) {
+				t.Fatalf("lost PR routing policy: %+v", got.Workflow)
 			}
 			if got.Workflow.ReviewAgent != w.ReviewAgent || strings.Contains(got.Prompt, w.ReviewAgent.Instructions) {
 				t.Fatalf("review instructions must be captured separately from the submitted prompt: %+v", got.Workflow)
