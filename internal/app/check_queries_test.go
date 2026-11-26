@@ -69,6 +69,7 @@ func TestRequiredCheckConfirmationUsesCurrentHeadAndRules(t *testing.T) {
 	for _, tc := range []struct {
 		name, head, rollup, want string
 		nextPage                 string
+		more                     bool
 		unavailable              bool
 	}{
 		{name: "current required results", head: "current", rollup: `[{"name":"build","conclusion":"SUCCESS","isRequired":true},{"context":"lint","state":"SUCCESS","isRequired":true}]`},
@@ -80,23 +81,40 @@ func TestRequiredCheckConfirmationUsesCurrentHeadAndRules(t *testing.T) {
 		{name: "optional failures with passing required checks", head: "current", rollup: `[{"name":"build","conclusion":"FAILURE","isRequired":false},{"name":"build","conclusion":"SUCCESS","isRequired":true},{"context":"lint","state":"SUCCESS","isRequired":true},{"context":"preview","state":"FAILURE","isRequired":false}]`},
 		{name: "same-name optional failure with missing required check", head: "current", rollup: `[{"name":"build","conclusion":"FAILURE","isRequired":false},{"context":"lint","state":"SUCCESS","isRequired":true}]`, want: "required check \"build\"", unavailable: true},
 		{name: "required check on later page", head: "current", rollup: `[{"name":"build","conclusion":"SUCCESS","isRequired":true}]`,
-			nextPage: checkRollupPageJSON("task", "current", "current", `[{"context":"lint","state":"SUCCESS","isRequired":true}]`)},
+			more: true, nextPage: checkRollupPageJSON("task", "current", "current", `[{"context":"lint","state":"SUCCESS","isRequired":true}]`, false, "")},
+		{name: "later required failure blocks passing results from first page", head: "current",
+			rollup: `[{"name":"build","conclusion":"SUCCESS","isRequired":true},{"context":"lint","state":"SUCCESS","isRequired":true}]`,
+			more:   true, nextPage: checkRollupPageJSON("task", "current", "current", `[{"name":"build","conclusion":"FAILURE","isRequired":true}]`, false, ""),
+			want: `check "build" failed on the current pull request head`},
 		{name: "later page reports a different commit", head: "current", rollup: `[{"name":"build","conclusion":"SUCCESS","isRequired":true}]`,
-			nextPage: checkRollupPageJSON("task", "current", "older", `[{"context":"lint","state":"SUCCESS","isRequired":true}]`),
-			want:     "rollup did not match", unavailable: true},
+			more: true, nextPage: checkRollupPageJSON("task", "current", "older", `[{"context":"lint","state":"SUCCESS","isRequired":true}]`, false, ""),
+			want: "rollup did not match", unavailable: true},
+		{name: "later page missing despite passing first page", head: "current",
+			rollup: `[{"name":"build","conclusion":"SUCCESS","isRequired":true},{"context":"lint","state":"SUCCESS","isRequired":true}]`,
+			more:   true, want: "decode pull request check rollup", unavailable: true},
+		{name: "later page repeats cursor", head: "current", rollup: `[{"name":"build","conclusion":"SUCCESS","isRequired":true}]`,
+			more: true, nextPage: checkRollupPageJSON("task", "current", "current", `[{"context":"lint","state":"SUCCESS","isRequired":true}]`, true, "page-2"),
+			want: "pagination cursor repeated", unavailable: true},
 		{name: "actual failed check", head: "current", rollup: `[{"name":"build","conclusion":"FAILURE","isRequired":true}]`, want: "failed on the current pull request head"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			repo := repoWorkspace{Dir: "/repo", PRURL: "https://github.com/acme/repo/pull/42", Branch: "task", BaseBranch: "main"}
+			rollupReads := 0
 			h := New(issueBranchRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
 				args := strings.Join(cmd.Args, " ")
 				switch {
 				case strings.HasPrefix(args, "pr view "):
 					return execx.Result{Stdout: fmt.Sprintf(`{"id":"PR_id","state":"OPEN","headRefName":"task","baseRefName":"main","headRefOid":%q}`, tc.head)}, nil
-				case strings.HasPrefix(args, "api graphql --paginate --jq .data.node -f id=PR_id ") &&
+				case strings.HasPrefix(args, "api graphql -f id=PR_id ") &&
 					strings.Contains(args, "isRequired(pullRequestId: $id)"):
-					return execx.Result{Stdout: checkRollupPageJSON("task", tc.head, tc.head, tc.rollup) + "\n" + tc.nextPage}, nil
+					rollupReads++
+					if rollupReads == 1 && !strings.Contains(args, "endCursor=") {
+						return execx.Result{Stdout: checkRollupPageJSON("task", tc.head, tc.head, tc.rollup, tc.more, "page-2")}, nil
+					}
+					if rollupReads == 2 && tc.more && strings.HasSuffix(args, " -f endCursor=page-2") {
+						return execx.Result{Stdout: tc.nextPage}, nil
+					}
 				case strings.Contains(args, "/protection/required_status_checks"):
 					return execx.Result{Stdout: `{"contexts":["build"]}`}, nil
 				case strings.Contains(args, "/rules/branches/"):
@@ -114,8 +132,9 @@ func TestRequiredCheckConfirmationUsesCurrentHeadAndRules(t *testing.T) {
 	}
 }
 
-func checkRollupPageJSON(branch, head, commit, rollup string) string {
-	return fmt.Sprintf(`{"state":"OPEN","baseRefName":"main","headRefName":%q,"headRefOid":%q,
-		"commits":{"nodes":[{"commit":{"oid":%q,"statusCheckRollup":{"contexts":{"nodes":%s}}}}]}}`,
-		branch, head, commit, rollup)
+func checkRollupPageJSON(branch, head, commit, rollup string, hasNextPage bool, endCursor string) string {
+	return fmt.Sprintf(`{"data":{"node":{"state":"OPEN","baseRefName":"main","headRefName":%q,"headRefOid":%q,
+		"commits":{"nodes":[{"commit":{"oid":%q,"statusCheckRollup":{"contexts":{
+			"pageInfo":{"hasNextPage":%t,"endCursor":%q},"nodes":%s}}}}]}}}}`,
+		branch, head, commit, hasNextPage, endCursor, rollup)
 }

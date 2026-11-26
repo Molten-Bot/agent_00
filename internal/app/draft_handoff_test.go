@@ -492,8 +492,8 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 							return execx.Result{Stdout: tc.ruleset}, nil
 						}
 						return execx.Result{Stdout: "[]"}, nil
-					case strings.HasPrefix(args, "api graphql --paginate --jq .data.node -f id=PR_id "):
-						return execx.Result{Stdout: checkRollupPageJSON(branch, api.head, api.head, `[{"name":"CI","conclusion":"SUCCESS","isRequired":true}]`)}, nil
+					case strings.HasPrefix(args, "api graphql -f id=PR_id "):
+						return execx.Result{Stdout: checkRollupPageJSON(branch, api.head, api.head, `[{"name":"CI","conclusion":"SUCCESS","isRequired":true}]`, false, "")}, nil
 					case args == "api --paginate repos/acme/repo/commits/"+api.head+"/check-runs?per_page=100":
 						if tc.checkRuns != "" {
 							return execx.Result{Stdout: tc.checkRuns}, nil

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"time"
 
@@ -145,41 +144,75 @@ type prCheckRollupEntry struct {
 	IsRequired bool
 }
 
-func (h Harness) readPRCheckRollup(ctx context.Context, repo repoWorkspace, id, expected string) ([]prCheckRollupEntry, error) {
-	cmd := ghCommand(repo.Dir, "api", "graphql", "--paginate", "--jq", ".data.node", "-f", "id="+id, "-f", "query="+prCheckRollupQuery)
-	res, err := h.runCheckQuery(ctx, "checks", cmd, checkQueryTimeout)
-	if err != nil {
-		return nil, fmt.Errorf("read pull request check rollup: %w", err)
+type prCheckRollupContexts struct {
+	PageInfo struct {
+		HasNextPage *bool
+		EndCursor   string
 	}
+	Nodes []prCheckRollupEntry
+}
 
+func (h Harness) readPRCheckRollup(ctx context.Context, repo repoWorkspace, id, expected string) ([]prCheckRollupEntry, error) {
 	var checks []prCheckRollupEntry
-	decoder := json.NewDecoder(strings.NewReader(res.Stdout))
-	for pageNumber := 0; ; pageNumber++ {
-		var page struct {
-			prStateView
-			Commits struct {
-				Nodes []struct {
-					Commit struct {
-						OID               string
-						StatusCheckRollup struct {
-							Contexts struct{ Nodes []prCheckRollupEntry }
+	var cursor string
+	seenCursors := make(map[string]bool)
+	for {
+		// Read each page through the check retry and rate-limit policy.
+		cmd := ghCommand(repo.Dir, "api", "graphql", "-f", "id="+id, "-f", "query="+prCheckRollupQuery)
+		if cursor != "" {
+			cmd.Args = append(cmd.Args, "-f", "endCursor="+cursor)
+		}
+		res, err := h.runCheckQuery(ctx, "checks", cmd, checkQueryTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("read pull request check rollup: %w", err)
+		}
+		var response struct {
+			Data struct {
+				Node struct {
+					prStateView
+					Commits struct {
+						Nodes []struct {
+							Commit struct {
+								OID               string
+								StatusCheckRollup *struct {
+									Contexts prCheckRollupContexts
+								}
+							}
 						}
 					}
 				}
 			}
 		}
-		if err := decoder.Decode(&page); err == io.EOF && pageNumber > 0 {
-			return checks, nil
-		} else if err != nil {
+		if err := json.Unmarshal([]byte(res.Stdout), &response); err != nil {
 			return nil, fmt.Errorf("%w: decode pull request check rollup: %w", ErrChecksUnavailable, err)
 		}
+		page := response.Data.Node
 		if err := checkPRMatches(page.prStateView, repo, expected); err != nil {
 			return nil, err
 		}
 		if len(page.Commits.Nodes) != 1 || page.Commits.Nodes[0].Commit.OID != expected {
 			return nil, fmt.Errorf("%w: check rollup did not match the current pull request head", ErrChecksUnavailable)
 		}
-		checks = append(checks, page.Commits.Nodes[0].Commit.StatusCheckRollup.Contexts.Nodes...)
+		rollup := page.Commits.Nodes[0].Commit.StatusCheckRollup
+		if rollup == nil && cursor == "" {
+			return nil, nil
+		}
+		if rollup == nil || rollup.Contexts.PageInfo.HasNextPage == nil {
+			return nil, fmt.Errorf("%w: check rollup pagination metadata was missing", ErrChecksUnavailable)
+		}
+		checks = append(checks, rollup.Contexts.Nodes...)
+		info := rollup.Contexts.PageInfo
+		if !*info.HasNextPage {
+			return checks, nil
+		}
+		if info.EndCursor == "" {
+			return nil, fmt.Errorf("%w: check rollup pagination cursor was missing", ErrChecksUnavailable)
+		}
+		if seenCursors[info.EndCursor] {
+			return nil, fmt.Errorf("%w: check rollup pagination cursor repeated", ErrChecksUnavailable)
+		}
+		cursor = info.EndCursor
+		seenCursors[cursor] = true
 	}
 }
 
