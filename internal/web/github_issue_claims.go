@@ -20,6 +20,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/githubassets"
 	"github.com/Molten-Bot/agent_00/internal/githubutil"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
+	"github.com/Molten-Bot/agent_00/internal/workflow"
 )
 
 type issueAutomationState struct {
@@ -836,7 +837,8 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 	workflowRecovery := !automatic && remote.Claim.ID != "" &&
 		((savedRun == nil && observed.ID != "") || hasUnsubmittedWorkflowRecovery(previous))
 	metadataRetry := app.IsWorkflowPRMetadataFailure(previous.FailureDetail()) ||
-		(savedRun != nil && savedRun.Workflow != nil && savedRun.Workflow.ResumePRURL != "" && previous.PRVerification == "")
+		(savedRun != nil && savedRun.Workflow != nil && savedRun.Workflow.ResumePRURL != "" &&
+			previous.PRVerification == "" && previous.Outcome != workflow.OutcomeReviewPending)
 	ownedWorkflowRetry := !automatic && !workflowRecovery && (requestedRun == nil || metadataRetry) && previous.Version == 2 && previous.RequestID != "" &&
 		previous.InstanceID == remote.InstanceID && previous.InstanceID == s.instanceID() &&
 		previous.ID == remote.Claim.ID && savedRun != nil && savedRun.Workflow != nil
@@ -1017,7 +1019,9 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 	runIssue := *run.GitHubIssue
 	run.GitHubIssue = &runIssue
 	runIssue.Claim = claim
-	if metadataRetry {
+	resumeReview := previous.Outcome == workflow.OutcomeReviewPending && previous.PRVerification == "" &&
+		verificationPRURL != "" && run.Workflow != nil
+	if metadataRetry || resumeReview {
 		if verificationPRURL == "" || run.Workflow == nil {
 			return issueRetryResult{}, http.StatusConflict, fmt.Errorf("PR metadata retry requires the original pull request and workflow")
 		}
@@ -1047,7 +1051,8 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 	}
 	// A stopped verifier can retry on the published draft, or before PR creation
 	// if the publication response was lost. Retain the original workflow policy.
-	verificationWorkflowRetry := automatic && previous.PRVerification != "" && run.Workflow != nil
+	verificationWorkflowRetry := automatic && run.Workflow != nil &&
+		(previous.PRVerification != "" || previous.Outcome == workflow.OutcomeReviewPending)
 	if workflowRecovery || ownedWorkflowRetry || verificationWorkflowRetry {
 		var retryOf string
 		if ownedWorkflowRetry || verificationWorkflowRetry {
@@ -1086,7 +1091,7 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		record.CheckoutComplete = record.CheckoutComplete || previous.CheckoutComplete || previous.PublicationReady
 		record.PublicationReady = previous.PublicationReady
 		record.PRVerification = previous.PRVerification
-		if record.PRVerification != "" && previous.InstanceID == record.InstanceID {
+		if (record.PRVerification != "" || resumeReview) && previous.InstanceID == record.InstanceID {
 			record.RequestID = previous.RequestID
 		}
 		if automatic {

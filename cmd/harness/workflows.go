@@ -195,6 +195,9 @@ func configureWorkflows(ctx context.Context, cfg localruntime.InitConfig, runner
 				return workflow.Outcome{Status: "succeeded", PRURL: t.PRURL}
 			case "error", "invalid", "stopped", "duplicate":
 				if archiveErr == nil {
+					if archived.Status == workflow.OutcomeReviewPending {
+						return archived
+					}
 					return workflow.Outcome{Status: "failed", PRURL: archived.PRURL, Reason: t.Error, ReviewInterrupted: archived.ReviewInterrupted}
 				}
 				return workflow.Outcome{Status: "failed", Reason: t.Error}

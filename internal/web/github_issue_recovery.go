@@ -19,6 +19,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/githubassets"
 	"github.com/Molten-Bot/agent_00/internal/githubutil"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
+	"github.com/Molten-Bot/agent_00/internal/workflow"
 	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
 
@@ -466,7 +467,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		return nil
 	}
 	if app.IsWorkflowPRMetadataFailure(record.FailureDetail()) ||
-		(record.PRVerification == "" && record.Outcome != "" && record.Outcome != "completed" &&
+		(record.PRVerification == "" && record.Outcome != "" && record.Outcome != "completed" && record.Outcome != workflow.OutcomeReviewPending &&
 			record.Run.Workflow != nil && record.Run.Workflow.ResumePRURL != "") {
 		record.State = "blocked"
 		record.Error = record.FailureDetail()
@@ -675,7 +676,7 @@ func issueRunFailures(record localruntime.IssueClaimRecord) int {
 		return failures
 	}
 	switch record.Outcome {
-	case "error", "completed", "no_changes":
+	case "error", "completed", "no_changes", workflow.OutcomeReviewPending:
 		failures++
 	case "interrupted":
 		if record.Incident != "service_shutdown" {
@@ -829,7 +830,8 @@ type issuePullRequest struct {
 }
 
 func (pr issuePullRequest) resumesVerification(record localruntime.IssueClaimRecord) bool {
-	return pr.URL != "" && !pr.Closed && !pr.Merged && record.PRVerification != "" &&
+	return pr.URL != "" && !pr.Closed && !pr.Merged && (record.PRVerification != "" ||
+		(record.Outcome == workflow.OutcomeReviewPending && record.PRURL == pr.URL)) &&
 		pr.BaseBranch == record.Run.GitHubIssue.Claim.BaseBranch
 }
 

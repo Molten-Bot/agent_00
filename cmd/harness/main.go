@@ -472,7 +472,7 @@ func runServer(args []string) int {
 		}
 		runCtx, cancelRun := context.WithCancelCause(ctx)
 		taskHandle := localTaskController.Register(requestID, cancelRun)
-		if issueWork != nil && issueWork.record.PRVerification != "" && runCfg.GitHubIssue.Claim.Attempt > 1 {
+		if issueWork != nil && runCfg.GitHubIssue.Claim.Attempt > 1 && requestID != "issue-"+issueWork.record.ID {
 			daemonLogger("task status=queued request_id=%s action=resume_draft_verification", requestID)
 		}
 		if runConfigJSON, ok := marshalRunConfigJSON(runCfg); ok {
@@ -708,8 +708,12 @@ func runServer(args []string) int {
 				if outcome.Result.Err != nil {
 					reviewOutcome.Reason = outcome.Result.Err.Error()
 				}
+				if outcome.State == "error" && (errors.Is(outcome.Result.Err, app.ErrReviewPending) || errors.Is(outcome.Result.Err, app.ErrReviewHeadChanged)) {
+					reviewOutcome.Status = workflow.OutcomeReviewPending
+				}
+
 				var reviewArchiveErr error
-				if reviewOutcome.ReviewReceipt != nil || reviewOutcome.ReviewInterrupted || reviewOutcome.ReviewRequired {
+				if reviewOutcome.ReviewReceipt != nil || reviewOutcome.ReviewInterrupted || reviewOutcome.ReviewRequired || reviewOutcome.Status == workflow.OutcomeReviewPending {
 					reviewArchiveErr = workflow.SaveReviewOutcome(filepath.Dir(cfg.RuntimeConfigPath), requestID, reviewOutcome)
 					if reviewArchiveErr != nil {
 						daemonLogger("task status=warn action=save_review_outcome request_id=%s err=%q", requestID, reviewArchiveErr)

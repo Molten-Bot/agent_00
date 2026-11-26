@@ -391,22 +391,25 @@ func TestRunFinalReviewCycleUsesReadOnlySandboxOnCodex(t *testing.T) {
 }
 
 type finalFindingReviewCycleRunner struct {
-	t            *testing.T
-	findingsPass int
-	neverClean   bool
-	historyOnly  bool
-	reviews      int
-	fixes        int
-	statusCalls  int
-	comments     int
-	checks       int
-	drafted      int
-	released     int
-	fixPrompt    string
-	emptyNetDiff bool
-	modelProbes  int
-	agentCalls   []execx.Command
-	api          *reviewAPIStub
+	t              *testing.T
+	findingsPass   int
+	neverClean     bool
+	historyOnly    bool
+	reviews        int
+	fixes          int
+	statusCalls    int
+	comments       int
+	checks         int
+	drafted        int
+	released       int
+	fixPrompt      string
+	emptyNetDiff   bool
+	modelProbes    int
+	agentCalls     []execx.Command
+	repairLagReads int
+	remoteMoved    bool
+	pushedRepair   bool
+	api            *reviewAPIStub
 }
 
 func (r *finalFindingReviewCycleRunner) Run(_ context.Context, cmd execx.Command) (execx.Result, error) {
@@ -448,6 +451,9 @@ func (r *finalFindingReviewCycleRunner) Run(_ context.Context, cmd execx.Command
 		}
 		switch cmd.Args[0] {
 		case "rev-parse":
+			if r.pushedRepair {
+				return execx.Result{Stdout: "repaired-sha\n"}, nil
+			}
 			return execx.Result{Stdout: "head-sha\n"}, nil
 		case "status":
 			r.statusCalls++
@@ -455,7 +461,16 @@ func (r *finalFindingReviewCycleRunner) Run(_ context.Context, cmd execx.Command
 				return execx.Result{Stdout: "## feature\n M main.go\n"}, nil
 			}
 			return execx.Result{Stdout: "## feature\n"}, nil
-		case "fetch", "merge", "add", "commit", "push":
+		case "push":
+			if r.fixes > 0 {
+				r.pushedRepair = true
+				r.api.head = "repaired-sha"
+				if r.remoteMoved {
+					r.api.head = "concurrent-sha"
+				}
+			}
+			return execx.Result{}, nil
+		case "fetch", "merge", "add", "commit":
 			return execx.Result{}, nil
 		case "diff":
 			for _, arg := range cmd.Args {
@@ -465,11 +480,19 @@ func (r *finalFindingReviewCycleRunner) Run(_ context.Context, cmd execx.Command
 			}
 			return execx.Result{Stdout: "diff --git a/main.go b/main.go\n"}, nil
 		case "ls-remote":
-			return execx.Result{Stdout: "head-sha\trefs/heads/feature\n"}, nil
+			return execx.Result{Stdout: r.api.head + "\trefs/heads/feature\n"}, nil
 		}
 	case "gh":
 		if len(cmd.Args) >= 2 && cmd.Args[0] == "pr" && cmd.Args[1] == "view" {
-			return execx.Result{Stdout: `{"number":7,"title":"Change","url":"https://github.com/acme/repo/pull/7","state":"OPEN","mergeable":"MERGEABLE","baseRefName":"main","headRefName":"feature","headRefOid":"head-sha","author":{"login":"dev"}}`}, nil
+			head := r.api.head
+			if r.pushedRepair && r.remoteMoved {
+				head = "repaired-sha"
+			}
+			if r.pushedRepair && cmd.Args[len(cmd.Args)-1] == "number,title,body,url,state,isDraft,baseRefName,headRefName,headRefOid,author" && r.repairLagReads > 0 {
+				r.repairLagReads--
+				head = "head-sha"
+			}
+			return execx.Result{Stdout: fmt.Sprintf(`{"number":7,"title":"Change","url":"https://github.com/acme/repo/pull/7","state":"OPEN","mergeable":"MERGEABLE","baseRefName":"main","headRefName":"feature","headRefOid":%q,"author":{"login":"dev"}}`, head)}, nil
 		}
 		if len(cmd.Args) >= 2 && cmd.Args[0] == "pr" && cmd.Args[1] == "list" {
 			return execx.Result{Stdout: `[{"url":"https://github.com/acme/repo/pull/7"}]`}, nil
@@ -538,57 +561,85 @@ func TestRunFinalReviewCycleDoesNotSendBranchHistoryFindingToRepairAgent(t *test
 }
 
 func TestRunFinalReviewCycleConfirmsFinalPassFixBeforeRelease(t *testing.T) {
-	runner := &finalFindingReviewCycleRunner{t: t, findingsPass: 1}
-	h := New(runner)
-	h.FinalReviewPasses = 1
-	h.PRChecksWatchTimeout = -1
+	for _, tc := range []struct {
+		name            string
+		lagReads, waits int
+		remoteMoved     bool
+		wantErr         error
+	}{
+		{name: "transient lag", lagReads: 1, waits: 1},
+		{name: "persistent lag", lagReads: 10, waits: 5, wantErr: ErrReviewPending},
+		{name: "concurrent update while metadata shows the repair", remoteMoved: true, wantErr: ErrReviewHeadChanged},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &finalFindingReviewCycleRunner{t: t, findingsPass: 1, repairLagReads: tc.lagReads, remoteMoved: tc.remoteMoved}
+			h := New(runner)
+			h.FinalReviewPasses = 1
+			h.PRChecksWatchTimeout = -1
+			waits := 0
+			h.Sleep = func(context.Context, time.Duration) error { waits++; return nil }
 
-	repoDir := filepath.Join(t.TempDir(), "repo")
-	if err := os.MkdirAll(repoDir, 0o755); err != nil {
-		t.Fatalf("mkdir repo: %v", err)
-	}
-	repo := &repoWorkspace{
-		URL:                "https://github.com/acme/repo.git",
-		Dir:                repoDir,
-		RelDir:             "repo",
-		Branch:             "feature",
-		BaseBranch:         "main",
-		PRURL:              "https://github.com/acme/repo/pull/7",
-		Changed:            true,
-		WriteAccessChecked: true,
-		WriteAccessAllowed: true,
-		PushRemote:         publishRemoteOrigin,
-	}
+			repoDir := filepath.Join(t.TempDir(), "repo")
+			if err := os.MkdirAll(repoDir, 0o755); err != nil {
+				t.Fatalf("mkdir repo: %v", err)
+			}
+			repo := &repoWorkspace{
+				URL:                "https://github.com/acme/repo.git",
+				Dir:                repoDir,
+				RelDir:             "repo",
+				Branch:             "feature",
+				BaseBranch:         "main",
+				PRURL:              "https://github.com/acme/repo/pull/7",
+				Changed:            true,
+				WriteAccessChecked: true,
+				WriteAccessAllowed: true,
+				PushRemote:         publishRemoteOrigin,
+			}
 
-	exitCode, stage, err := h.runFinalReviewCycle(
-		context.Background(),
-		config.Config{Prompt: "Implement the requested behavior.", CommitMessage: "fix review"},
-		repo,
-		agentruntime.Default(),
-		repoDir,
-		codexRunOptions{},
-		"",
-		"",
-		"repo",
-		"codex",
-		false,
-	)
-	if err != nil || exitCode != ExitSuccess || stage != "" {
-		t.Fatalf("runFinalReviewCycle() = (%d, %q, %v), want success", exitCode, stage, err)
-	}
-	// A fix applied on the final configured pass must be confirmed clean by
-	// an extra review before the cycle reports success, so there are two
-	// review calls even though FinalReviewPasses is 1.
-	if runner.reviews != 2 || runner.fixes != 1 {
-		t.Fatalf("review/fix calls = %d/%d, want 2/1", runner.reviews, runner.fixes)
-	}
-	if runner.comments != 2 || runner.checks != 1 {
-		t.Fatalf("comment/check counts = %d/%d, want 2/1", runner.comments, runner.checks)
-	}
-	for _, want := range []string{"resolve", "Implement the requested behavior.", "main.go:12", "complete repair input"} {
-		if !strings.Contains(strings.ToLower(runner.fixPrompt), strings.ToLower(want)) {
-			t.Fatalf("fix prompt missing %q", want)
-		}
+			exitCode, stage, err := h.runFinalReviewCycle(
+				context.Background(),
+				config.Config{Prompt: "Implement the requested behavior.", CommitMessage: "fix review"},
+				repo,
+				agentruntime.Default(),
+				repoDir,
+				codexRunOptions{},
+				"",
+				"",
+				"repo",
+				"codex",
+				false,
+			)
+			if waits != tc.waits {
+				t.Fatalf("waits = %d, want %d", waits, tc.waits)
+			}
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) || exitCode != ExitPR || stage != "review" ||
+					runner.reviews != 1 || runner.comments != 1 || repo.ReviewReceipt != nil {
+					t.Fatalf("expected review to stay gated without new evidence, got (%d, %q, %v), reviews=%d, receipt=%+v", exitCode, stage, err, runner.reviews, repo.ReviewReceipt)
+				}
+				return
+			}
+			if repo.ReviewReceipt == nil || repo.ReviewReceipt.Head != "repaired-sha" {
+				t.Fatalf("missing clean receipt on repaired commit: %+v", repo.ReviewReceipt)
+			}
+			if err != nil || exitCode != ExitSuccess || stage != "" {
+				t.Fatalf("runFinalReviewCycle() = (%d, %q, %v), want success", exitCode, stage, err)
+			}
+			// A fix applied on the final configured pass must be confirmed clean by
+			// an extra review before the cycle reports success, so there are two
+			// review calls even though FinalReviewPasses is 1.
+			if runner.reviews != 2 || runner.fixes != 1 {
+				t.Fatalf("review/fix calls = %d/%d, want 2/1", runner.reviews, runner.fixes)
+			}
+			if runner.comments != 2 || runner.checks != 1 {
+				t.Fatalf("comment/check counts = %d/%d, want 2/1", runner.comments, runner.checks)
+			}
+			for _, want := range []string{"resolve", "Implement the requested behavior.", "main.go:12", "complete repair input"} {
+				if !strings.Contains(strings.ToLower(runner.fixPrompt), strings.ToLower(want)) {
+					t.Fatalf("fix prompt missing %q", want)
+				}
+			}
+		})
 	}
 }
 
@@ -639,10 +690,11 @@ func TestRunFinalReviewCycleReportsRemainingFindingsAfterFinalConfirmation(t *te
 }
 
 func TestAppManagedMergeAfterIndependentReviewAndRepair(t *testing.T) {
-	runner := &finalFindingReviewCycleRunner{t: t, findingsPass: 1}
+	runner := &finalFindingReviewCycleRunner{t: t, findingsPass: 1, repairLagReads: 1}
 	h := New(runner)
 	h.FinalReviewPasses = 10
 	h.PRChecksWatchTimeout = -1
+	h.Sleep = func(context.Context, time.Duration) error { return nil }
 	h.resolveTaskModel = func() (agentruntime.ModelSelection, error) {
 		return agentruntime.ModelSelection{Model: "sonnet"}, nil
 	}
@@ -720,11 +772,11 @@ func TestAppManagedMergeAfterIndependentReviewAndRepair(t *testing.T) {
 		args := strings.Join(cmd.Args, " ")
 		switch {
 		case strings.Contains(args, "statusCheckRollup"):
-			return execx.Result{Stdout: `{"number":7,"state":"OPEN","headRefOid":"head-sha","statusCheckRollup":[{"name":"CI","conclusion":"SUCCESS"}]}`}, nil
+			return execx.Result{Stdout: `{"number":7,"state":"OPEN","headRefOid":"repaired-sha","statusCheckRollup":[{"name":"CI","conclusion":"SUCCESS"}]}`}, nil
 		case strings.Contains(args, "closingIssuesReferences"):
 			return execx.Result{Stdout: "0"}, nil
 		case strings.Contains(args, "reviewThreads(first:100"):
-			return execx.Result{Stdout: `{"data":{"repository":{"pullRequest":{"state":"OPEN","headRefOid":"head-sha","isMergeQueueEnabled":false,"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}`}, nil
+			return execx.Result{Stdout: `{"data":{"repository":{"pullRequest":{"state":"OPEN","headRefOid":"repaired-sha","isMergeQueueEnabled":false,"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}`}, nil
 		case strings.HasPrefix(args, "pr merge "):
 			want := []string{"pr", "merge", repo.PRURL, "--repo", w.Repository, "--squash", "--match-head-commit", receipt.Head, "--delete-branch"}
 			if !slices.Equal(cmd.Args, want) {
