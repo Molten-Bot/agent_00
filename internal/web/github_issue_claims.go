@@ -663,7 +663,7 @@ func (s Server) handleIssueAutomationStatus(w http.ResponseWriter, r *http.Reque
 			entry["incident"] = record.Incident
 			entry["repairRequestId"] = record.RepairRequestID
 			entry["repairError"] = record.RepairError
-			lock, lockErr := s.IssueClaims.TryLock(localruntime.IssueExecutionKey(issue))
+			lock, lockErr := s.IssueClaims.TryControlLock(localruntime.IssueExecutionKey(issue))
 			if lockErr != nil {
 				entry["workerAlive"] = "unknown"
 			} else {
@@ -791,7 +791,7 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		return issueRetryResult{}, 503, err
 	}
 	if s.IssueRecovery != nil {
-		lock, err := s.IssueClaims.TryLock(localruntime.IssueExecutionKey(&config.GitHubIssueConfig{Repository: repository, Number: number}))
+		lock, err := s.IssueClaims.TryControlLock(localruntime.IssueExecutionKey(&config.GitHubIssueConfig{Repository: repository, Number: number}))
 		if err != nil {
 			return issueRetryResult{}, 503, err
 		}
