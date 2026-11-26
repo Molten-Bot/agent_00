@@ -118,6 +118,29 @@ test('GitHub Actions failure requires a specific workflow and previews run attem
  await page.getByText('Run #42000000001, attempt 2 · Release',{exact:true}).waitFor();
 });
 
+for (const kind of ['review','repair']) {
+ test('Switching a filtered '+kind+' workflow to Actions clears incompatible settings', async t => {
+  const {page,getDocument}=await openEditor(t);
+  await selectRepository(page,'acme/repo');
+  await page.getByRole('button',{name:'Review PRs',exact:true}).click();
+  await waitForSaved(page);
+  const original=getDocument().workflows[0];
+  original.task.kind=kind;
+  original.filters={mode:'all',rules:[{field:'label',operator:'is',value:'ready'}]};
+  await page.reload();
+  await selectRepository(page,'acme/repo');
+  await page.locator('.wf-step').first().click();
+  await page.getByLabel('Trigger type').selectOption('action.failed');
+  await page.getByLabel('Workflow filename or ID').fill('build.yml');
+  await waitForSaved(page);
+  const saved=getDocument().workflows[0];
+  assert.equal(saved.trigger.event,'action.failed');
+  assert.equal(saved.task.kind,'implement');
+  assert.deepEqual(saved.filters,{mode:'all',rules:[]});
+  assert.equal(await page.locator('[data-id="filters"]').count(),0);
+ });
+}
+
 test('navigation saves valid edits and leaves incomplete changes at the last saved revision', async t => {
  const {page}=await openEditor(t,undefined,undefined,undefined,false);
  const getDocument=async()=>(await page.request.get(baseURL+'/api/workflows')).json();

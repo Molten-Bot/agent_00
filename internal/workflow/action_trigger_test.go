@@ -121,6 +121,10 @@ func TestActionFailureQueuedWhileBusySurvivesSuccessAndRestart(t *testing.T) {
 	if *count != 1 {
 		t.Fatal("overlapping repairs", *count)
 	}
+	queued, err := e.Runs()
+	if err != nil || len(queued) != 2 {
+		t.Fatalf("repeated polls duplicated the pending activation: %+v, %v", queued, err)
+	}
 	(*items)[0].ActionRunAttempt = 3
 	(*items)[0].ChecksFailed = false
 	restarted := &Engine{Store: e.Store, StatePath: e.StatePath, Enabled: e.Enabled, Allowed: e.Allowed, Fetch: e.Fetch, Submit: e.Submit, Status: e.Status}
