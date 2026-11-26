@@ -14,15 +14,17 @@ import (
 
 const defaultPRMergePollInterval = 10 * time.Second
 const prMonitorTitleLookupTimeout = 2 * time.Second
+const prMonitorStateLookupTimeout = 30 * time.Second
 
 // PRMergeMonitor watches task pull requests and marks merged tasks as done.
 type PRMergeMonitor struct {
-	Runner       execx.Runner
-	Broker       *Broker
-	Logf         func(string, ...any)
-	CleanupTask  func(context.Context, string) error
-	PollInterval time.Duration
-	Cooldown     *githubutil.Cooldown
+	Runner         execx.Runner
+	Broker         *Broker
+	Logf           func(string, ...any)
+	CleanupTask    func(context.Context, string) error
+	PollInterval   time.Duration
+	Cooldown       *githubutil.Cooldown
+	MemoryPressure func() bool
 
 	mu       sync.Mutex
 	inFlight map[string]struct{}
@@ -62,7 +64,7 @@ func (m *PRMergeMonitor) Run(ctx context.Context) error {
 }
 
 func (m *PRMergeMonitor) pollOnce(ctx context.Context) {
-	if !m.Cooldown.RetryAt().IsZero() {
+	if (m.MemoryPressure != nil && m.MemoryPressure()) || !m.Cooldown.RetryAt().IsZero() {
 		return
 	}
 	tasks := m.Broker.TaskList()
@@ -163,7 +165,7 @@ func (m *PRMergeMonitor) applyPRState(ctx context.Context, task Task, state prVi
 	if !isReviewTask(task.Source, task.Workflow) {
 		if task.PRTitleURL == "" || task.PRTitleURL == task.PRURL {
 			m.Broker.recordTaskPRTitle(task.RequestID, task.PRURL, state.Title, taskPRTitleMonitored)
-		} else {
+		} else if m.MemoryPressure == nil || !m.MemoryPressure() {
 			titleCtx, cancel := context.WithTimeout(ctx, prMonitorTitleLookupTimeout)
 			result, err := m.Cooldown.Run(titleCtx, m.Runner, execx.Command{
 				Name: "gh",
@@ -210,6 +212,8 @@ func (m *PRMergeMonitor) prState(ctx context.Context, prURL string) (prViewState
 	if repo := githubutil.PullRequestRepository(prURL); repo != "" {
 		args = append(args, "--repo", repo)
 	}
+	ctx, cancel := context.WithTimeout(ctx, prMonitorStateLookupTimeout)
+	defer cancel()
 	res, err := m.Cooldown.Run(ctx, m.Runner, execx.Command{
 		Name: "gh",
 		Args: args,

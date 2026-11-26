@@ -389,6 +389,10 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		agentsPath = ""
 	}
 	h.logf("stage=workspace status=ok run_dir=%s guid=%s agents=%s", runDir, guid, agentsPath)
+	if storageErr := workspace.CheckPersistentStorage(runDir); errors.Is(storageErr, workspace.ErrUnsuitableStorage) {
+		h.logf("workspace_storage status=warn run_dir=%q filesystem=memory_backed action=%q", runDir,
+			"task checkout, build caches and temporary files use RAM; configure HARNESS_WORKSPACE_RAM_BASE and HARNESS_WORKSPACE_DISK_BASE on disk for Go or browser runs")
+	}
 
 	repoURLs := cfg.RepoList()
 	if len(repoURLs) == 0 {

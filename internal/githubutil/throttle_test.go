@@ -21,6 +21,18 @@ func (r *responseRunner) Run(context.Context, execx.Command) (execx.Result, erro
 	return execx.Result{Stdout: r.raw}, r.err
 }
 
+func TestCooldownReportsCommandDeadlineAndProcessError(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+	defer cancel()
+	killed := errors.New("signal: killed")
+	c := &Cooldown{}
+	_, err := c.Run(ctx, &responseRunner{err: killed}, execx.Command{Name: "gh"}, false)
+	if !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, killed) || !c.RetryAt().IsZero() {
+		t.Fatalf("deadline error = %v, rate limit retry = %v", err, c.RetryAt())
+	}
+}
+
 func TestCooldownDeadlinesAndRecovery(t *testing.T) {
 	t.Parallel()
 	now := time.Now().UTC().Truncate(time.Second)

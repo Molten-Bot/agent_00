@@ -199,6 +199,8 @@ type Engine struct {
 	Logf      func(string, ...any)
 
 	FinishReview func(context.Context, githubutil.ReviewReceipt, *githubutil.PendingReviewGate) error
+	// MemoryPressure defers background ticks while host memory is exhausted.
+	MemoryPressure func() bool
 
 	wakeOnce   sync.Once
 	wake       chan struct{}
@@ -373,6 +375,9 @@ func (e *Engine) Run(ctx context.Context) {
 func (e *Engine) Tick(ctx context.Context) error {
 	e.tickMu.Lock()
 	defer e.tickMu.Unlock()
+	if e.MemoryPressure != nil && e.MemoryPressure() {
+		return nil
+	}
 	featureEnabled := e.Enabled()
 	d, err := e.Store.Load()
 	if err != nil {
@@ -396,6 +401,9 @@ func (e *Engine) Tick(ctx context.Context) error {
 	}
 	var errs []error
 	for _, r := range runs {
+		if e.MemoryPressure != nil && e.MemoryPressure() {
+			return errors.Join(errs...)
+		}
 		w, exists := definitions[r.Workflow.ID]
 		if err := e.reconcileRun(ctx, r, w, exists, featureEnabled); err != nil {
 			errs = append(errs, err)
@@ -417,6 +425,9 @@ func (e *Engine) Tick(ctx context.Context) error {
 	cache := map[string]snapshot{}
 	reportedErrors := map[string]bool{}
 	for _, w := range d.Workflows {
+		if e.MemoryPressure != nil && e.MemoryPressure() {
+			break
+		}
 		if !featureEnabled || !w.Enabled || !e.Allowed(w.Repository) {
 			continue
 		}

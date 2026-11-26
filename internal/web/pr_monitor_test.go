@@ -57,6 +57,58 @@ func TestDefaultPRMergePollIntervalIsLowLatency(t *testing.T) {
 	}
 }
 
+func TestPRMergeMonitorBoundsStateLookup(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		killed := errors.New("signal: killed")
+		m := PRMergeMonitor{
+			Runner: githubIssueRunnerFunc(func(ctx context.Context, _ execx.Command) (execx.Result, error) {
+				<-ctx.Done()
+				return execx.Result{}, killed
+			}),
+		}
+		start := time.Now()
+		_, err := m.prState(t.Context(), "https://github.com/acme/repo/pull/42")
+		if elapsed := time.Since(start); elapsed != prMonitorStateLookupTimeout || !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, killed) {
+			t.Fatalf("PR lookup ran for %s with error %v", elapsed, err)
+		}
+	})
+}
+
+func TestPRMergeMonitorDefersPollingAndCleanupDuringMemoryPressure(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		const requestID = "req-merged"
+		broker := NewBroker()
+		broker.IngestLog("task status=start request_id=" + requestID)
+		broker.IngestLog("task status=completed request_id=" + requestID + " pr_url=https://github.com/acme/repo/pull/42")
+		runner := &stubPRMonitorRunner{result: execx.Result{Stdout: `{"state":"MERGED","mergedAt":"2026-04-09T12:00:00Z"}`}}
+		paused := true
+		cleaned := ""
+		m := PRMergeMonitor{
+			Runner: runner, Broker: broker, Logf: t.Logf,
+			MemoryPressure: func() bool { return paused },
+			CleanupTask: func(_ context.Context, id string) error {
+				cleaned = id
+				return nil
+			},
+		}
+		m.pollOnce(t.Context())
+		synctest.Wait()
+		task, ok := broker.Task(requestID)
+		if !ok || task.Status != "completed" || len(runner.Commands()) != 0 || cleaned != "" {
+			t.Fatalf("paused monitor changed task %+v or cleaned %q", task, cleaned)
+		}
+		paused = false
+		m.pollOnce(t.Context())
+		synctest.Wait()
+		task, ok = broker.Task(requestID)
+		if !ok || task.Status != "merged" || len(runner.Commands()) != 1 || cleaned != requestID {
+			t.Fatalf("resumed monitor left task %+v and cleaned %q", task, cleaned)
+		}
+	})
+}
+
 func TestPRMergeMonitorRefreshesDisplayedPRTitle(t *testing.T) {
 	t.Parallel()
 

@@ -48,18 +48,22 @@ func (s Server) WakeIssueRecovery() {
 	}
 }
 
+var errIssueRecoveryDeferred = errors.New("issue recovery deferred during memory pressure")
+
 func (s Server) runIssueRecovery(ctx context.Context) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for ctx.Err() == nil {
 		err := s.ReconcileIssueWork(ctx)
 		var status issueAutomationStatus
-		if err != nil && ctx.Err() == nil {
+		if err != nil && !errors.Is(err, errIssueRecoveryDeferred) && ctx.Err() == nil {
 			status.addError(err)
 			s.logf("localruntime.ui status=warn event=github_issue_recovery err=%q", status.Error)
 		}
 		s.issueAutomation.mu.Lock()
-		s.issueAutomation.status = status
+		if !errors.Is(err, errIssueRecoveryDeferred) {
+			s.issueAutomation.status = status
+		}
 		s.issueAutomation.mu.Unlock()
 		select {
 		case <-ctx.Done():
@@ -225,6 +229,9 @@ func (s Server) ReconcileIssueWork(ctx context.Context) error {
 	}
 	s.issueAutomation.admission.Lock()
 	defer s.issueAutomation.admission.Unlock()
+	if s.MemoryPressure != nil && s.MemoryPressure() {
+		return errIssueRecoveryDeferred
+	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	records, listErr := s.IssueClaims.List()
@@ -250,6 +257,9 @@ func (s Server) ReconcileIssueWork(ctx context.Context) error {
 		return errors.Join(listErr, err)
 	}
 	for offset := range keys {
+		if s.MemoryPressure != nil && s.MemoryPressure() {
+			break
+		}
 		index := (cursor - 1 + offset) % len(keys)
 		record := latest[keys[index]]
 		if ctx.Err() != nil {

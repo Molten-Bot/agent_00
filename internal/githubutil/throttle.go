@@ -2,6 +2,7 @@ package githubutil
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -126,6 +127,11 @@ func (c *Cooldown) Run(ctx context.Context, runner execx.Runner, cmd execx.Comma
 	c.observe(headers)
 	if err == nil {
 		return result, nil
+	}
+	if contextErr := ctx.Err(); contextErr != nil && !errors.Is(err, contextErr) {
+		// os/exec can report "signal: killed" when the caller's deadline
+		// terminates gh. Keep both causes for diagnostics and retry decisions.
+		err = fmt.Errorf("%w: %w", contextErr, err)
 	}
 	message := strings.ToLower(result.Stderr)
 	if message == "" {
