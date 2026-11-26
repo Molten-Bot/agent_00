@@ -250,12 +250,26 @@ func TestReviewFindingThreadsUseDiffLines(t *testing.T) {
 }
 
 func TestWorkflowRepairsNativeFindingAcrossActivations(t *testing.T) {
+	testWorkflowRepairConfirmation(t, "native-finding")
+}
+
+func TestWorkflowRepairConfirmsHeadWithoutNativeFindings(t *testing.T) {
+	t.Run("no threads", func(t *testing.T) {
+		testWorkflowRepairConfirmation(t, "")
+	})
+	t.Run("human thread", func(t *testing.T) {
+		testWorkflowRepairConfirmation(t, "human-finding")
+	})
+}
+
+func testWorkflowRepairConfirmation(t *testing.T, threadID string) {
+	t.Helper()
 	root := t.TempDir()
 	const prURL = "https://github.com/acme/repo/pull/42"
 	const repoURL = "https://github.com/acme/repo.git"
-	const threadID = "native-finding"
 	const finding = `{"status":"findings","mergeReady":false,"findings":[{"severity":"high","path":"divide.sh","line":1,"title":"Handle division by zero"}]}`
 	const fixedScript = "if [ \"$1\" = 0 ]; then echo 'cannot divide by zero'; else echo \"$((10 / $1))\"; fi\n"
+	nativeFinding := threadID == "native-finding"
 	origin, seed := filepath.Join(root, "origin.git"), filepath.Join(root, "seed")
 	osRunner := execx.OSRunner{}
 	runGit := func(cmd execx.Command) (execx.Result, error) {
@@ -316,7 +330,7 @@ func TestWorkflowRepairsNativeFindingAcrossActivations(t *testing.T) {
 			if args == "--help" {
 				return reply("")
 			}
-			if !strings.Contains(cmd.Stdin, threadID) || !strings.Contains(cmd.Stdin, "Handle division by zero") {
+			if nativeFinding && (!strings.Contains(cmd.Stdin, threadID) || !strings.Contains(cmd.Stdin, "Handle division by zero")) {
 				t.Fatalf("agent prompt lacked original thread identity and finding")
 			}
 			if strings.Contains(cmd.Stdin, "Post-task review pass") {
@@ -324,7 +338,10 @@ func TestWorkflowRepairsNativeFindingAcrossActivations(t *testing.T) {
 				if err != nil || string(fixed) != fixedScript || api.head == oldHead {
 					t.Fatalf("verification did not inspect the published repair: %v, head=%s", err, api.head)
 				}
-				return reply(`{"status":"clean","mergeReady":true,"findings":[],"verifiedThreadIds":["native-finding","unknown"]}`)
+				if nativeFinding {
+					return reply(`{"status":"clean","mergeReady":true,"findings":[],"verifiedThreadIds":["native-finding","unknown"]}`)
+				}
+				return reply(cleanReviewOutput)
 			}
 			write(cmd.Dir, "divide.sh", fixedScript)
 			write(cmd.Dir, "test-divide.sh", "set -e\ntest \"$(sh divide.sh 0)\" = 'cannot divide by zero'\ntest \"$(sh divide.sh 2)\" = 5\n")
@@ -335,24 +352,31 @@ func TestWorkflowRepairsNativeFindingAcrossActivations(t *testing.T) {
 				page := `"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"next"}`
 				if slices.Contains(cmd.Args, "cursor=next") {
 					pageReads++
-					page = fmt.Sprintf(`"nodes":[{"id":%q,"isResolved":%t,"isOutdated":%t,"comments":{"totalCount":1,"nodes":[{"id":"original-comment","body":%q,"path":%q,"originalLine":%d,"viewerDidAuthor":true,"pullRequestReview":{"id":"original-review","body":%q,"state":"COMMENTED","submittedAt":"2026-11-25","viewerDidAuthor":true,"commit":{"oid":%q}}}]}}],"pageInfo":{"hasNextPage":false}`,
-						threadID, resolved, api.head != oldHead, firstComment.Body, firstComment.Path, firstComment.Line, firstReview.Body, oldHead)
+					page = `"nodes":[],"pageInfo":{"hasNextPage":false}`
+					if nativeFinding {
+						page = fmt.Sprintf(`"nodes":[{"id":%q,"isResolved":%t,"isOutdated":%t,"comments":{"totalCount":1,"nodes":[{"id":"original-comment","body":%q,"path":%q,"originalLine":%d,"viewerDidAuthor":true,"pullRequestReview":{"id":"original-review","body":%q,"state":"COMMENTED","submittedAt":"2026-11-25","viewerDidAuthor":true,"commit":{"oid":%q}}}]}}],"pageInfo":{"hasNextPage":false}`,
+							threadID, resolved, api.head != oldHead, firstComment.Body, firstComment.Path, firstComment.Line, firstReview.Body, oldHead)
+					} else if threadID != "" {
+						page = fmt.Sprintf(`"nodes":[{"id":%q,"isResolved":false,"comments":{"totalCount":1,"nodes":[{"id":"human-comment","viewerDidAuthor":false}]}}],"pageInfo":{"hasNextPage":false}`, threadID)
+					}
 				}
 				return reply(fmt.Sprintf(`{"data":{"repository":{"pullRequest":{"state":"OPEN","headRefOid":%q,"reviewThreads":{%s}}}}}`, api.head, page))
 			case strings.Contains(args, "resolveReviewThread("):
-				if !slices.Contains(cmd.Args, "id="+threadID) || api.review.Head == oldHead || resolved {
+				if !nativeFinding || !slices.Contains(cmd.Args, "id="+threadID) || api.review.Head == oldHead || resolved {
 					t.Fatalf("unexpected thread resolution: %v", cmd.Args)
 				}
 				resolutions++
 				resolved = true
 				return execx.Result{}, errors.New("response lost after GitHub resolved the thread")
 			case strings.Contains(args, "/reviews?"):
-				data, _ := json.Marshal([]githubutil.SubmittedReview{firstReview, api.review})
-				return reply(string(data))
+				if firstReview.ID != 0 {
+					data, _ := json.Marshal([]githubutil.SubmittedReview{firstReview, api.review})
+					return reply(string(data))
+				}
 			case strings.Contains(args, "closingIssuesReferences"):
 				return reply("1")
 			case strings.Contains(args, "/pulls/42/merge"):
-				if !resolved || draft || !ciPassed || !slices.Contains(cmd.Args, "sha="+api.head) {
+				if (threadID != "" && !resolved) || draft || !ciPassed || !slices.Contains(cmd.Args, "sha="+api.head) {
 					t.Fatalf("merge attempted before resolution, readiness, and current-head CI")
 				}
 				merges++
@@ -370,7 +394,7 @@ func TestWorkflowRepairsNativeFindingAcrossActivations(t *testing.T) {
 			case strings.HasPrefix(args, "pr checks "):
 				return reply("CI\tpass\n")
 			case strings.HasPrefix(args, "pr ready "):
-				if !resolved || pageReads < 3 {
+				if (threadID != "" && !resolved) || pageReads < 3 {
 					t.Fatal("marked ready before re-reading thread resolution")
 				}
 				readyCalls++
@@ -401,8 +425,14 @@ func TestWorkflowRepairsNativeFindingAcrossActivations(t *testing.T) {
 	review := makeWorkflow("review", "pr.opened", "review")
 	repair := makeWorkflow("repair", "pr.checks_failed", "repair")
 	repair.Merge = workflow.Merge{Enabled: true, Method: "squash"}
+	workflows := []workflow.Definition{issue, repair}
+	wantVerified := 0
+	if nativeFinding {
+		workflows = []workflow.Definition{issue, review, repair}
+		wantVerified = 1
+	}
 	store := &workflow.Store{Path: filepath.Join(root, "workflows.json")}
-	if err := store.Initialize(workflow.Document{Version: workflow.Version, Workflows: []workflow.Definition{issue, review, repair}}); err != nil {
+	if err := store.Initialize(workflow.Document{Version: workflow.Version, Workflows: workflows}); err != nil {
 		t.Fatal(err)
 	}
 	prExists := false
@@ -414,7 +444,7 @@ func TestWorkflowRepairsNativeFindingAcrossActivations(t *testing.T) {
 			Fetch: func(_ context.Context, _ string, _ workflow.ScanNeeds) ([]workflow.Item, error) {
 				items := []workflow.Item{{Number: 1, Kind: "issue", Repository: "acme/repo", Open: true}}
 				if prExists && !merged {
-					items = append(items, workflow.Item{Number: 42, Kind: "pr", Repository: "acme/repo", Open: true, URL: prURL, ChecksFailed: firstReview.ID != 0 && api.head == oldHead})
+					items = append(items, workflow.Item{Number: 42, Kind: "pr", Repository: "acme/repo", Open: true, URL: prURL, ChecksFailed: (!nativeFinding || firstReview.ID != 0) && api.head == oldHead})
 				}
 				return items, nil
 			},
@@ -438,7 +468,8 @@ func TestWorkflowRepairsNativeFindingAcrossActivations(t *testing.T) {
 					firstReview, firstComment = api.review, api.comments[0]
 				case repair.ID:
 					h := New(runner)
-					h.Workspace = testWorkspaceManager("native-finding-repair")
+					h.Workspace = testWorkspaceManager("repair")
+					h.Workspace.Root = root
 					cfg := config.Config{RepoURL: repoURL, BaseBranch: "feature", Prompt: "Repair PR feedback.", RequiresNonDefaultBranch: true,
 						Workflow: &config.WorkflowRunConfig{ID: r.Workflow.ID, EventID: r.ID, PolicyHash: r.Workflow.ExecutionPolicyHash(), RepairPRURL: prURL}}
 					result := h.Run(ctx, cfg)
@@ -454,7 +485,8 @@ func TestWorkflowRepairsNativeFindingAcrossActivations(t *testing.T) {
 					}
 					outcome.ReviewReceipt, outcome.ReviewRequired, outcome.PendingReviewGate = result.ReviewReceipt, result.ReviewRequired, result.PendingReviewGate
 					if outcome.ReviewReceipt == nil || !outcome.ReviewReceipt.Clean() || outcome.ReviewReceipt.Head != api.head ||
-						len(outcome.ReviewReceipt.VerifiedThreads) != 1 || outcome.PendingReviewGate == nil || !outcome.ReviewRequired {
+						outcome.ReviewReceipt.Pass != 1 || outcome.ReviewReceipt.Policy.FixPasses != 0 || !outcome.ReviewRequired ||
+						len(outcome.ReviewReceipt.VerifiedThreads) != wantVerified || (outcome.PendingReviewGate != nil) != (threadID != "") {
 						t.Fatalf("repair did not hand off head-bound evidence: %+v", outcome)
 					}
 				}
@@ -480,24 +512,39 @@ func TestWorkflowRepairsNativeFindingAcrossActivations(t *testing.T) {
 	}
 	engine := newEngine()
 	tick(engine) // Issue implementation creates the PR.
-	tick(engine) // The independent native review publishes a finding.
-	tick(engine) // Repair the existing PR and publish clean confirmation.
-	tick(engine) // The server applies the resolution, but the response is lost.
-	if resolutions != 1 || readyCalls != 0 || merges != 0 {
-		runs, err := engine.Runs()
-		t.Fatalf("unexpected progress after interrupted write: %d/%d/%d, runs=%+v, err=%v", resolutions, readyCalls, merges, runs, err)
+	if nativeFinding {
+		tick(engine) // The independent native review publishes a finding.
 	}
-	engine = newEngine()
-	tick(engine) // Recover the acknowledgement from the live thread.
+	tick(engine) // Repair the existing PR and publish clean confirmation.
+	if nativeFinding {
+		tick(engine) // The server applies the resolution, but the response is lost.
+		if resolutions != 1 || readyCalls != 0 || merges != 0 {
+			runs, err := engine.Runs()
+			t.Fatalf("unexpected progress after interrupted write: %d/%d/%d, runs=%+v, err=%v", resolutions, readyCalls, merges, runs, err)
+		}
+		engine = newEngine()
+		tick(engine) // Recover the acknowledgement from the live thread.
+	}
 	tick(engine) // Completed writeback still waits for current-head CI.
-	if resolutions != 1 || readyCalls != 1 || merges != 0 {
+	if threadID != "" && !nativeFinding {
+		ciPassed = true
+		tick(engine)
+		runs, err := engine.Runs()
+		if err != nil || !slices.ContainsFunc(runs, func(r workflow.Run) bool {
+			return r.Workflow.ID == repair.ID && r.Reason == "Waiting for unresolved review threads"
+		}) || resolutions != 0 || readyCalls != 0 || merges != 0 || api.posts != 1 {
+			t.Fatalf("human thread did not stay pending: resolutions=%d, ready=%d, merges=%d, reviews=%d, runs=%+v, err=%v", resolutions, readyCalls, merges, api.posts, runs, err)
+		}
+		return
+	}
+	if resolutions != wantVerified || readyCalls != 1 || merges != 0 {
 		t.Fatalf("unexpected progress before CI: %d/%d/%d", resolutions, readyCalls, merges)
 	}
 	ciPassed = true
 	pagesBeforeMerge := pageReads
 	tick(engine)
 	tick(engine)
-	if merges != 1 || api.posts != 2 || pageReads <= pagesBeforeMerge {
+	if merges != 1 || api.posts != 1+wantVerified || pageReads <= pagesBeforeMerge {
 		t.Fatalf("merges=%d, reviews=%d, merge thread pages=%d", merges, api.posts, pageReads-pagesBeforeMerge)
 	}
 }

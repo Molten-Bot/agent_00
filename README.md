@@ -743,10 +743,10 @@ stays successful and its pull request stays in draft for human review.
 
 #### Published review gate
 
-Workflow reviews and implementation runs with review cycles need a submitted
-GitHub review on the exact PR head before automated merge. A clean review is
-posted with the `COMMENT` event, a structured verdict, and “No material issues
-found.” The task workspace records the review ID, head, run, pass, selected
+Workflow reviews, PR repairs, and implementation runs with review cycles need
+a submitted GitHub review on the exact PR head before automated merge. A clean
+review is posted with the `COMMENT` event, a structured verdict, and “No material
+issues found.” The task workspace records the review ID, head, run, pass, selected
 policy, and result. The server archives the outcome in `review-receipts` next
 to its runtime configuration before workspace cleanup. The review agent
 returns a structured code verdict. The harness publishes one native review per
@@ -758,8 +758,8 @@ Human approval, when required, remains a separate requirement.
 Code findings on the diff are submitted as review threads. Findings that
 require a branch or history repair outside review scope leave the gate blocked.
 Workflow repairs carry the original native findings into the repair prompt,
-even when a different activation published them. A repair with open native
-findings gets an independent confirmation pass, including when its fix-pass
+even when a different activation published them. Every PR repair workflow runs
+an independent confirmation pass on the PR head, including when its fix-pass
 budget is zero. A clean pass can resolve an app-authored thread from an earlier
 head if it verified the specific fix and the original comment has no replies
 or changes since verification. The workflow retains the clean receipt and
