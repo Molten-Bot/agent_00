@@ -158,6 +158,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 		largePatch             bool
 		baseMoved              bool
 		baseMovedAfterEvidence bool
+		publishedBaseMoved     bool
 		mergedDuringEvidence   bool
 		reviewStale            bool
 		reviewTruncated        bool
@@ -215,6 +216,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 		{name: "base changed after review", answer: localSuccess, change: true, baseMoved: true, wantExit: ExitPR,
 			wantEvidenceError: "reviewed patch evidence has a stale draft base"},
 		{name: "base changed during offline verification", answer: localSuccess, change: true, baseMovedAfterEvidence: true, wantExit: ExitPR},
+		{name: "published base moves while PR metadata is stale", answer: localSuccess, change: true, publishedBaseMoved: true, wantExit: ExitPR},
 		{name: "external merge during offline verification", answer: localSuccess, change: true, mergedDuringEvidence: true, wantExit: ExitPR},
 		{name: "submitted review stale", answer: localSuccess, change: true, reviewStale: true, wantExit: ExitPR},
 		{name: "submitted review body exceeds evidence limit", answer: localSuccess, change: true, reviewTruncated: true, wantExit: ExitPR,
@@ -357,6 +359,10 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 						}
 						if tc.baseMovedAfterEvidence {
 							liveBase = "different-base"
+						}
+						if tc.publishedBaseMoved {
+							git(seed, "commit", "--allow-empty", "-m", "advance draft base")
+							git(seed, "push", remote, "main")
 						}
 						if tc.publishedHeadMoved {
 							git(remote, "update-ref", "refs/heads/"+branch, base)
@@ -609,7 +615,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				}
 				return
 			}
-			if tc.baseMovedAfterEvidence {
+			if tc.baseMovedAfterEvidence || tc.publishedBaseMoved {
 				if verifications != 1 || !errors.Is(result.Err, ErrReviewPending) || !strings.Contains(result.Err.Error(), "stale draft base") {
 					t.Fatalf("base movement during verification must keep the draft gated: %+v", result)
 				}

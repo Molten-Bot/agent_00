@@ -1051,11 +1051,7 @@ func (h Harness) finalizePullRequestReview(
 			err = h.verifyDraftHandoff(ctx, *repo, runtime, codexOpts, evidence)
 		}
 		if err == nil {
-			var latest draftPatchCommits
-			latest, err = h.loadDraftPatchCommits(ctx, *repo)
-			if err == nil {
-				err = repo.ReviewedPatch.checkCommits(latest)
-			}
+			err = h.confirmDraftPatchCommits(ctx, *repo)
 		}
 		if err != nil {
 			repo.ReviewReceipt = nil

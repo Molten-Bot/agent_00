@@ -168,6 +168,27 @@ func (p *draftReviewPatch) remove() {
 	}
 }
 
+func (h Harness) confirmDraftPatchCommits(ctx context.Context, repo repoWorkspace) error {
+	commits, err := h.loadDraftPatchCommits(ctx, repo)
+	if err != nil {
+		return err
+	}
+	if err := repo.ReviewedPatch.checkCommits(commits); err != nil {
+		return err
+	}
+	// PR metadata can lag behind the base ref on origin, where the patch base was fetched.
+	ref := "refs/heads/" + normalizeBranchRef(repo.BaseBranch)
+	remote, err := h.runCommand(ctx, "pr_verification", gitCommand(repo.Dir, "ls-remote", "--heads", publishRemoteOrigin, ref))
+	if err != nil {
+		return fmt.Errorf("%w: confirm published draft base: %w", ErrReviewPending, err)
+	}
+	commits.Base = remoteBranchHead(remote.Stdout, repo.BaseBranch)
+	if commits.Base == "" {
+		return fmt.Errorf("%w: missing published draft base commit for the reviewed patch", ErrReviewPending)
+	}
+	return repo.ReviewedPatch.checkCommits(commits)
+}
+
 func (h Harness) loadDraftPatchCommits(ctx context.Context, repo repoWorkspace) (draftPatchCommits, error) {
 	endpoint := strings.TrimSuffix(githubutil.ReviewEndpoint(repo.PRURL), "/reviews")
 	cmd := ghCommand(repo.Dir, "api", endpoint, "--jq", draftPatchCommitsQuery)
