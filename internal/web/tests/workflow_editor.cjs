@@ -95,6 +95,29 @@ test('multiple persistent workflows, disabled drafts, policy editing, activation
  await selectRepository(page, 'acme/other');await page.locator('.wf-step').first().waitFor({state:'detached'});assert.equal(getDocument().workflows.length,2);
  const editor=await page.locator('.wf-editor').boundingBox(),dock=await page.locator('.page-bottom-dock').boundingBox();assert.ok(editor.y+editor.height<=dock.y);});
 
+test('GitHub Actions failure requires a specific workflow and previews run attempts', async t => {
+ const {page,getDocument}=await openEditor(t);
+ await selectRepository(page,'acme/repo');
+ await page.getByRole('button',{name:'Implement issues',exact:true}).click();
+ await waitForSaved(page);
+ await page.getByLabel('Trigger type').selectOption({label:'GitHub Actions failure'});
+ await page.getByText('Enter a workflow filename or numeric workflow ID.',{exact:true}).waitFor();
+ assert.equal(getDocument().workflows[0].trigger.event,'issue.labeled');
+ await page.getByLabel('Workflow filename or ID').fill('deploy-prod.yml');
+ await waitForSaved(page);
+ assert.deepEqual(getDocument().workflows[0].trigger,{event:'action.failed',value:'deploy-prod.yml'});
+ assert.equal(await page.locator('[data-id="filters"]').count(),0);
+ await page.route('**/api/workflows/preview',async route=>{
+  assert.deepEqual(route.request().postDataJSON().trigger,{event:'action.failed',value:'deploy-prod.yml'});
+  await route.fulfill({json:[{
+   item:{kind:'action',actionRunId:42000000001,actionRunAttempt:2,title:'Release'},
+   matches:true,reason:'GitHub Actions run failed',
+  }]});
+ });
+ await page.getByRole('button',{name:'Preview matches',exact:true}).click();
+ await page.getByText('Run #42000000001, attempt 2 · Release',{exact:true}).waitFor();
+});
+
 test('navigation saves valid edits and leaves incomplete changes at the last saved revision', async t => {
  const {page}=await openEditor(t,undefined,undefined,undefined,false);
  const getDocument=async()=>(await page.request.get(baseURL+'/api/workflows')).json();

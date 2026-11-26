@@ -55,6 +55,32 @@ func TestWorkflowRepositoryAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+func TestActionFailureRunConfigIncludesDiagnosisContext(t *testing.T) {
+	t.Parallel()
+	w := workflow.Definition{
+		ID: "release", Name: "Repair release", Repository: "acme/repo",
+		Trigger: workflow.Trigger{Event: workflow.ActionFailedEvent, Value: "deploy.yml"},
+		Task:    workflow.Task{Kind: "implement", LibraryTaskName: "diagnose", BaseBranch: "release"},
+	}
+	i := workflow.Item{
+		Kind: "action", ActionRunID: 123, ActionRunAttempt: 2,
+		URL: "https://github.com/acme/repo/actions/runs/123/attempts/2", HeadBranch: "v1.2.3", HeadSHA: "abc",
+	}
+	c, err := workflowRunConfigWithLibrary(workflow.Run{ID: "event", Workflow: w, Item: i}, func(name, repo, branch, _ string) (config.Config, error) {
+		return config.Config{RepoURL: repo, BaseBranch: branch, LibraryTaskName: name, Prompt: "Diagnose release failures."}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.BaseBranch != "release" || c.GitHubIssue != nil || c.Review != nil || c.Workflow.RepairPRURL != "" {
+		t.Fatalf("expected a repository implementation task on the configured base: %+v", c)
+	}
+	for _, want := range []string{"Diagnose release failures.", i.URL, "deploy.yml", "Run ID: 123", "Attempt: 2", "Head branch: v1.2.3", "Head commit: abc"} {
+		if !strings.Contains(c.Prompt, want) {
+			t.Errorf("prompt missing %q: %s", want, c.Prompt)
+		}
+	}
+}
 func TestWorkflowLibraryPromptResolvesPerOccurrenceAndSurvivesSubmission(t *testing.T) {
 	t.Parallel()
 	revision := 0

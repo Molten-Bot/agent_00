@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
-
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +42,9 @@ type Item struct {
 	ChecksFailed   bool     `json:"checksFailed"`
 	ChecksPassed   bool     `json:"checksPassed"`
 	Open           bool     `json:"open"`
+
+	ActionRunID      int64 `json:"actionRunId,omitempty"`
+	ActionRunAttempt int   `json:"actionRunAttempt,omitempty"`
 }
 type Decision struct {
 	Item    Item   `json:"item"`
@@ -50,7 +53,7 @@ type Decision struct {
 }
 
 func Match(w Definition, i Item) (bool, string) {
-	if !i.Open {
+	if !i.Open && w.Trigger.Event != ActionFailedEvent {
 		return false, "Item is closed"
 	}
 	if !strings.EqualFold(w.Repository, i.Repository) {
@@ -59,6 +62,15 @@ func Match(w Definition, i Item) (bool, string) {
 	kind := strings.Split(w.Trigger.Event, ".")[0]
 	if i.Kind != kind {
 		return false, "Item type does not match"
+	}
+	if w.Trigger.Event == ActionFailedEvent {
+		if !i.ChecksFailed {
+			return false, "Run did not complete with failure"
+		}
+		if strings.HasPrefix(i.HeadBranch, "agent00-") {
+			return false, "Run is on an agent work branch"
+		}
+		return true, "GitHub Actions run failed"
 	}
 	triggerValue := w.Trigger.Value
 	if triggerValue == "@me" {
@@ -404,6 +416,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 		items []Item
 		err   error
 	}
+	type scanKey struct{ repository, actionWorkflow string }
 	needsByRepo := map[string]ScanNeeds{}
 	for _, w := range d.Workflows {
 		if w.Enabled && (strings.HasPrefix(w.Trigger.Event, "issue.") || strings.HasPrefix(w.Trigger.Event, "pr.")) {
@@ -413,8 +426,8 @@ func (e *Engine) Tick(ctx context.Context) error {
 			needsByRepo[key] = needs
 		}
 	}
-	cache := map[string]snapshot{}
-	reportedErrors := map[string]bool{}
+	cache := map[scanKey]snapshot{}
+	reportedErrors := map[scanKey]bool{}
 	for _, w := range d.Workflows {
 		if !featureEnabled || !w.Enabled || !e.Allowed(w.Repository) {
 			continue
@@ -429,16 +442,23 @@ func (e *Engine) Tick(ctx context.Context) error {
 			continue
 		}
 		key := strings.ToLower(w.Repository)
-		fetched, ok := cache[key]
+		needs := needsByRepo[key]
+		action := w.Trigger.Event == ActionFailedEvent
+		if action {
+			needs = ScanNeeds{}
+			needs.include(w)
+		}
+		source := scanKey{repository: key, actionWorkflow: needs.ActionWorkflow}
+		fetched, ok := cache[source]
 		if !ok {
-			fetched.items, fetched.err = e.Fetch(ctx, w.Repository, needsByRepo[key])
-			cache[key] = fetched
+			fetched.items, fetched.err = e.Fetch(ctx, w.Repository, needs)
+			cache[source] = fetched
 		}
 		kind := strings.Split(w.Trigger.Event, ".")[0]
 		if !usableSnapshot(kind, fetched.err) {
-			if !reportedErrors[key] {
+			if !reportedErrors[source] {
 				errs = append(errs, fetched.err)
-				reportedErrors[key] = true
+				reportedErrors[source] = true
 			}
 			continue
 		}
@@ -454,6 +474,9 @@ func (e *Engine) Tick(ctx context.Context) error {
 				continue
 			}
 			entity := fmt.Sprintf("%s#%d", key, i.Number)
+			if action {
+				entity = fmt.Sprintf("%s/actions/runs/%d", key, i.ActionRunID)
+			}
 			obsKey := baselineKey + ":" + entity
 			seen[obsKey] = true
 			old := s.Observations[obsKey]
@@ -461,6 +484,15 @@ func (e *Engine) Tick(ctx context.Context) error {
 			fingerprint := ""
 			if match {
 				fingerprint = w.Trigger.Event
+			}
+			if action {
+				// Run IDs survive reruns. Retain the highest observed failed
+				// attempt across queued/successful states and polling-window changes.
+				priorAttempt, _ := strconv.Atoi(old.Fingerprint)
+				if !match || i.ActionRunAttempt <= priorAttempt {
+					continue
+				}
+				fingerprint = strconv.Itoa(i.ActionRunAttempt)
 			}
 			if old.Fingerprint == fingerprint {
 				continue
@@ -500,13 +532,15 @@ func (e *Engine) Tick(ctx context.Context) error {
 				errs = append(errs, err)
 			}
 		}
-		// A successful fetch contains every open item. Closed items disappear
-		// from it; record that non-match so reopening can activate again.
-		for obsKey, old := range s.Observations {
-			if strings.HasPrefix(obsKey, baselineKey+":") && !seen[obsKey] && old.Fingerprint != "" {
-				old.Fingerprint = ""
-				old.Generation++
-				s.Observations[obsKey] = old
+		if !action {
+			// The issue/PR snapshot contains every open item. Record closed
+			// items as non-matches so reopening can activate again.
+			for obsKey, old := range s.Observations {
+				if strings.HasPrefix(obsKey, baselineKey+":") && !seen[obsKey] && old.Fingerprint != "" {
+					old.Fingerprint = ""
+					old.Generation++
+					s.Observations[obsKey] = old
+				}
 			}
 		}
 		s.Baselines[baselineKey] = true
@@ -532,7 +566,8 @@ func (s *State) run(id string) *Run {
 
 func (s *State) busy(item Item) bool {
 	for _, run := range s.Runs {
-		if run.Status != awaitingReview && !terminal(run.Status) && strings.EqualFold(run.Item.Repository, item.Repository) && run.Item.Number == item.Number {
+		if run.Status != awaitingReview && !terminal(run.Status) && strings.EqualFold(run.Item.Repository, item.Repository) &&
+			run.Item.Number == item.Number && run.Item.ActionRunID == item.ActionRunID {
 			return true
 		}
 	}

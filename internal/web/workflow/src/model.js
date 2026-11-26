@@ -1,5 +1,6 @@
 import catalog from "./templates.json" with { type: "json" };
 export const workflowTemplates = catalog.templates;
+export const actionFailedEvent = "action.failed";
 export const events = [
   "schedule",
   "app.prompt",
@@ -15,6 +16,7 @@ export const events = [
   "pr.review_requested",
   "pr.changes_requested",
   "pr.checks_failed",
+  actionFailedEvent,
 ];
 export function newWorkflow(repository, kind = "implement", id = crypto.randomUUID()) {
   const template = workflowTemplates.find((entry) => entry.id === kind);
@@ -28,7 +30,8 @@ const layoutGap = 64;
 
 export function diagram(w) {
   const input = w.trigger.event.startsWith("app.");
-  const triggerIcons = { schedule: "calendar", "app.prompt": "prompt", "app.json": "json", "app.chat": "chat" };
+  const action = w.trigger.event === actionFailedEvent;
+  const triggerIcons = { schedule: "calendar", "app.prompt": "prompt", "app.json": "json", "app.chat": "chat", [actionFailedEvent]: "trigger" };
   const triggerIcon = triggerIcons[w.trigger.event] || (w.trigger.event.startsWith("pr.") ? "pullRequest" : "issue");
   const steps = [
     ["repository", "Repository", w.repository || "Choose a repository"],
@@ -37,7 +40,7 @@ export function diagram(w) {
       input ? `${w.trigger.event.slice(4)} submission` : "Trigger",
       (w.trigger.event === "schedule"
         ? `Every ${w.trigger.intervalHours} hours`
-        : w.trigger.event.replaceAll(".", " · ").replaceAll("_", " ")) +
+        : action ? "GitHub Actions failure" : w.trigger.event.replaceAll(".", " · ").replaceAll("_", " ")) +
         (w.trigger.value ? ` · ${w.trigger.value}` : ""),
     ],
     [
@@ -71,7 +74,7 @@ export function diagram(w) {
         : "Leave the pull request for a human",
     ],
   ];
-  if (w.trigger.event === "schedule" || input) steps.splice(2, 1);
+  if (w.trigger.event === "schedule" || input || action) steps.splice(2, 1);
   if (!w.reviewCycles || w.task.kind === "review") steps.splice(steps.findIndex(([id]) => id === "review"), 1);
   if (!w.merge.enabled) steps.splice(steps.findIndex(([id]) => id === "merge"), 1);
   const positions = steps.map(([id], index) => w.positions?.[id] || { x: 80, y: index * 145 });
@@ -164,6 +167,9 @@ export function incompleteWorkflow(w, libraryTasks) {
     return "Enter a workflow name of 1–100 bytes.";
   }
   const { event, value, intervalHours } = w.trigger;
+  if (event === actionFailedEvent && !/^([1-9][0-9]*|[A-Za-z0-9_.-]+\.ya?ml)$/.test(value?.trim() || "")) {
+    return "Enter a workflow filename or numeric workflow ID.";
+  }
   if (/(assigned|labeled|review_requested)$/.test(event) && !value?.trim()) {
     return "Enter a label or GitHub login for this trigger.";
   }
