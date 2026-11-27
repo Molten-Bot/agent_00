@@ -259,13 +259,19 @@ tmpfs: accumulated tasks can fill it and prevent even `git clone` from starting.
 Linux workspace allocation checks for at least 512 MiB free on each allocation
 and falls back to the configured disk base when the preferred base is full.
 This reserve is an early check, not a limit on an individual build's disk usage.
-The daemon records the largest workspace size observed at task completion for each
-repository or combination of repositories. It stores these estimates by repository
-hash in `.<runtime-config-filename>.task-disk-usage.json` beside the runtime config.
-Tasks without a history reserve 512 MiB. When available space cannot cover a
-task's estimate alongside other reservations on the same filesystem, the task
-stays queued until space becomes available. Force start overrides this admission
-check.
+The daemon estimates workspace needs from the largest of the last four successful
+runs for each repository or combination of repositories. The measurement includes
+the checkout and tool caches still present at completion. A large run raises the
+estimate immediately and ages out after four newer successful runs. Incomplete,
+failed, and stopped runs are skipped. History is stored by repository hash in
+`.<runtime-config-filename>.task-disk-usage.json` beside the runtime config. An old
+high-water mark seeds the window as one sample.
+
+Tasks without a history reserve 512 MiB. After accounting for active reservations
+on the same filesystem, admission requires at least 512 MiB free and enough space
+for the task's estimate. The task stays queued if either requirement is unmet.
+Disk queue logs include the estimate, free-space threshold, and active
+reservations. Force start overrides the scheduler's estimate and reservation checks.
 
 Issue workspaces live under `issue-workspaces/` beside the runtime config. With
 default Compose settings, they use the host disk behind

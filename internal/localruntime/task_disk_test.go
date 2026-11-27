@@ -3,6 +3,7 @@ package localruntime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -16,7 +17,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
 
-func TestTaskDiskHistoryPersistsOnlyLargerMeasurements(t *testing.T) {
+func TestTaskDiskHistoryUsesRecentMeasurements(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "task-disk-usage.json")
@@ -39,28 +40,32 @@ func TestTaskDiskHistoryPersistsOnlyLargerMeasurements(t *testing.T) {
 		})
 	}
 	writes.Wait()
-	stamp := time.Unix(1000, 0)
-	if err := os.Chtimes(path, stamp, stamp); err != nil {
-		t.Fatal(err)
+	if got := history.RequiredBytes(alias); got != 256 {
+		t.Fatalf("disk requirement after concurrent writes = %d, want 256", got)
 	}
-	if err := history.Record(key, 42); err != nil {
-		t.Fatal(err)
+	record := func(size, want uint64) {
+		t.Helper()
+		if err := history.Record(key, size); err != nil {
+			t.Fatal(err)
+		}
+		if got := history.RequiredBytes(alias); got != want {
+			t.Fatalf("disk requirement after recording %d = %d, want %d", size, got, want)
+		}
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !info.ModTime().Equal(stamp) {
-		t.Fatal("smaller measurement rewrote the history file")
+	record(1024, 1024)
+	for range taskDiskHistoryWindow - 1 {
+		record(64, 1024)
 	}
 
-	reopened, err := OpenTaskDiskHistory(path)
+	history, err = OpenTaskDiskHistory(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := reopened.RequiredBytes(alias); got != 256 {
-		t.Fatalf("reopened disk requirement = %d, want 256", got)
-	}
+	record(64, 64)
+	record(256, 256)
+	record(512, 512)
+	record(512, 512)
+	record(64, 512)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +106,7 @@ func TestTaskDiskHistoryFlushRetriesFailedWrite(t *testing.T) {
 	}
 }
 
-func TestTaskDiskHistoryPreservesMaximaAfterFailedLoad(t *testing.T) {
+func TestTaskDiskHistoryMergesPendingSamplesAfterFailedLoad(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "disk-history.json")
@@ -113,16 +118,19 @@ func TestTaskDiskHistoryPreservesMaximaAfterFailedLoad(t *testing.T) {
 	if err == nil {
 		t.Fatal("invalid history loaded successfully")
 	}
-	for key, size := range map[string]uint64{"first": 128, "third": 512} {
-		if err := history.Record(key, size); err == nil {
+	for _, size := range []uint64{128, 64, 64} {
+		if err := history.Record("first", size); err == nil {
 			t.Fatal("record succeeded while history could not be loaded")
 		}
+	}
+	if err := history.Record("third", 512); err == nil {
+		t.Fatal("record succeeded while history could not be loaded")
 	}
 	got, err := os.ReadFile(path)
 	if err != nil || string(got) != string(invalid) {
 		t.Fatalf("unreadable history changed: %q, %v", got, err)
 	}
-	if err := os.WriteFile(path, []byte(`{"first":256,"second":64}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"first":256,"second":[64,32]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := history.Flush(); err != nil {
@@ -137,6 +145,66 @@ func TestTaskDiskHistoryPreservesMaximaAfterFailedLoad(t *testing.T) {
 			t.Errorf("required bytes for %q = %d, want %d", key, got, want)
 		}
 	}
+	if err := reopened.Record("first", 64); err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.RequiredBytes("first"); got != 128 {
+		t.Fatalf("estimate after aging out the legacy sample = %d, want 128", got)
+	}
+}
+
+func TestAdaptiveSchedulerRechecksRollingEstimateWithActiveReservation(t *testing.T) {
+	t.Parallel()
+
+	const floor = workspace.MinimumFreeBytes
+	history, err := OpenTaskDiskHistory("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := history.Record("repo", 3*floor); err != nil {
+		t.Fatal(err)
+	}
+	var logs []string
+	controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 2}, func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	})
+	free := uint64(3 * floor)
+	controller.diskSpace = func(string) (string, uint64, uint64, error) {
+		return "disk", free, math.MaxUint64, nil
+	}
+	request := TaskDiskRequest{Workspace: workspace.Manager{Root: t.TempDir()}}
+	_, release, err := controller.AcquireWorkspace(t.Context(), "active", request, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	request.RequiredBytes = func() uint64 { return history.RequiredBytes("repo") }
+	queued := &taskWaiter{requestID: "queued", disk: &request, queued: true}
+	controller.waiters = []*taskWaiter{queued}
+	controller.RecheckQueue()
+	if queued.granted || !strings.Contains(queued.diskBlock, fmt.Sprintf("estimated_bytes=%d", 3*floor)) {
+		t.Fatalf("initial admission granted = %t, disk block = %q", queued.granted, queued.diskBlock)
+	}
+	for range taskDiskHistoryWindow {
+		if err := history.Record("repo", floor/2); err != nil {
+			t.Fatal(err)
+		}
+	}
+	free = 2*floor - 1
+	controller.RecheckQueue()
+	if queued.granted {
+		t.Fatal("admission consumed the free-space floor after accounting for the active reservation")
+	}
+	updated := fmt.Sprintf(`required_bytes=%d reserved_bytes=%d blocking_request_ids="active" estimated_bytes=%d minimum_free_bytes=%d`, floor, floor, floor/2, floor)
+	if len(logs) != 2 || !strings.Contains(logs[1], "reason=disk_space ") || !strings.Contains(logs[1], updated) {
+		t.Fatalf("missing updated queue estimate and reservation in logs: %v", logs)
+	}
+	free = 2 * floor
+	controller.RecheckQueue()
+	if !queued.granted {
+		t.Fatalf("admission remained blocked after space reached the floor: %s", queued.diskBlock)
+	}
+	controller.releaseFunc(queued)()
 }
 
 func TestAdaptiveSchedulerReservesSpacePerFilesystem(t *testing.T) {

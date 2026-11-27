@@ -18,30 +18,56 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
 
-// TaskDiskHistory stores the largest completed workspace for each repository
+const taskDiskHistoryWindow = 4
+
+// TaskDiskHistory stores recent successful workspace sizes for each repository
 // list. The keys contain no repository URLs, prompts, or workspace paths.
 type TaskDiskHistory struct {
 	path      string
 	mu        sync.Mutex
-	max       map[string]uint64
+	samples   map[string]taskDiskSamples
 	dirty     bool
 	needsLoad bool
 }
 
+type taskDiskSamples []uint64
+
+func (s *taskDiskSamples) UnmarshalJSON(data []byte) error {
+	if data[0] == '[' {
+		var sizes []uint64
+		if err := json.Unmarshal(data, &sizes); err != nil {
+			return err
+		}
+		*s = recentTaskDiskSamples(sizes)
+		return nil
+	}
+	// A legacy high-water mark seeds the window, then ages out like any sample.
+	var legacy uint64
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return err
+	}
+	*s = taskDiskSamples{legacy}
+	return nil
+}
+
+func recentTaskDiskSamples(sizes taskDiskSamples) taskDiskSamples {
+	return sizes[max(0, len(sizes)-taskDiskHistoryWindow):]
+}
+
 func OpenTaskDiskHistory(path string) (*TaskDiskHistory, error) {
-	history := &TaskDiskHistory{path: path, max: make(map[string]uint64)}
+	history := &TaskDiskHistory{path: path, samples: make(map[string]taskDiskSamples)}
 	if path == "" {
 		return history, nil
 	}
-	maxima, err := readTaskDiskMaxima(path)
+	samples, err := readTaskDiskSamples(path)
 	history.needsLoad = err != nil
-	if maxima != nil {
-		history.max = maxima
+	if samples != nil {
+		history.samples = samples
 	}
 	return history, err
 }
 
-func readTaskDiskMaxima(path string) (map[string]uint64, error) {
+func readTaskDiskSamples(path string) (map[string]taskDiskSamples, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -50,11 +76,11 @@ func readTaskDiskMaxima(path string) (map[string]uint64, error) {
 		return nil, err
 	}
 
-	var maxima map[string]uint64
-	if err := json.Unmarshal(data, &maxima); err != nil {
+	var samples map[string]taskDiskSamples
+	if err := json.Unmarshal(data, &samples); err != nil {
 		return nil, fmt.Errorf("decode task disk history: %w", err)
 	}
-	return maxima, nil
+	return samples, nil
 }
 
 // TaskDiskKey identifies the repositories checked out by a task, independent
@@ -86,14 +112,19 @@ func TaskDiskKey(repos []string) string {
 func (h *TaskDiskHistory) RequiredBytes(key string) uint64 {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.max[key]
+	var peak uint64
+	for _, size := range h.samples[key] {
+		peak = max(peak, size)
+	}
+	return peak
 }
 
+// Record adds a measurement from a successful task, including its tool caches.
 func (h *TaskDiskHistory) Record(key string, size uint64) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if size > h.max[key] && key != "" {
-		h.max[key] = size
+	if key != "" && size > 0 {
+		h.samples[key] = recentTaskDiskSamples(append(h.samples[key], size))
 		h.dirty = true
 	}
 	return h.flushLocked()
@@ -111,30 +142,22 @@ func (h *TaskDiskHistory) flushLocked() error {
 		return nil
 	}
 	if h.needsLoad {
-		// Preserve the sidecar and keep measurements pending until the old
-		// maxima can be read and merged.
-		maxima, err := readTaskDiskMaxima(h.path)
+		// Keep the pending measurements newer than any recovered history.
+		samples, err := readTaskDiskSamples(h.path)
 		if err != nil {
 			return fmt.Errorf("reload task disk history before saving: %w", err)
 		}
-		if maxima == nil {
-			maxima = make(map[string]uint64)
+		if samples == nil {
+			samples = make(map[string]taskDiskSamples)
 		}
-		h.dirty = false
-		for key, size := range h.max {
-			if size > maxima[key] {
-				maxima[key] = size
-				h.dirty = true
-			}
+		for key, pending := range h.samples {
+			samples[key] = recentTaskDiskSamples(append(samples[key], pending...))
 		}
-		h.max = maxima
+		h.samples = samples
 		h.needsLoad = false
-		if !h.dirty {
-			return nil
-		}
 	}
 
-	data, err := json.Marshal(h.max)
+	data, err := json.Marshal(h.samples)
 	if err == nil {
 		err = writeRuntimeConfigFile(h.path, data)
 	}
@@ -196,8 +219,8 @@ func (w *taskWaiter) explainDiskBlock(path string, sample diskSample, minimum ui
 	} else {
 		reserved = "0"
 	}
-	w.diskBlock = fmt.Sprintf("path=%q device=%q free_bytes=%d required_bytes=%d reserved_bytes=%s blocking_request_ids=%q",
-		path, sample.device, sample.free, minimum, reserved, strings.Join(holders, ","))
+	w.diskBlock = fmt.Sprintf("path=%q device=%q free_bytes=%d required_bytes=%d reserved_bytes=%s blocking_request_ids=%q estimated_bytes=%d minimum_free_bytes=%d",
+		path, sample.device, sample.free, minimum, reserved, strings.Join(holders, ","), w.diskEstimate, workspace.MinimumFreeBytes)
 }
 
 // IsWorkspaceDiskFull reports whether workspace allocation ran out of space.
@@ -211,13 +234,14 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 	}
 	waiter.drainDevices = waiter.drainDevices[:0]
 	waiter.diskBlock = ""
-	if !force && time.Now().Before(waiter.disk.RetryAfter) {
-		waiter.diskBlock = fmt.Sprintf("retry_at=%s", waiter.disk.RetryAfter.UTC().Format(time.RFC3339Nano))
-		return false, nil
-	}
 	required := uint64(workspace.MinimumFreeBytes)
 	if waiter.disk.RequiredBytes != nil {
 		required = waiter.disk.RequiredBytes()
+	}
+	waiter.diskEstimate = required
+	if !force && time.Now().Before(waiter.disk.RetryAfter) {
+		waiter.diskBlock = fmt.Sprintf("retry_at=%s estimated_bytes=%d", waiter.disk.RetryAfter.UTC().Format(time.RFC3339Nano), required)
+		return false, nil
 	}
 	minimum := max(workspace.MinimumFreeBytes, required)
 	var fallbackRoot, fallbackDevice string
@@ -256,7 +280,7 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 			if !force && IsWorkspaceDiskFull(err) {
 				blocked = true
 				if waiter.diskBlock == "" {
-					waiter.diskBlock = fmt.Sprintf("path=%q err=%q", root, err)
+					waiter.diskBlock = fmt.Sprintf("path=%q err=%q estimated_bytes=%d", root, err, required)
 				}
 			} else {
 				setupErr = err

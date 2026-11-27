@@ -1593,8 +1593,10 @@ func runLocalTask(
 		}
 	}
 	taskHandle.BeginFinalization()
-	if checkoutComplete && recordDiskUsage != nil {
-		recordDiskUsage(res.WorkspaceDir)
+	if checkoutComplete && recordDiskUsage != nil && res.ExitCode == app.ExitSuccess && res.Err == nil && ctx.Err() == nil && !taskHandle.IsStopped() {
+		if _, unexpectedNoChanges := localNoChangesFailureResult(skill, res, runCfg); !unexpectedNoChanges {
+			recordDiskUsage(res.WorkspaceDir)
+		}
 	}
 	if res.Err != nil && context.Cause(ctx) != nil {
 		res.Err = errors.Join(res.Err, context.Cause(ctx))
