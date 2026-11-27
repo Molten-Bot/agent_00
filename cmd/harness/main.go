@@ -1556,6 +1556,7 @@ func runLocalTask(
 	}
 	h.FinalReviewPasses = finalReviewPasses
 	h.Signing = signingSnapshot
+	var candidateWorkspace string
 	if repairWork, ok := ctx.Value(issueRepairContextKey{}).(*issueRepairWork); ok {
 		repairCtx, cancel := context.WithCancelCause(ctx)
 		watchdog := localruntime.NewStepWatchdog(time.Duration(repairWork.queue.policy.Defaults().StepTimeoutSeconds)*time.Second, cancel)
@@ -1563,13 +1564,22 @@ func runLocalTask(
 		defer func() { watchdog.Close(); cancel(nil) }()
 		h.OnStep = func(step string) { watchdog.Advance(step) }
 		pauseWatchdogDuringAdmission(&h, watchdog)
-		h.Workspace.Root = filepath.Dir(repairWork.workspaceDir())
+		candidateWorkspace = repairWork.workspaceDir()
+		h.Workspace.Root = filepath.Dir(candidateWorkspace)
 		h.Workspace.NewGUID = func() string { return repairWork.record.ID }
 	}
 	if issueWork, ok := ctx.Value(issueExecutionContextKey{}).(*issueExecution); ok {
+		candidateWorkspace = issueWork.record.WorkspaceDir
 		var finish func()
 		ctx, finish = issueWork.configure(ctx, &h)
 		defer finish()
+	}
+	if recordDiskUsage != nil && candidateWorkspace != "" {
+		// A retained workspace can contain tool state from earlier attempts.
+		// Only a fresh workspace yields an independent size measurement.
+		if _, err := os.Lstat(candidateWorkspace); !errors.Is(err, os.ErrNotExist) {
+			recordDiskUsage = nil
+		}
 	}
 	h.Logf = func(format string, args ...any) {
 		line := fmt.Sprintf(format, args...)
@@ -1593,8 +1603,10 @@ func runLocalTask(
 		}
 	}
 	taskHandle.BeginFinalization()
-	if checkoutComplete && recordDiskUsage != nil {
-		recordDiskUsage(res.WorkspaceDir)
+	if checkoutComplete && recordDiskUsage != nil && res.ExitCode == app.ExitSuccess && res.Err == nil && ctx.Err() == nil && !taskHandle.IsStopped() {
+		if _, unexpectedNoChanges := localNoChangesFailureResult(skill, res, runCfg); !unexpectedNoChanges {
+			recordDiskUsage(res.WorkspaceDir)
+		}
 	}
 	if res.Err != nil && context.Cause(ctx) != nil {
 		res.Err = errors.Join(res.Err, context.Cause(ctx))

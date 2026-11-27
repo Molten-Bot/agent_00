@@ -47,18 +47,20 @@ func openLocalTaskDiskHistory(configPath string) (*localruntime.TaskDiskHistory,
 			return history, fmt.Errorf("inspect runtime config for disk history: %w", err)
 		}
 	}
-	historyInfo, err := os.Lstat(historyPath)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		history, _ := localruntime.OpenTaskDiskHistory("")
-		return history, fmt.Errorf("inspect disk history path: %w", err)
-	}
-	if historyInfo != nil && historyInfo.Mode()&os.ModeSymlink != 0 {
-		history, _ := localruntime.OpenTaskDiskHistory("")
-		return history, fmt.Errorf("disk history path is a symlink")
-	}
-	if configInfo != nil && historyInfo != nil && os.SameFile(configInfo, historyInfo) {
-		history, _ := localruntime.OpenTaskDiskHistory("")
-		return history, fmt.Errorf("disk history path refers to the runtime config file")
+	for _, path := range []string{historyPath, localruntime.TaskDiskSamplesPath(historyPath)} {
+		historyInfo, err := os.Lstat(path)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			history, _ := localruntime.OpenTaskDiskHistory("")
+			return history, fmt.Errorf("inspect disk history path: %w", err)
+		}
+		if historyInfo != nil && historyInfo.Mode()&os.ModeSymlink != 0 {
+			history, _ := localruntime.OpenTaskDiskHistory("")
+			return history, fmt.Errorf("disk history path is a symlink")
+		}
+		if configInfo != nil && historyInfo != nil && os.SameFile(configInfo, historyInfo) {
+			history, _ := localruntime.OpenTaskDiskHistory("")
+			return history, fmt.Errorf("disk history path refers to the runtime config file")
+		}
 	}
 	return localruntime.OpenTaskDiskHistory(historyPath)
 }

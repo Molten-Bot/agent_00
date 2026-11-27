@@ -1750,7 +1750,7 @@ func TestRetryLocalTaskDiskHistoryPersistsRetainedWorkspaceUsage(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("background flush did not persist the maximum after storage recovered")
+			t.Fatal("background flush did not persist the sample after storage recovered")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -1855,38 +1855,20 @@ func TestOpenLocalTaskDiskHistoryPreservesRuntimeConfig(t *testing.T) {
 	})
 }
 
-func TestRunLocalTaskRecordsDiskUsageBeforeTerminalLog(t *testing.T) {
-	for _, checkoutSucceeds := range []bool{false, true} {
-		t.Run(fmt.Sprintf("checkout_succeeds=%t", checkoutSucceeds), func(t *testing.T) {
-			testRunLocalTaskDiskUsageBeforeTerminalLog(t, checkoutSucceeds, false)
-		})
-	}
-	t.Run("stopped_after_checkout", func(t *testing.T) {
-		testRunLocalTaskDiskUsageBeforeTerminalLog(t, true, true)
-	})
-}
-
 func TestRunLocalTaskRejectsStopDuringSuccessfulDiskAccounting(t *testing.T) {
-	testRunLocalTaskStopAroundFinalization(t, false, false)
+	testRunLocalTaskStopAroundFinalization(t, false)
 }
 
 func TestRunLocalTaskHonorsStopBeforeSuccessfulFinalization(t *testing.T) {
-	testRunLocalTaskStopAroundFinalization(t, true, false)
+	testRunLocalTaskStopAroundFinalization(t, true)
 }
 
-func TestRunLocalTaskRejectsStopDuringFailedDiskAccounting(t *testing.T) {
-	testRunLocalTaskStopAroundFinalization(t, false, true)
-}
-
-func testRunLocalTaskStopAroundFinalization(t *testing.T, stopBeforeFinalization, fail bool) {
+func testRunLocalTaskStopAroundFinalization(t *testing.T, stopBeforeFinalization bool) {
 	t.Helper()
 	t.Setenv("CODEX_HOME", t.TempDir())
 	const requestID = "req-finalizing"
 	cfg := config.Config{
-		RepoURL: "https://github.com/example/repo", Prompt: "check tests", AgentHarness: "codex", BaseBranch: "main",
-	}
-	if fail {
-		cfg.TargetSubdir = "missing"
+		RepoURL: "https://github.com/example/repo", Prompt: "inspect tests", AgentHarness: "codex", BaseBranch: "main",
 	}
 	runner := repairPRRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
 		if cmd.Name == "git" && len(cmd.Args) > 0 && cmd.Args[0] == "clone" {
@@ -1924,9 +1906,6 @@ func testRunLocalTaskStopAroundFinalization(t *testing.T, stopBeforeFinalization
 		}
 	}, "local", requestID, cfg, 0, handle, nil, broker, workspace.Manager{Root: t.TempDir()}, func(string) {
 		accounted = true
-		if stopBeforeFinalization {
-			return
-		}
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/tasks/"+requestID+"/stop", nil))
 		if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "task is finalizing") {
@@ -1937,19 +1916,120 @@ func testRunLocalTaskStopAroundFinalization(t *testing.T, stopBeforeFinalization
 		}
 	}, false)
 	if stopBeforeFinalization {
-		if !accounted || !stopPersisted || !outcome.Result.NoChanges || outcome.State != "stopped" || !errors.Is(outcome.Result.Err, errTaskStoppedByOperator) {
+		if accounted || !stopPersisted || !outcome.Result.NoChanges || outcome.State != "stopped" || !errors.Is(outcome.Result.Err, errTaskStoppedByOperator) {
 			t.Fatalf("disk accounting ran = %v, stop persisted = %v, outcome = %+v, want stopped after successful harness result", accounted, stopPersisted, outcome)
-		}
-	} else if fail {
-		if !accounted || stopPersisted || outcome.State != "error" || outcome.Result.Err == nil {
-			t.Fatalf("disk accounting ran = %v, stop persisted = %v, outcome = %+v", accounted, stopPersisted, outcome)
 		}
 	} else if !accounted || stopPersisted || outcome.State != "no_changes" || outcome.Result.Err != nil {
 		t.Fatalf("disk accounting ran = %v, outcome = %+v, want successful no-changes result", accounted, outcome)
 	}
 }
 
-func testRunLocalTaskDiskUsageBeforeTerminalLog(t *testing.T, checkoutSucceeds, stop bool) {
+func TestRunLocalTaskRecordsOnlySuccessfulDiskUsageBeforeTerminalLog(t *testing.T) {
+	for _, tc := range []struct {
+		name, failedStage, prompt, wantState string
+		wantSample                           bool
+	}{
+		{name: "partial clone", failedStage: "clone", prompt: "fix tests", wantState: "error"},
+		{name: "failed after checkout", failedStage: "config", prompt: "fix tests", wantState: "error"},
+		{name: "expected no changes", prompt: "inspect tests", wantState: "no_changes", wantSample: true},
+		{name: "unexpected no changes", prompt: "fix tests", wantState: "no_changes"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testRunLocalTaskDiskUsageBeforeTerminalLog(t, tc.failedStage, tc.prompt, tc.wantState, tc.wantSample)
+		})
+	}
+}
+
+func TestRunLocalIssueTaskRecordsOnlyFreshWorkspaceUsage(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	for _, name := range []string{"fresh", "retained"} {
+		t.Run(name, func(t *testing.T) {
+			store, record := lifecycleRecord(t)
+			record.Run.Prompt = "inspect tests"
+			record.Run.AgentHarness = "codex"
+			record.Run.GitHubIssue.URL = "https://github.com/acme/repo/issues/17"
+			record.Run.GitHubIssue.Claim.ExclusionLabel = "in-progress"
+			record.WorkspaceDir = filepath.Join(filepath.Dir(store.Root), "issue-workspaces", record.ID)
+			repoDir := filepath.Join(record.WorkspaceDir, "repo")
+			cache := filepath.Join(record.WorkspaceDir, workspace.AgentIODirName, "cache", "go-build", "failed-attempt")
+			if name == "retained" {
+				record.CheckoutComplete = true
+				record.Run.GitHubIssue.Claim.Attempt = 2
+				if err := os.MkdirAll(filepath.Join(repoDir, ".git"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.MkdirAll(filepath.Dir(cache), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(cache, make([]byte, 128*1024), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := store.Save(record); err != nil {
+				t.Fatal(err)
+			}
+			work, _, err := prepareIssueExecution(store, record.Run, localruntime.IssueRecoveryConfig{})
+			if err != nil || work == nil {
+				t.Fatalf("prepare issue execution = %v, %v", work, err)
+			}
+			defer work.lock.Close()
+
+			branch := record.Run.GitHubIssue.Claim.Branch
+			cloned := false
+			runner := repairPRRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+				if cmd.Name != "git" || len(cmd.Args) == 0 {
+					return execx.Result{}, nil
+				}
+				switch cmd.Args[0] {
+				case "clone":
+					cloned = true
+					return execx.Result{}, os.MkdirAll(cmd.Args[len(cmd.Args)-1], 0o700)
+				case "remote":
+					return execx.Result{Stdout: record.Run.RepoURL}, nil
+				case "branch":
+					return execx.Result{Stdout: branch}, nil
+				case "status":
+					return execx.Result{Stdout: "## " + branch + "\n"}, nil
+				case "ls-remote":
+					if slices.Contains(cmd.Args, "--symref") {
+						return execx.Result{Stdout: "ref: refs/heads/main\tHEAD\n"}, nil
+					}
+					return execx.Result{Stdout: "abc\trefs/heads/" + branch + "\n"}, nil
+				case "rev-list":
+					return execx.Result{Stdout: "0\n"}, nil
+				}
+				return execx.Result{}, nil
+			})
+			ctx, cancel := context.WithCancelCause(t.Context())
+			defer cancel(nil)
+			ctx = context.WithValue(ctx, issueExecutionContextKey{}, work)
+			handle := newLocalTaskController().Register(record.RequestID, cancel)
+			history, err := localruntime.OpenTaskDiskHistory("")
+			if err != nil {
+				t.Fatal(err)
+			}
+			key := localruntime.TaskDiskKey(record.Run.RepoList())
+			logf := func(string, ...any) {}
+			outcome := runLocalTask(ctx, runner, logf, "local", record.RequestID, record.Run, 0, handle, nil, nil, workspace.Manager{}, func(runDir string) {
+				recordLocalTaskDiskUsage(history, key, record.RequestID, runDir, logf)
+			}, false)
+			if outcome.State != "no_changes" || outcome.Result.Err != nil || outcome.Result.WorkspaceDir != record.WorkspaceDir {
+				t.Fatalf("issue outcome = %+v", outcome)
+			}
+			wantFresh := name == "fresh"
+			if got := history.RequiredBytes(key); (got > 0) != wantFresh || cloned != wantFresh {
+				t.Fatalf("issue measurement = %d, cloned = %t, want fresh workspace = %t", got, cloned, wantFresh)
+			}
+			if !wantFresh {
+				if _, err := os.Stat(cache); err != nil {
+					t.Fatalf("retained cache was removed: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func testRunLocalTaskDiskUsageBeforeTerminalLog(t *testing.T, failedStage, prompt, wantState string, wantSample bool) {
 	t.Helper()
 	taskWorkspace := workspace.Manager{Root: t.TempDir()}
 	t.Setenv("CODEX_HOME", t.TempDir())
@@ -1959,8 +2039,10 @@ func testRunLocalTaskDiskUsageBeforeTerminalLog(t *testing.T, checkoutSucceeds, 
 		t.Fatal(err)
 	}
 	cfg := config.Config{
-		RepoURL: "https://github.com/example/repo", Prompt: "fix tests", AgentHarness: "codex",
-		BaseBranch: "main", TargetSubdir: "missing",
+		RepoURL: "https://github.com/example/repo", Prompt: prompt, AgentHarness: "codex", BaseBranch: "main",
+	}
+	if failedStage == "config" {
+		cfg.TargetSubdir = "missing"
 	}
 	key := localruntime.TaskDiskKey(cfg.RepoList())
 	cloneErr := errors.New("test clone failure")
@@ -1971,12 +2053,15 @@ func testRunLocalTaskDiskUsageBeforeTerminalLog(t *testing.T, checkoutSucceeds, 
 			if err := os.WriteFile(filepath.Join(runDir, "payload"), []byte("workspace data"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if !checkoutSucceeds {
+			if failedStage == "clone" {
 				return execx.Result{}, cloneErr
 			}
 			if err := os.MkdirAll(repoDir, 0o755); err != nil {
 				t.Fatal(err)
 			}
+		}
+		if cmd.Name == "git" && slices.Contains(cmd.Args, "rev-list") {
+			return execx.Result{Stdout: "0\n"}, nil
 		}
 		return execx.Result{}, nil
 	})
@@ -1985,25 +2070,12 @@ func testRunLocalTaskDiskUsageBeforeTerminalLog(t *testing.T, checkoutSucceeds, 
 	defer cancel(nil)
 	controller := newLocalTaskController()
 	handle := controller.Register("req-disk", cancel)
-	wantState := "error"
-	if stop {
-		wantState = "stopped"
-	}
-	var sawStageError, sawTerminalError bool
-	stage := "clone"
-	if checkoutSucceeds {
-		stage = "config"
-	}
+	var sawStageError, sawTerminal bool
 	logf := func(format string, args ...any) {
 		line := fmt.Sprintf(format, args...)
 		broker.IngestLog(line)
-		if strings.HasPrefix(line, "task request_id=req-disk stage="+stage+" status=error") {
+		if failedStage != "" && strings.HasPrefix(line, "task request_id=req-disk stage="+failedStage+" status=error") {
 			sawStageError = true
-			if stop {
-				if err := controller.Stop("req-disk"); err != nil {
-					t.Fatal(err)
-				}
-			}
 			if err := broker.CloseTask("req-disk"); !errors.Is(err, web.ErrTaskNotCompleted) {
 				t.Errorf("close at stage error = %v, want task to remain active", err)
 			}
@@ -2011,20 +2083,20 @@ func testRunLocalTaskDiskUsageBeforeTerminalLog(t *testing.T, checkoutSucceeds, 
 		if !strings.HasPrefix(line, "task status="+wantState+" request_id=req-disk ") {
 			return
 		}
-		sawTerminalError = true
+		sawTerminal = true
 		recorded, err := localruntime.OpenTaskDiskHistory(historyPath)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := recorded.RequiredBytes(key); (got > 0) != checkoutSucceeds {
-			t.Errorf("disk history at terminal log = %d, checkout succeeded = %t", got, checkoutSucceeds)
+		if got := recorded.RequiredBytes(key); (got > 0) != wantSample {
+			t.Errorf("disk history at terminal log = %d, want sample = %t", got, wantSample)
 		}
 		request := localTaskDiskRequest(context.Background(), recorded, key)
-		if got := request.RequiredBytes(); !checkoutSucceeds && got != workspace.MinimumFreeBytes {
-			t.Errorf("reservation after failed checkout = %d, want %d", got, workspace.MinimumFreeBytes)
+		if got := request.RequiredBytes(); !wantSample && got != workspace.MinimumFreeBytes {
+			t.Errorf("reservation without a successful sample = %d, want %d", got, workspace.MinimumFreeBytes)
 		}
 		if err := broker.CloseTask("req-disk"); err != nil {
-			t.Errorf("close at terminal error: %v", err)
+			t.Errorf("close at terminal log: %v", err)
 		}
 	}
 	outcome := runLocalTask(ctx, runner, logf, "local", "req-disk", cfg, 0, handle, nil, broker, taskWorkspace, func(runDir string) {
@@ -2033,11 +2105,11 @@ func testRunLocalTaskDiskUsageBeforeTerminalLog(t *testing.T, checkoutSucceeds, 
 	if outcome.State != wantState {
 		t.Fatalf("outcome = %+v, want %s", outcome, wantState)
 	}
-	if !checkoutSucceeds && !errors.Is(outcome.Result.Err, cloneErr) {
+	if failedStage == "clone" && !errors.Is(outcome.Result.Err, cloneErr) {
 		t.Fatalf("outcome = %+v, want clone failure", outcome)
 	}
-	if !sawStageError || !sawTerminalError {
-		t.Fatalf("saw stage error = %v, terminal error = %v, want both", sawStageError, sawTerminalError)
+	if sawStageError != (failedStage != "") || !sawTerminal {
+		t.Fatalf("saw stage error = %t, want %t, saw terminal log = %t, want true", sawStageError, failedStage != "", sawTerminal)
 	}
 }
 

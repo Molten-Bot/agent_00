@@ -259,13 +259,24 @@ tmpfs: accumulated tasks can fill it and prevent even `git clone` from starting.
 Linux workspace allocation checks for at least 512 MiB free on each allocation
 and falls back to the configured disk base when the preferred base is full.
 This reserve is an early check, not a limit on an individual build's disk usage.
-The daemon records the largest workspace size observed at task completion for each
-repository or combination of repositories. It stores these estimates by repository
-hash in `.<runtime-config-filename>.task-disk-usage.json` beside the runtime config.
-Tasks without a history reserve 512 MiB. When available space cannot cover a
-task's estimate alongside other reservations on the same filesystem, the task
-stays queued until space becomes available. Force start overrides this admission
-check.
+For each repository or combination of repositories, the daemon keeps up to four
+measurements from successful runs in fresh workspaces, including the checkout
+and tool caches still present at completion. A large run raises the estimate
+immediately. Its peak expires after seven days or four newer measurements,
+whichever comes first. After expiry, the second-largest measured size in the
+window still sets a baseline. Incomplete, failed, and stopped runs are skipped,
+as are runs with inherited workspaces. The timestamped history is stored
+by repository hash in `.<runtime-config-filename>.task-disk-usage.json.v2` beside
+the runtime config. The original `.task-disk-usage.json` sidecar retains scalar
+estimates for older releases and supplies a fallback if the timestamped file
+is unreadable. An imported high-water mark expires 24 hours after the scalar
+file was last written.
+
+Tasks without a history reserve 512 MiB. After accounting for active reservations
+on the same filesystem, admission requires at least 512 MiB free and enough space
+for the task's estimate. The task stays queued if either requirement is unmet.
+Disk queue logs include the estimate, free-space threshold, and active
+reservations. Force start overrides the scheduler's estimate and reservation checks.
 
 Issue workspaces live under `issue-workspaces/` beside the runtime config. With
 default Compose settings, they use the host disk behind
