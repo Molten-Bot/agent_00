@@ -31,10 +31,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Publish GitHub Release artifacts
+  prepare:
+    name: Prepare release tag
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 5
     outputs:
       release_tag: ${{ steps.release.outputs.tag }}
     steps:
@@ -117,7 +117,18 @@ jobs:
           set -euo pipefail
           git tag -a "${RELEASE_TAG}" -m "Release ${RELEASE_TAG}"
           git push origin "refs/tags/${RELEASE_TAG}"
-          git checkout --detach "${RELEASE_TAG}"
+
+  release:
+    name: Publish GitHub Release artifacts
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ needs.prepare.outputs.release_tag }}
+          fetch-depth: 0
 
       - name: Setup Go
         uses: actions/setup-go@v6
@@ -137,7 +148,7 @@ jobs:
 
   promote:
     name: Promote image to latest
-    needs: release
+    needs: prepare
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -153,7 +164,7 @@ jobs:
       - name: Promote source tag to latest
         env:
           SOURCE_TAG: ${{ github.event.inputs.source_tag }}
-          RELEASE_TAG: ${{ needs.release.outputs.release_tag }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
         run: |
           set -euo pipefail
 
