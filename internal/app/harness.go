@@ -156,7 +156,7 @@ type Result struct {
 
 	// PRVerificationPassed records that the draft verifier completed successfully.
 	PRVerificationPassed bool
-	// PRAlreadyMerged records a merge observed on GitHub before local work resumed.
+	// PRAlreadyMerged records a merge observed on GitHub.
 	PRAlreadyMerged bool
 }
 
@@ -199,6 +199,7 @@ type repoWorkspace struct {
 	PRCommentScreenshotBaseline map[string]string
 	PRCommentScreenshotFiles    []string
 	ReviewStoppedOnMerge        bool
+	PRAlreadyMerged             bool
 	ReviewInterrupted           bool
 	ReviewReceipt               *githubutil.ReviewReceipt
 	ReviewedPatch               *draftReviewPatch
@@ -1044,6 +1045,9 @@ func (h Harness) finalizePullRequestReview(
 		h.logFinalReviewStoppedForMergedPR(*repo, 0, h.FinalReviewPasses)
 		return stoppedDraftReview(*repo)
 	}
+	if err := h.requireWorkspace(ctx); err != nil {
+		return ExitWorkspace, "workspace", err
+	}
 	defer func() {
 		repo.ReviewedPatch.remove()
 		repo.ReviewedPatch = nil
@@ -1122,6 +1126,12 @@ func (h Harness) finalizePullRequestReview(
 			// start new required checks without changing the reviewed head.
 			_, err = h.waitForDraftVerificationEvidence(ctx, *repo)
 		}
+		if errors.Is(err, errMergedBeforeDraftVerification) {
+			repo.PRAlreadyMerged = true
+			h.logf("stage=pr_verification status=ok action=observe_merge pr_url=%s", repo.PRURL)
+			h.suspendWorkspace()
+			return ExitSuccess, "", nil
+		}
 		if err != nil {
 			var rate *githubutil.RateLimitError
 			if !errors.Is(err, errDraftChecksPending) && !errors.Is(err, errDraftRestoring) && !errors.As(err, &rate) {
@@ -1180,6 +1190,9 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 ) (int, string, error) {
 	if repo == nil {
 		return ExitConfig, "config", fmt.Errorf("repo workspace is required")
+	}
+	if err := h.requireWorkspace(ctx); err != nil {
+		return ExitWorkspace, "workspace", err
 	}
 	if err := h.validateEnforcedNonDefaultBranch(ctx, *repo); err != nil {
 		return ExitGit, "git", err
@@ -1395,13 +1408,6 @@ func (h Harness) checkPublishedPullRequest(
 ) (exitCode int, stage string, resultErr error) {
 	preserveIssueTitle := cfg.GitHubIssue != nil
 	var checkHead string
-	defer func() {
-		if resultErr == nil {
-			if err := h.requireWorkspace(ctx); err != nil {
-				exitCode, stage, resultErr = ExitWorkspace, "workspace", err
-			}
-		}
-	}()
 	// A watch follows a PR number, so bracket its result with reads of the
 	// published commit. Review only starts once checks are tied to that head.
 	if repo.IssueClaimBranch {
@@ -1432,6 +1438,7 @@ func (h Harness) checkPublishedPullRequest(
 			checkSummary string
 		)
 		noReportBudget := maxPRChecksNoReportRetries * prChecksNoReportRetryDelay
+		noReportPoll := newCheckPoll("checks", repo.PRURL)
 		for noReportRetry := 0; ; noReportRetry++ {
 			requiredChecksOnly := false
 			confirmedFailure := false
@@ -1634,6 +1641,7 @@ func (h Harness) checkPublishedPullRequest(
 				if recreated {
 					noReportRetry = -1
 					noReportBudget = maxPRChecksNoReportRetries * prChecksNoReportRetryDelay
+					noReportPoll = newCheckPoll("checks", repo.PRURL)
 					continue
 				}
 			}
@@ -1695,6 +1703,9 @@ func (h Harness) checkPublishedPullRequest(
 						requiredErr,
 					)
 				}
+				if err := h.requireWorkspace(ctx); err != nil {
+					return ExitWorkspace, "workspace", err
+				}
 				if reconciled, workflowSummary, reconcileErr := h.reconcileNoChecksWithWorkflowDispatch(ctx, *repo); reconcileErr == nil {
 					if workflowSummary != "" {
 						checkSummary = workflowSummary
@@ -1736,8 +1747,7 @@ func (h Harness) checkPublishedPullRequest(
 				break
 			}
 
-			poll := newCheckPoll("checks", repo.PRURL)
-			delay := min(noReportBudget, max(prChecksNoReportRetryDelay, poll.delay(h)))
+			delay := min(noReportBudget, max(prChecksNoReportRetryDelay, noReportPoll.delay(h)))
 			h.logf(
 				"stage=checks status=waiting action=wait_for_github_checks reason=no_checks_reported repo=%s repo_dir=%s pr_url=%s attempt=%d retry=%d/%d last_github_refresh=%q next_poll_s=%d",
 				repo.URL,
@@ -4623,6 +4633,7 @@ func buildResult(runDir string, repos []repoWorkspace, noChanges bool) Result {
 			res.ReviewRequired = repo.ReviewRequired
 			res.ReviewInterrupted = repo.ReviewInterrupted
 			res.PRVerificationPassed = repo.PRVerificationPassed
+			res.PRAlreadyMerged = repo.PRAlreadyMerged
 		}
 	}
 	if res.Branch == "" && len(repos) > 0 {
@@ -10366,6 +10377,7 @@ func (h Harness) reconcileNoChecksWithWorkflowDispatch(ctx context.Context, repo
 		return false, "", nil
 	}
 
+	h.suspendWorkspace()
 	res, err := h.runCheckQuery(ctx, "checks", workflowDispatchRunsCommand(repo.Dir, repo.Branch), checkQueryTimeout)
 	if err != nil {
 		return false, "", err

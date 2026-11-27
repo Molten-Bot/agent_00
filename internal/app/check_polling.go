@@ -124,10 +124,23 @@ func (h Harness) requireWorkspace(ctx context.Context) error {
 // branches, the checked-out head, and all required gates before proceeding.
 func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) (merged bool, err error) {
 	poll := newCheckPoll("checks", prURL)
+	timeout := h.prChecksWatchTimeout()
+	deadline := poll.started.Add(timeout)
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadlineCause(ctx, deadline, ErrChecksUnavailable)
+		defer cancel()
+	}
 	pending := false
-	for remaining := h.prChecksWatchTimeout(); ; {
+	for {
+		if timeout > 0 && time.Until(deadline) <= 0 && ctx.Err() == nil {
+			return false, ErrChecksUnavailable
+		}
 		res, err := h.runCheckQuery(ctx, "checks", prStateViewCommand("", prURL, "statusCheckRollup"), checkQueryTimeout)
 		if err != nil {
+			if errors.Is(context.Cause(ctx), ErrChecksUnavailable) {
+				return false, ErrChecksUnavailable
+			}
 			return false, commandErrorWithDetails("refresh resumed PR checks", err, res, maxGitErrorDetailChars)
 		}
 		var pr struct {
@@ -160,17 +173,20 @@ func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) (merged
 			}
 			return false, nil
 		}
-		if remaining <= 0 {
+		if timeout == 0 {
 			return false, ErrChecksUnavailable
 		}
 		pending = true
 		slices.Sort(names)
-		delay := min(remaining, poll.delay(h))
+		deadline, _ := ctx.Deadline()
+		delay := min(time.Until(deadline), poll.delay(h))
 		poll.report(h, "wait_for_github_checks", "", slices.Compact(names), time.Now(), delay)
 		if err := h.Sleep(ctx, delay); err != nil {
+			if errors.Is(context.Cause(ctx), ErrChecksUnavailable) {
+				return false, ErrChecksUnavailable
+			}
 			return false, err
 		}
-		remaining -= delay
 	}
 }
 

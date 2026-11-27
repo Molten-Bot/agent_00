@@ -74,6 +74,9 @@ func (h Harness) ensurePullRequestMergeable(
 		if base == "" || normalizeBranchRef(state.HeadRefName) != normalizeBranchRef(repo.Branch) || base == normalizeBranchRef(repo.Branch) {
 			return ExitGit, "git", fmt.Errorf("cannot repair pull request conflicts: invalid base or mismatched head branch")
 		}
+		if err := h.requireWorkspace(ctx); err != nil {
+			return ExitWorkspace, "workspace", err
+		}
 		// Existing PRs need the same conflict remediation as generated branches,
 		// using the PR's actual target rather than a configured clone branch.
 		syncRepo := *repo

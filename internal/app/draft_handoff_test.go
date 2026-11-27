@@ -167,6 +167,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 		baseMovedAfterEvidence bool
 		publishedBaseMoved     bool
 		mergedDuringEvidence   bool
+		mergedOnEvidencePoll   bool
 		reviewStale            bool
 		reviewTruncated        bool
 		verifierBlocked        bool
@@ -232,7 +233,8 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			wantEvidenceError: "reviewed patch evidence has a stale draft base"},
 		{name: "base changed during offline verification", answer: localSuccess, change: true, baseMovedAfterEvidence: true, wantExit: ExitPR},
 		{name: "published base moves while PR metadata is stale", answer: localSuccess, change: true, publishedBaseMoved: true, wantExit: ExitPR},
-		{name: "external merge during offline verification", answer: localSuccess, change: true, mergedDuringEvidence: true, wantExit: ExitPR},
+		{name: "external merge during offline verification", answer: localSuccess, change: true, mergedDuringEvidence: true},
+		{name: "external merge while polling for draft checks", answer: localSuccess, change: true, pendingChecks: 1, mergedOnEvidencePoll: true},
 		{name: "submitted review stale", answer: localSuccess, change: true, reviewStale: true, wantExit: ExitPR},
 		{name: "submitted review body exceeds evidence limit", answer: localSuccess, change: true, reviewTruncated: true, wantExit: ExitPR,
 			wantEvidenceError: "submitted review 1 body exceeds the draft verification evidence limit"},
@@ -540,6 +542,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 						return execx.Result{Stdout: "CI\tpass\n"}, nil
 					case strings.HasPrefix(args, "pr view "):
 						head := api.head
+						state := "OPEN"
 						fileEvidence := ""
 						rollup := `[{"name":"CI","conclusion":"SUCCESS"}]`
 						if strings.Contains(args, "statusCheckRollup") && strings.Contains(args, "changedFiles,files") {
@@ -551,6 +554,9 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 								return execx.Result{}, errors.New("private draft file metadata requires authentication")
 							}
 							evidenceReads++
+							if tc.mergedOnEvidencePoll && evidenceReads > tc.pendingChecks {
+								state = "MERGED"
+							}
 							switch {
 							case tc.checkAfterVerification && verifications > 0:
 								rollup = `[{"name":"CI","conclusion":"SUCCESS"},{"name":"Web and browser tests","status":"IN_PROGRESS"}]`
@@ -587,7 +593,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 							}
 							fileEvidence = fmt.Sprintf(`,"changedFiles":%d,"files":[%s]`, fileCount, strings.Join(files, ","))
 						}
-						return execx.Result{Stdout: fmt.Sprintf(`{"id":"PR_id","number":42,"url":%q,"state":"OPEN","mergeable":"MERGEABLE","baseRefName":"main","headRefName":%q,"headRefOid":%q,"isDraft":%t,"statusCheckRollup":%s%s}`, prURL, branch, head, draft, rollup, fileEvidence)}, nil
+						return execx.Result{Stdout: fmt.Sprintf(`{"id":"PR_id","number":42,"url":%q,"state":%q,"mergeable":"MERGEABLE","baseRefName":"main","headRefName":%q,"headRefOid":%q,"isDraft":%t,"statusCheckRollup":%s%s}`, prURL, state, branch, head, draft, rollup, fileEvidence)}, nil
 					case strings.Contains(args, "api repos/acme/repo/pulls?") && creates > 0:
 						return execx.Result{Stdout: fmt.Sprintf(`[{"html_url":%q,"title":"Issue","state":"open","head":{"ref":%q,"repo":{"full_name":"acme/repo"}},"base":{"ref":"main"}}]`, prURL, branch)}, nil
 					case strings.HasPrefix(args, "api "):
@@ -732,9 +738,14 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				}
 				return
 			}
-			if tc.mergedDuringEvidence {
-				if verifications != 1 || !result.ReviewInterrupted || !errors.Is(result.Err, githubutil.ErrReviewInterrupted) {
-					t.Fatalf("external merge during verification must fail the handoff: %+v", result)
+			if tc.mergedDuringEvidence || tc.mergedOnEvidencePoll {
+				wantVerifications := 0
+				if tc.mergedDuringEvidence {
+					wantVerifications = 1
+				}
+				if creates != 1 || api.posts != 1 || verifications != wantVerifications || ready != 0 ||
+					result.Err != nil || result.PRURL != prURL || !result.PRAlreadyMerged || result.ReviewInterrupted || result.PRVerificationPassed {
+					t.Fatalf("external merge must complete the task on the same PR: verifications=%d, ready=%d, result=%+v", verifications, ready, result)
 				}
 				return
 			}
