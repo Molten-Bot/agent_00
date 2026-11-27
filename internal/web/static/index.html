@@ -12426,6 +12426,12 @@
           current.appendChild(status);
         }
         if (action) current.appendChild(action);
+        if (task.issue_pr_recovery_blocker) {
+          const blocker = document.createElement("div");
+          blocker.className = "task-issue-blocker";
+          blocker.textContent = task.issue_pr_recovery_blocker;
+          current.appendChild(blocker);
+        }
       }
       const details = document.createElement("details");
       details.open = open;
@@ -12446,6 +12452,7 @@
       }
 
       const seenDetails = new Set(showStatus ? [issueTaskStatusLabel(task)] : []);
+      if (task.issue_pr_recovery_blocker) seenDetails.add(task.issue_pr_recovery_blocker);
       const stages = new Set(["pr_verification"]);
       for (const attempt of task.issue_attempts) {
         for (const stage of [...(attempt.stages || []), attempt.stage].filter(Boolean)) stages.add(stage);
@@ -12514,6 +12521,7 @@
             workflowName: task.workflow_name,
             workflowID: task.workflow_id,
             issueState: task.issue_state,
+            issuePRRecoveryBlocker: task.issue_pr_recovery_blocker,
             issuePlanningStatus: task.issue_planning_status,
             issueAttempts: task.issue_attempts,
             issueError: task.task_id ? task.error : undefined,

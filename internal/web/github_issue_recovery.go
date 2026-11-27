@@ -600,7 +600,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	if linkedPRErr != nil {
 		return linkedPRErr
 	}
-	if cooling || record.Fulfilled() {
+	if cooling || record.Fulfilled() || record.PRRecoveryBlocker != "" {
 		return nil
 	}
 	if app.IsWorkflowPRMetadataFailure(record.FailureDetail()) ||
@@ -1021,6 +1021,11 @@ func (s Server) deferIssueRecord(record localruntime.IssueClaimRecord, cause err
 			blockStaleIssueClaim(current)
 			return nil
 		}
+		var blocker issuePRRecoveryBlocker
+		if errors.As(cause, &blocker) && s.knownIssuePR(*current) != "" {
+			current.PRRecoveryBlocker = blocker.Error()
+			return nil
+		}
 		if current.Outcome == localruntime.IssueChecksPending {
 			if current.UpdatedAt.After(record.UpdatedAt) {
 				return nil
@@ -1195,6 +1200,14 @@ func (pr issuePullRequest) resumesVerification(record localruntime.IssueClaimRec
 		pr.BaseBranch == record.Run.GitHubIssue.Claim.BaseBranch
 }
 
+type issuePRRecoveryBlocker string
+
+func (e issuePRRecoveryBlocker) Error() string {
+	return fmt.Sprintf("%s: %s before using Recover / retry", app.ErrIssueBranchRecovery, string(e))
+}
+
+func (e issuePRRecoveryBlocker) Unwrap() error { return app.ErrIssueBranchRecovery }
+
 func (pr issuePullRequest) recoveryBlocker(issue *config.GitHubIssueConfig) error {
 	if pr.URL == "" {
 		return nil
@@ -1209,7 +1222,7 @@ func (pr issuePullRequest) recoveryBlocker(issue *config.GitHubIssueConfig) erro
 		action = fmt.Sprintf("retarget the existing pull request for %q to %q", issue.Claim.Branch, issue.Claim.BaseBranch)
 	}
 	if action != "" {
-		return fmt.Errorf("%w: %s before using Recover / retry", app.ErrIssueBranchRecovery, action)
+		return issuePRRecoveryBlocker(action)
 	}
 	return nil
 }

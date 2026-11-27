@@ -2755,3 +2755,47 @@ func TestIssueRecoveryResumesChecksOnlyAfterLinkedPRBlockerClears(t *testing.T) 
 		})
 	}
 }
+
+func TestIssueRecoveryPausesFailedAttemptWhileLinkedPRIsBlocked(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ state, base, action string }{
+		{"closed", "main", "reopen the existing pull request"},
+		{"open", "other", "retarget the existing pull request"},
+	} {
+		t.Run(tc.state+"/"+tc.base, func(t *testing.T) {
+			t.Parallel()
+			s, f := recoveryServer(t)
+			reconcileOrAdmitTestIssue(t.Context(), s)
+			record := completeRecoveryRecord(t, s, "error", 1)
+			record.PRURL = "https://github.com/acme/repo/pull/42"
+			record.PRVerification = "Verify the draft checks."
+			record.RunError = "previous verification attempt failed"
+			record.NextAttemptAt = time.Now().Add(-time.Minute)
+			if err := s.IssueClaims.Save(record); err != nil {
+				t.Fatal(err)
+			}
+			f.prs = recoveryPR(tc.state, "null", record.Run.GitHubIssue.Claim.Branch, tc.base)
+			if err := s.ReconcileIssueWork(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			got := latestRecoveryRecord(t, s)
+			if len(f.submissions) != 1 || got.Incident != record.Incident || got.RunError != record.RunError ||
+				!strings.Contains(got.PRRecoveryBlocker, tc.action) {
+				t.Fatalf("linked PR blocker changed the failed attempt or dispatched a retry: %+v", got)
+			}
+			tasks := s.snapshot().Tasks
+			if len(tasks) != 1 || tasks[0].CanRerun || tasks[0].IssuePRRecoveryBlocker != got.PRRecoveryBlocker {
+				t.Fatalf("blocked task is missing its recovery action: %+v", tasks)
+			}
+			f.prs = recoveryPR("open", "null", record.Run.GitHubIssue.Claim.Branch, "main")
+			if err := s.ReconcileIssueWork(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			got = latestRecoveryRecord(t, s)
+			if len(f.submissions) != 2 || got.PRRecoveryBlocker != "" || got.PRURL != record.PRURL ||
+				issueTaskID(got.Run.GitHubIssue, got.Run.Workflow) != issueTaskID(record.Run.GitHubIssue, record.Run.Workflow) {
+				t.Fatalf("corrected PR did not resume the same issue task: %+v", got)
+			}
+		})
+	}
+}

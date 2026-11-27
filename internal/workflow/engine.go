@@ -1009,6 +1009,15 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 			}
 		} else {
 			mergedPR = Item{Title: i.Title}
+			if r.Item.Kind == "issue" {
+				// The pre-merge inspection cannot supply GitHub's merge timestamp.
+				if observed, err := e.InspectPR(ctx, r.Item.Repository, r.PRURL); err == nil && observed.Merged {
+					mergedPR.MergedAt = observed.MergedAt
+					if observed.Title != "" {
+						mergedPR.Title = observed.Title
+					}
+				}
+			}
 			mergedByApp = true
 			r.Status = "merged"
 			r.Reason = "Pull request merged"

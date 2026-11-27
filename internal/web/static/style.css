@@ -2710,6 +2710,10 @@ select.prompt-control {
   font-weight: 600;
 }
 
+.task-issue-blocker {
+  flex-basis: 100%;
+}
+
 .task-merged .task-issue-status,
 .task-result.merged .task-issue-status {
   color: color-mix(in srgb, var(--good) 55%, var(--text));

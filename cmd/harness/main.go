@@ -1069,6 +1069,7 @@ func runServer(args []string) int {
 			CleanupTask:       cleanupTaskLogs,
 			MemoryPressure:    memoryPressure,
 			RepositoryAllowed: uiServer.RepositoryAllowed,
+			RecordIssueMerge:  uiServer.RecordMonitoredIssueMerge,
 		}
 		go func() {
 			if err := prMonitor.Run(ctx); err != nil {

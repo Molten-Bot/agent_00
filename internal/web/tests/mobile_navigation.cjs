@@ -847,6 +847,15 @@ test('Studio keeps issue retries and completion under one task', async t => {
   const update = changes => page.evaluate(next => {
     render({ ...state.snapshot, tasks: [next] });
   }, { ...first, ...changes });
+  const blocker = 'Reopen the existing pull request before using Recover / retry.';
+  await update({ issue_pr_recovery_blocker: blocker, can_rerun: false, error: blocker });
+  await task.locator('.task-issue-current').getByText(blocker, { exact: true }).waitFor();
+  assert.equal(await task.getByText(blocker, { exact: true }).count(), 1);
+  await task.getByRole('link', { name: 'Open pull request on GitHub.' }).waitFor();
+  assert.equal(await task.getByRole('button', { name: 'Retry task' }).count(), 0);
+  await update({});
+  await task.getByRole('button', { name: 'Retry task' }).waitFor();
+  assert.equal(await task.getByText(blocker, { exact: true }).count(), 0);
   const attempts = [...first.issue_attempts, {
     number: 2, request_id: 'issue-retry', status: 'running', stage: 'review', stages: ['checks', 'review', 'pr_verification', 'review'],
   }];

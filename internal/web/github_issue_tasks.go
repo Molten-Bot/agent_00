@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"slices"
@@ -22,6 +23,30 @@ type issueTaskAttempt struct {
 	Error        string   `json:"error,omitempty"`
 	Detail       string   `json:"detail,omitempty"`
 	ReviewDetail string   `json:"review_detail,omitempty"`
+}
+
+// RecordMonitoredIssueMerge persists the receipt before the broker retires the task.
+func (s Server) RecordMonitoredIssueMerge(ctx context.Context, task Task, title string, mergedAt time.Time) (bool, error) {
+	if s.IssueClaims == nil {
+		return false, nil
+	}
+	records, listErr := s.IssueClaims.List()
+	var latest localruntime.IssueClaimRecord
+	for _, record := range records {
+		if record.RequestID == task.RequestID &&
+			(latest.ID == "" || record.Run.GitHubIssue.Claim.Attempt > latest.Run.GitHubIssue.Claim.Attempt) {
+			latest = record
+		}
+	}
+	if latest.ID == "" {
+		return false, listErr
+	}
+	pr := issuePullRequest{URL: task.PRURL, Title: title, MergedAt: mergedAt}
+	if err := s.saveMergedIssuePR(latest, pr, "", false); err != nil {
+		return true, err
+	}
+	s.Broker.notifyIssueTaskUpdate()
+	return true, s.reconcileIssueRecord(ctx, latest)
 }
 
 // RecordIssueMerge persists the linked PR merge and workflow gate on the matching attempt.
@@ -123,6 +148,7 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 		task.IssueState = latest.State
 		if latest.PRRecoveryBlocker != "" {
 			task.IssueState = "blocked"
+			task.IssuePRRecoveryBlocker = latest.PRRecoveryBlocker
 			task.CanRerun = false
 		} else if latest.State == "blocked" && requiresIssueBranchRecovery(latest) {
 			task.CanRerun = false
@@ -209,6 +235,7 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 			task.Stage, task.StageStatus, task.ExitCode = "finalize", "merged", 0
 			task.CanRerun, task.Controls = false, TaskControls{}
 			task.Error, task.ReviewGate, task.Warning = "", "", ""
+			task.IssuePRRecoveryBlocker = ""
 			if task.PRTitleURL != "" && !strings.EqualFold(task.PRTitleURL, task.PRURL) {
 				task.PRTitle, task.PRTitleURL, task.PRTitleUpdatedAt = "", "", ""
 			}

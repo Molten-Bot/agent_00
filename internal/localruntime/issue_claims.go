@@ -144,6 +144,12 @@ func (s *IssueClaimStore) Save(record IssueClaimRecord) error {
 			return nil
 		}
 		record.PRMergedByApp = record.PRMergedByApp || current.PRMergedByApp
+		if !current.PRMergedAt.IsZero() {
+			record.PRMergedAt = current.PRMergedAt
+		}
+		if current.ReviewDetail != "" {
+			record.ReviewDetail = current.ReviewDetail
+		}
 	}
 	return s.save(record)
 }

@@ -300,13 +300,12 @@ func testWorkflowMergeSurvivesRestartWithoutPRLookup(t *testing.T, mergedByApp b
 	record := completeRecoveryRecord(t, s, "completed", 1)
 	record.PRURL = "https://github.com/acme/repo/pull/42"
 	wantState, wantReviewDetail := localruntime.IssueStateMerged, ""
-	var mergedAt time.Time
+	mergedAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	if !mergedByApp {
 		record.Outcome = "error"
 		record.PRVerification = "Verify draft on the current head."
 		record.RunError = "pr_verification: checks never finished"
 		wantState, wantReviewDetail = localruntime.IssueStateMergedUnverified, "Waiting for successful checks"
-		mergedAt = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	}
 	record.NextAttemptAt = time.Now().Add(time.Hour)
 	if err := s.IssueClaims.Save(record); err != nil {
@@ -326,11 +325,13 @@ func testWorkflowMergeSurvivesRestartWithoutPRLookup(t *testing.T, mergedByApp b
 	if err := os.WriteFile(engine.StatePath, journal, 0600); err != nil {
 		t.Fatal(err)
 	}
-	engine.InspectPR = func(context.Context, string, string) (workflow.Item, error) {
-		return workflow.Item{Open: mergedByApp, Merged: !mergedByApp, MergedAt: mergedAt,
-			Title: recoveryPRTitle, HeadSHA: "reviewed-head", ChecksPassed: true}, nil
-	}
 	merges := 0
+	engine.InspectPR = func(context.Context, string, string) (workflow.Item, error) {
+		if !mergedByApp || merges > 0 {
+			return workflow.Item{Merged: true, MergedAt: mergedAt, Title: recoveryPRTitle}, nil
+		}
+		return workflow.Item{Open: true, Title: recoveryPRTitle, HeadSHA: "reviewed-head", ChecksPassed: true}, nil
+	}
 	engine.Merge = func(context.Context, workflow.Run) error {
 		merges++
 		return nil
@@ -352,6 +353,16 @@ func testWorkflowMergeSurvivesRestartWithoutPRLookup(t *testing.T, mergedByApp b
 	if err := s.IssueClaims.Save(record); err != nil {
 		t.Fatal(err)
 	}
+	// Cleanup may also hold a terminal snapshot from before the full receipt.
+	stale, err := s.IssueClaims.Load(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale.PRMergedAt, stale.ReviewDetail = time.Time{}, ""
+	stale.PRMergedByApp, stale.UnlockPending = false, false
+	if err := s.IssueClaims.Save(stale); err != nil {
+		t.Fatal(err)
+	}
 	// Simulate restart before the issue reconciler can look up the linked PR.
 	s.Broker = NewBroker()
 	s.IssueClaims = &localruntime.IssueClaimStore{Root: s.IssueClaims.Root}
@@ -369,5 +380,57 @@ func testWorkflowMergeSurvivesRestartWithoutPRLookup(t *testing.T, mergedByApp b
 	}
 	if err := s.ReconcileIssueWork(t.Context()); err != nil {
 		t.Fatalf("merged claim still depends on PR lookup: %v", err)
+	}
+}
+
+func TestPRMonitorPersistsIssueMergeBeforeRetiringBrokerTask(t *testing.T) {
+	t.Parallel()
+	s, _ := recoveryServer(t)
+	reconcileOrAdmitTestIssue(t.Context(), s)
+	record := completeRecoveryRecord(t, s, "completed", 1)
+	// A continuation can reuse the broker request ID on a new claim.
+	previous := record
+	previous.ID = strings.Repeat("0", 32)
+	issue := *record.Run.GitHubIssue
+	claim := *issue.Claim
+	claim.ID = previous.ID
+	issue.Claim = &claim
+	previous.Run.GitHubIssue = &issue
+	if err := s.IssueClaims.Save(previous); err != nil {
+		t.Fatal(err)
+	}
+	record.Run.GitHubIssue.Claim.Attempt++
+	record.PRVerification = "Draft checks pending"
+	record.RunError = "checks never finished"
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	const prURL = "https://github.com/acme/repo/pull/42"
+	s.Broker.IngestLog("task status=completed request_id=" + record.RequestID + " pr_url=" + prURL)
+	task, ok := s.Broker.Task(record.RequestID)
+	if !ok {
+		t.Fatal("monitor task missing")
+	}
+	monitor := PRMergeMonitor{Broker: s.Broker, Logf: t.Logf, RecordIssueMerge: s.RecordMonitoredIssueMerge}
+	const mergedAt = "2026-02-03T04:05:06Z"
+	monitor.applyPRState(t.Context(), task, prViewState{State: "MERGED", Title: recoveryPRTitle, MergedAt: mergedAt}, nil)
+	task, _ = s.Broker.Task(record.RequestID)
+	if task.Status != "merged" {
+		t.Fatalf("broker status = %q, want merged", task.Status)
+	}
+
+	s.Broker = NewBroker()
+	s.IssueClaims = &localruntime.IssueClaimStore{Root: s.IssueClaims.Root}
+	if first, err := s.IssueClaims.Load(previous.ID); err != nil || first.PRMerged() {
+		t.Fatalf("monitor changed the predecessor claim: %+v, %v", first, err)
+	}
+	got := latestRecoveryRecord(t, s)
+	if got.State != localruntime.IssueStateMergedUnverified || got.PRURL != prURL || got.PRTitle != recoveryPRTitle ||
+		formatTimeOrEmpty(got.PRMergedAt) != mergedAt || got.PRMergedByApp || got.RunError != record.RunError {
+		t.Fatalf("restart lost monitored merge evidence: %+v", got)
+	}
+	tasks := s.snapshot().Tasks
+	if len(tasks) != 1 || tasks[0].Status != "merged" || tasks[0].CanRerun || len(tasks[0].IssueAttempts) != 2 {
+		t.Fatalf("restart lost terminal task status: %+v", tasks)
 	}
 }

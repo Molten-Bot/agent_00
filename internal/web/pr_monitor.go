@@ -26,6 +26,7 @@ type PRMergeMonitor struct {
 	Cooldown          *githubutil.Cooldown
 	MemoryPressure    func() bool
 	RepositoryAllowed func(context.Context, string) (bool, error)
+	RecordIssueMerge  func(context.Context, Task, string, time.Time) (handled bool, err error)
 
 	mu       sync.Mutex
 	inFlight map[string]struct{}
@@ -203,6 +204,17 @@ func (m *PRMergeMonitor) applyPRState(ctx context.Context, task Task, state prVi
 	}
 	if !state.Merged() {
 		return
+	}
+	if m.RecordIssueMerge != nil {
+		handled, err := m.RecordIssueMerge(ctx, task, state.Title, parseTimeOrZero(state.MergedAt))
+		if err != nil {
+			m.Logf("localruntime.ui status=warn event=pr_monitor_issue_merge request_id=%s pr_url=%s err=%q", task.RequestID, task.PRURL, err)
+			return
+		}
+		if handled {
+			m.markMerged(task.RequestID)
+			return
+		}
 	}
 	m.Broker.RecordReleaseFromTask(task, state.MergedAt)
 	if err := m.Broker.MarkTaskPRMerged(task.RequestID, state.MergedAt); err != nil {
