@@ -192,10 +192,24 @@ type observation struct {
 }
 type State struct {
 	Schedules    map[string]ScheduleCursor `json:"schedules,omitempty"`
+	RetryStarts  map[string]time.Time      `json:"retryStarts,omitempty"`
 	Version      int                       `json:"version"`
 	Observations map[string]observation    `json:"observations"`
 	Baselines    map[string]bool           `json:"baselines"`
 	Runs         []Run                     `json:"runs"`
+}
+
+func (s *State) retryStart(event string, fallback time.Time) time.Time {
+	if event == "" {
+		return fallback
+	}
+	if prior := s.run(event); prior != nil && prior.StartedAt != nil && !prior.StartedAt.IsZero() {
+		return *prior.StartedAt
+	}
+	if start := s.RetryStarts[event]; !start.IsZero() {
+		return start
+	}
+	return fallback
 }
 
 // OutcomeReviewPending retains an activation while allowing fresh review work.
@@ -247,7 +261,10 @@ var ErrIssueAdmissionPending = errors.New("waiting for issue claim recovery")
 
 var ErrActivationNotFound = errors.New("workflow activation not found")
 
-const awaitingReview = "awaiting_review"
+const (
+	awaitingReview      = "awaiting_review"
+	externalMergeReason = "Pull request was already merged when the workflow checked"
+)
 
 func (e *Engine) load() (State, error) {
 	s := State{Version: 2, Observations: map[string]observation{}, Baselines: map[string]bool{}, Runs: []Run{}}
@@ -283,6 +300,12 @@ func (e *Engine) save(s State) error {
 	for _, run := range s.Runs {
 		if !terminal(run.Status) || run.hasFailedPendingReview() {
 			active = append(active, run)
+		} else if run.Status != "merged" && run.RequestID != "" && run.StartedAt != nil && !run.StartedAt.IsZero() {
+			// Keep the start for explicit retries after the activation is retired.
+			if s.RetryStarts == nil {
+				s.RetryStarts = make(map[string]time.Time)
+			}
+			s.RetryStarts[run.ID] = *run.StartedAt
 		}
 	}
 	s.Runs = active
@@ -325,7 +348,7 @@ func (e *Engine) logRun(r Run, event string) {
 		reason = "review_writeback_paused"
 	case "Pull request merged externally during review":
 		reason = "external_merge"
-	case "Pull request was already merged when the workflow checked":
+	case externalMergeReason:
 		reason = "merge_unconfirmed"
 	}
 	if strings.HasPrefix(r.Reason, "Merge blocked:") {
@@ -797,7 +820,7 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		}
 		if o.ReviewInterrupted {
 			r.PRURL = o.PRURL
-			r.Status = "failed"
+			r.Status = "merged"
 			r.Reason = "Pull request merged externally during review"
 		} else if o.Status == OutcomeChecksPending {
 			r.PRURL, r.Status, r.Reason = o.PRURL, OutcomeChecksPending, o.Reason
@@ -830,6 +853,17 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		}
 	}
 	if r.Status == awaitingReview && r.hasPendingReview() {
+		if active && e.InspectPR != nil && strings.Contains(r.PRURL, "/pull/") {
+			i, err := e.InspectPR(ctx, r.Item.Repository, r.PRURL)
+			if err != nil {
+				waitForQuota(err)
+				return errors.Join(err, finish())
+			}
+			if i.Merged {
+				r.Status, r.Reason = "merged", externalMergeReason
+				return finish()
+			}
+		}
 		if !exists {
 			r.Status, r.Reason = "completed", "Originating workflow removed before review resumed"
 		} else if original.Status == awaitingReview {
@@ -847,8 +881,7 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 			r.Reason = "Review writeback paused: workflow changed or was disabled"
 			return finish()
 		}
-		receipt := r.cleanReviewReceipt(r.Outcome)
-		if receipt == nil || e.FinishReview == nil {
+		if e.InspectPR == nil || !strings.Contains(r.PRURL, "/pull/") {
 			r.Reason = "Waiting for a submitted clean review on the current pull request head"
 			return finish()
 		}
@@ -857,11 +890,17 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 			waitForQuota(err)
 			return errors.Join(err, finish())
 		}
+		if i.Merged {
+			r.Status, r.Reason = "merged", externalMergeReason
+			return finish()
+		}
 		if !i.Open {
 			r.Status, r.Reason = "completed", "Pull request closed before review writeback"
-			if i.Merged {
-				r.Reason = "Pull request was already merged when the workflow checked"
-			}
+			return finish()
+		}
+		receipt := r.cleanReviewReceipt(r.Outcome)
+		if receipt == nil || e.FinishReview == nil {
+			r.Reason = "Waiting for a submitted clean review on the current pull request head"
 			return finish()
 		}
 		if i.HeadSHA != receipt.Head {
@@ -883,7 +922,7 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		r.Outcome = &outcome
 		switch {
 		case errors.Is(err, githubutil.ErrReviewInterrupted):
-			r.Status, r.Reason = "completed", "Pull request was already merged when the workflow checked"
+			r.Status, r.Reason = "merged", externalMergeReason
 		case errors.Is(err, githubutil.ErrReviewThreadsPending):
 			r.Reason = "Waiting for unresolved review threads"
 		case errors.Is(err, githubutil.ErrReviewChangesRequested):
@@ -943,12 +982,9 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		if stale {
 			return nil
 		}
-		if i.Merged && reviewRequired {
-			r.Status = "completed"
-			r.Reason = "Pull request was already merged when the workflow checked"
-		} else if i.Merged {
+		if i.Merged {
 			r.Status = "merged"
-			r.Reason = "Pull request merged"
+			r.Reason = externalMergeReason
 		} else if !i.Open {
 			r.Status = "completed"
 			r.Reason = "Pull request closed"
@@ -971,8 +1007,8 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		} else if !e.Allowed(r.Item.Repository) || !e.StillEnabled(r.Workflow) {
 			r.Reason = "Workflow changed or was disabled before merge"
 		} else if mergeErr := e.Merge(ctx, r); errors.Is(mergeErr, githubutil.ErrReviewInterrupted) {
-			r.Status = "completed"
-			r.Reason = "Pull request was already merged when the workflow checked"
+			r.Status = "merged"
+			r.Reason = externalMergeReason
 		} else if errors.Is(mergeErr, githubutil.ErrReviewCheckPending) {
 			r.Reason = "Waiting for the trusted review policy check on the current pull request head"
 		} else if errors.Is(mergeErr, githubutil.ErrReviewThreadsPending) {
@@ -1060,6 +1096,11 @@ func (e *Engine) PrepareIssueRecovery(workflowID, policy, eventID, retryOf strin
 				return errJournalUnchanged
 			}
 			now := e.now()
+			priorEvent := retryOf
+			if priorEvent == "" {
+				priorEvent = eventID
+			}
+			startedAt := s.retryStart(priorEvent, now)
 			// Recovery can arrive before a tick consumes the recorded outcome.
 			if previous := s.run(retryOf); previous != nil && previous.hasPendingReview() && !e.submitting[previous.ID] &&
 				(previous.Status == awaitingReview || previous.Status == "running" || previous.Status == "failed") &&
@@ -1070,7 +1111,7 @@ func (e *Engine) PrepareIssueRecovery(workflowID, policy, eventID, retryOf strin
 			if s.busy(item) {
 				return fmt.Errorf("issue already has an active workflow run")
 			}
-			s.Runs = append(s.Runs, Run{ID: eventID, RetryOf: retryOf, Workflow: w, Execution: execution, Item: item, Status: "pending_issue", Reason: "Waiting for issue claim recovery", StartedAt: &now, UpdatedAt: now})
+			s.Runs = append(s.Runs, Run{ID: eventID, RetryOf: retryOf, Workflow: w, Execution: execution, Item: item, Status: "pending_issue", Reason: "Waiting for issue claim recovery", StartedAt: &startedAt, UpdatedAt: now})
 			return nil
 		})
 	}

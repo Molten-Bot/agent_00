@@ -100,6 +100,38 @@ func TestDashboardWorkflowTimeSavedIncludesRetryAndConfirmedExternalMerge(t *tes
 	}
 }
 
+func TestDashboardLateMergeRespectsTaskRemoval(t *testing.T) {
+	t.Parallel()
+	for _, forget := range []bool{false, true} {
+		t.Run(fmt.Sprintf("forget=%t", forget), func(t *testing.T) {
+			t.Parallel()
+			b := NewBroker()
+			now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+			b.now = func() time.Time { return now }
+			const id = "workflow-task"
+			const fields = " workflow_id=delivery run_id=run-1 request_id=" + id + " started_at=2026-01-01T00:00:00Z"
+			b.IngestLog("workflow event=submission" + fields + " status=running")
+			b.IngestLog("task status=start request_id=" + id)
+			now = now.Add(30 * time.Second)
+			b.IngestLog("task status=completed request_id=" + id)
+			remove := b.CloseTask
+			want := (defaultClosedTaskRetention + time.Minute).Seconds()
+			if forget {
+				remove, want = b.ForgetTask, 0
+			}
+			if err := remove(id); err != nil {
+				t.Fatal(err)
+			}
+			now = now.Add(defaultClosedTaskRetention + 30*time.Second)
+			b.IngestLog(fmt.Sprintf("workflow event=transition%s status=merged duration_ms=%d", fields,
+				(defaultClosedTaskRetention + time.Minute).Milliseconds()))
+			if got := b.Snapshot().Stats.TotalSavedSeconds; got != want {
+				t.Fatalf("time saved after late merge = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
 func TestBrokerShowsCheckWaitOnExistingTask(t *testing.T) {
 	t.Parallel()
 	b := NewBroker()

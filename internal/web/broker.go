@@ -331,6 +331,7 @@ type Broker struct {
 	repoIndex         map[string]int
 	attempts          map[string][]taskAttemptState
 	workflowTaskTimes map[string]workflowTiming
+	forgottenTasks    map[string]struct{}
 	attemptRoots      map[string]string
 	attemptSeq        uint64
 	rejectedSeq       uint64
@@ -558,6 +559,9 @@ func (b *Broker) IngestLog(line string) {
 }
 
 func (b *Broker) recordWorkflowTimingLocked(requestID string, fields map[string]string, now time.Time) {
+	if _, forgotten := b.forgottenTasks[requestID]; forgotten {
+		return
+	}
 	startedAt := parseTimeOrZero(fields["started_at"])
 	success := fields["status"] == "succeeded" || fields["status"] == "merged" ||
 		fields["reason"] == "external_merge" || fields["reason"] == "merge_unconfirmed"
@@ -2191,6 +2195,9 @@ func (b *Broker) forgetTaskAttemptsLocked(requestID string) {
 		root = requestID
 	}
 	attempts := b.attempts[root]
+	if b.forgottenTasks == nil {
+		b.forgottenTasks = make(map[string]struct{})
+	}
 	kept := make([]taskAttemptState, 0, len(attempts))
 	for _, attempt := range attempts {
 		if task, ok := b.tasks[attempt.RequestID]; ok && task != nil && isActiveTaskStatus(task.Status) {
@@ -2201,6 +2208,7 @@ func (b *Broker) forgetTaskAttemptsLocked(requestID string) {
 		b.closedTasks[attempt.RequestID] = b.now().UTC()
 		delete(b.attemptRoots, attempt.RequestID)
 		delete(b.workflowTaskTimes, attempt.RequestID)
+		b.forgottenTasks[attempt.RequestID] = struct{}{}
 	}
 	if len(kept) == 0 {
 		delete(b.attemptRoots, root)

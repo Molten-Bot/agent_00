@@ -69,9 +69,11 @@ func TestPendingReviewRetainsActivationWithoutUsingReviewEvidence(t *testing.T) 
 	if err := e.save(state); err != nil {
 		t.Fatal(err)
 	}
-	e.InspectPR = func(context.Context, string, string) (Item, error) {
-		t.Fatal("pending review reached merge eligibility")
-		return Item{}, nil
+	pr := Item{Open: true, HeadSHA: "abc", ChecksPassed: true}
+	e.InspectPR = func(context.Context, string, string) (Item, error) { return pr, nil }
+	e.Merge = func(context.Context, Run) error {
+		t.Fatal("pending review authorized workflow merge")
+		return nil
 	}
 	tick(t, e)
 	tick(t, e)
@@ -82,6 +84,19 @@ func TestPendingReviewRetainsActivationWithoutUsingReviewEvidence(t *testing.T) 
 	run := state.run("pending")
 	if run == nil || run.Status != awaitingReview || run.MergeHead != "" || state.busy(item) {
 		t.Fatalf("pending review did not retain a retryable activation: %+v", run)
+	}
+
+	pr = Item{Merged: true}
+	var transitions []string
+	e.Logf = func(format string, args ...any) { transitions = append(transitions, fmt.Sprintf(format, args...)) }
+	tick(t, e)
+	tick(t, e)
+	if runs, err := e.Runs(); err != nil || len(runs) != 0 {
+		t.Fatalf("external merge did not retire pending review: %+v, %v", runs, err)
+	}
+	if len(transitions) != 1 || !strings.Contains(transitions[0], "event=transition") ||
+		!strings.Contains(transitions[0], "status=merged reason=merge_unconfirmed") {
+		t.Fatalf("external merge did not emit one successful transition: %v", transitions)
 	}
 }
 
@@ -173,8 +188,11 @@ func TestPendingReviewRecoversFailedActivation(t *testing.T) {
 				}
 			}
 			e.InspectPR = func(context.Context, string, string) (Item, error) {
-				t.Fatal("pending review reached merge eligibility")
-				return Item{}, nil
+				return Item{Open: true, HeadSHA: "abc", ChecksPassed: true}, nil
+			}
+			e.Merge = func(context.Context, Run) error {
+				t.Fatal("pending review authorized workflow merge")
+				return nil
 			}
 			tick(t, e)
 			tick(t, e)

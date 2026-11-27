@@ -95,6 +95,8 @@ func (e *Engine) dispatch(w Definition, execution *ExecutionPolicy, item Item, r
 					return fmt.Errorf("workflow retry already active")
 				}
 			}
+			startedAt := state.retryStart(retryOf, now)
+			run.StartedAt = &startedAt
 		}
 
 		state.Runs = append(state.Runs, run)

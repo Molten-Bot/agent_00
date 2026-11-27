@@ -69,13 +69,15 @@ func TestWorkflowTerminalTransitionDuration(t *testing.T) {
 		outcome         Outcome
 		workflowRemoved bool
 		alreadyMerged   bool
+		hasReceipt      bool
 		elapsed         time.Duration
 		want            string
 	}{
 		{name: "success", outcome: Outcome{Status: "succeeded"}, elapsed: 3 * time.Second, want: "status=succeeded reason=succeeded duration_ms=3000"},
 		{name: "zero elapsed", outcome: Outcome{Status: "succeeded"}, want: "status=succeeded reason=succeeded duration_ms=0"},
-		{name: "review interrupted", outcome: Outcome{Status: "failed", ReviewInterrupted: true}, elapsed: 3 * time.Second, want: "status=failed reason=external_merge duration_ms=3000"},
-		{name: "merged before review writeback", outcome: Outcome{Status: "succeeded", PendingReviewGate: &githubutil.PendingReviewGate{}}, alreadyMerged: true, elapsed: 3 * time.Second, want: "status=completed reason=merge_unconfirmed duration_ms=3000"},
+		{name: "review interrupted", outcome: Outcome{Status: "failed", ReviewInterrupted: true}, elapsed: 3 * time.Second, want: "status=merged reason=external_merge duration_ms=3000"},
+		{name: "merged before review writeback", outcome: Outcome{Status: "succeeded", PendingReviewGate: &githubutil.PendingReviewGate{}}, alreadyMerged: true, hasReceipt: true, elapsed: 3 * time.Second, want: "status=merged reason=merge_unconfirmed duration_ms=3000"},
+		{name: "merged before review writeback without receipt", outcome: Outcome{Status: "succeeded", PendingReviewGate: &githubutil.PendingReviewGate{}}, alreadyMerged: true, elapsed: 3 * time.Second, want: "status=merged reason=merge_unconfirmed duration_ms=3000"},
 		{name: "completed without merge", outcome: Outcome{Status: "succeeded", PendingReviewGate: &githubutil.PendingReviewGate{}}, workflowRemoved: true, elapsed: 3 * time.Second, want: "status=completed reason=completed duration_ms=3000"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -93,7 +95,9 @@ func TestWorkflowTerminalTransitionDuration(t *testing.T) {
 			if test.alreadyMerged {
 				const prURL = "https://github.com/acme/repo/pull/42"
 				test.outcome.PRURL = prURL
-				test.outcome.ReviewReceipt = fixtureReviewReceipt(w, prURL)
+				if test.hasReceipt {
+					test.outcome.ReviewReceipt = fixtureReviewReceipt(w, prURL)
+				}
 				e.InspectPR = func(context.Context, string, string) (Item, error) {
 					return Item{Merged: true}, nil
 				}
@@ -116,6 +120,70 @@ func TestWorkflowTerminalTransitionDuration(t *testing.T) {
 			tick(t, e)
 			if len(logs) != 1 || !strings.Contains(logs[0], "event=transition") || !strings.HasSuffix(logs[0], test.want) {
 				t.Fatalf("terminal logs = %v, want one transition ending in %q", logs, test.want)
+			}
+		})
+	}
+}
+
+func TestWorkflowRetryDurationIncludesRetiredActivationAfterRestart(t *testing.T) {
+	t.Parallel()
+	for _, recovery := range []string{"dispatch", "issue recovery", "same event issue recovery"} {
+		t.Run(recovery, func(t *testing.T) {
+			t.Parallel()
+			w := definition("retry-timing")
+			w.Merge.Enabled = true
+			e, _, _ := testEngine(t, w)
+			start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+			now := start.Add(time.Minute)
+			e.Now = func() time.Time { return now }
+			item := Item{Repository: w.Repository, Kind: "issue", Number: 1}
+			if err := e.transaction(func(s *State) error {
+				s.Runs = []Run{{ID: "original", RequestID: "original-task", Workflow: w, Item: item,
+					Status: "running", StartedAt: &start, Outcome: &Outcome{Status: "failed"}}}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			tick(t, e)
+			if runs, err := e.Runs(); err != nil || len(runs) != 0 {
+				t.Fatalf("failed activation was not retired: %+v, %v", runs, err)
+			}
+
+			now = now.Add(20 * time.Second)
+			var logs []string
+			restarted := &Engine{
+				Store: e.Store, StatePath: e.StatePath, Enabled: e.Enabled, Allowed: e.Allowed, Now: e.Now,
+				Fetch: e.Fetch, Status: e.Status, Reconcile: func(string) string { return "retry-task" },
+				InspectPR: func(context.Context, string, string) (Item, error) { return Item{Merged: true}, nil },
+				Logf:      func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) },
+			}
+			if recovery == "dispatch" {
+				if _, err := restarted.DispatchRetry(t.Context(), w.ID, w.ExecutionPolicyHash(), "original", item, nil, func(Run) (string, error) {
+					return "retry-task", nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				event, retryOf := "retry", "original"
+				if recovery == "same event issue recovery" {
+					event, retryOf = "original", ""
+				}
+				if err := restarted.PrepareIssueRecovery(w.ID, w.ExecutionPolicyHash(), event, retryOf, item, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			runs, err := restarted.Runs()
+			if err != nil || len(runs) != 1 {
+				t.Fatalf("retry activation = %+v, %v", runs, err)
+			}
+			now = now.Add(10 * time.Second)
+			if err := restarted.Complete(runs[0].ID, Outcome{Status: "succeeded", PRURL: "https://github.com/acme/repo/pull/42"}); err != nil {
+				t.Fatal(err)
+			}
+			tick(t, restarted)
+			if len(logs) == 0 || !strings.HasSuffix(logs[len(logs)-1], "status=merged reason=merge_unconfirmed duration_ms=90000") ||
+				!strings.Contains(logs[len(logs)-1], "started_at="+start.Format(time.RFC3339Nano)) {
+				t.Fatalf("retry logs = %v, want original start and 90-second duration", logs)
 			}
 		})
 	}
