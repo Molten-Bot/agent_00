@@ -3113,18 +3113,19 @@ func (s Server) handleTaskRemoval(w http.ResponseWriter, r *http.Request, reques
 		remove = s.Broker.ForgetTask
 		if r.Body != nil && r.Body != http.NoBody {
 			type deletionScope struct {
-				AttemptIDs []string `json:"attempt_ids"`
+				AttemptGenerations map[string]string `json:"attempt_generations"`
+				AttemptIDs         []string          `json:"attempt_ids"` // Legacy queues carry no generation.
 			}
 			scope, err := decodeStrictJSON[deletionScope](w, r, maxSettingsConfigureBodyBytes, "invalid task deletion scope", "expected one task deletion scope")
 			if err != nil {
 				writeJSONError(w, http.StatusBadRequest, err)
 				return
 			}
-			attemptIDs := make(map[string]struct{}, len(scope.AttemptIDs))
-			for _, id := range scope.AttemptIDs {
-				attemptIDs[id] = struct{}{}
+			generations := scope.AttemptGenerations
+			if generations == nil {
+				generations = map[string]string{}
 			}
-			remove = func(id string) error { return s.Broker.forgetTask(id, attemptIDs) }
+			remove = func(id string) error { return s.Broker.forgetTask(id, generations) }
 		}
 	}
 	if err := remove(requestID); err != nil {

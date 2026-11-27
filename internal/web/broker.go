@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -123,7 +124,7 @@ type Task struct {
 	UpdatedAt         string                 `json:"updated_at"`
 	DurationSeconds   float64                `json:"duration_seconds,omitempty"`
 	CanRerun          bool                   `json:"can_rerun,omitempty"`
-	DeleteAttemptIDs  []string               `json:"delete_attempt_ids,omitempty"`
+	DeleteScope       map[string]string      `json:"delete_attempt_generations,omitempty"`
 	Controls          TaskControls           `json:"controls,omitempty"`
 	Logs              []TaskLog              `json:"logs"`
 
@@ -431,6 +432,8 @@ type taskAttemptState struct {
 	StartedAt time.Time
 	UpdatedAt time.Time
 	Seq       uint64
+
+	Generation string
 }
 
 // NewBroker returns a monitor state broker with safe defaults.
@@ -624,19 +627,19 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 	})
 
 	snapshot.Tasks = make([]Task, 0, len(tasks))
-	completedAttemptsByRoot := make(map[string][]string)
+	completedAttemptsByRoot := make(map[string]map[string]string)
 	for _, t := range tasks {
 		_, canRerun := b.runConfigs[t.RequestID]
 		status := normalizeTaskTerminalStatus(t.Status)
 		prTitle, prTitleURL := taskPRTitle(t)
-		var deleteAttemptIDs []string
+		var deleteScope map[string]string
 		if isCompletedTaskStatus(status) {
 			root := stringsx.FirstNonEmpty(b.attemptRoots[t.RequestID], t.RequestID)
 			var cached bool
-			deleteAttemptIDs, cached = completedAttemptsByRoot[root]
+			deleteScope, cached = completedAttemptsByRoot[root]
 			if !cached {
-				deleteAttemptIDs = b.completedAttemptIDsLocked(root)
-				completedAttemptsByRoot[root] = deleteAttemptIDs
+				deleteScope = b.completedAttemptGenerationsLocked(root)
+				completedAttemptsByRoot[root] = deleteScope
 			}
 		}
 		snapshot.Tasks = append(snapshot.Tasks, Task{
@@ -683,7 +686,7 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 			UpdatedAt:         t.UpdatedAt.UTC().Format(time.RFC3339Nano),
 			DurationSeconds:   taskDuration(t.StartedAt, t.UpdatedAt, now, status).Seconds(),
 			CanRerun:          canRerun,
-			DeleteAttemptIDs:  deleteAttemptIDs,
+			DeleteScope:       deleteScope,
 			Logs:              snapshotTaskLogs(t.Logs, opts.logs),
 		})
 	}
@@ -2120,8 +2123,8 @@ func (b *Broker) ForgetTask(requestID string) error {
 	return b.forgetTask(requestID, nil)
 }
 
-// A non-nil attemptIDs restricts deletion to the supplied sibling attempts and requestID.
-func (b *Broker) forgetTask(requestID string, attemptIDs map[string]struct{}) error {
+// A non-nil generations scope binds deletion to the completed attempts seen by the caller.
+func (b *Broker) forgetTask(requestID string, generations map[string]string) error {
 	if b == nil {
 		return ErrTaskNotFound
 	}
@@ -2133,6 +2136,15 @@ func (b *Broker) forgetTask(requestID string, attemptIDs map[string]struct{}) er
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	root := stringsx.FirstNonEmpty(b.attemptRoots[requestID], requestID)
+	if generations != nil {
+		generation := generations[requestID]
+		if generation == "" || !slices.ContainsFunc(b.attempts[root], func(attempt taskAttemptState) bool {
+			return attempt.RequestID == requestID && attempt.Generation == generation && isCompletedTaskStatus(attempt.Status)
+		}) {
+			return ErrTaskNotFound
+		}
+	}
 	if task, ok := b.tasks[requestID]; ok {
 		if task == nil || !isCompletedTaskStatus(task.Status) {
 			return ErrTaskNotCompleted
@@ -2140,25 +2152,25 @@ func (b *Broker) forgetTask(requestID string, attemptIDs map[string]struct{}) er
 	} else if _, ok := b.attemptRoots[requestID]; !ok {
 		return ErrTaskNotFound
 	}
-	b.forgetTaskAttemptsLocked(requestID, attemptIDs)
+	b.forgetTaskAttemptsLocked(root, generations)
 	b.notifySubscribersLocked()
 	return nil
 }
 
-func (b *Broker) completedAttemptIDs(requestID string) []string {
+func (b *Broker) completedAttemptGenerations(requestID string) map[string]string {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	return b.completedAttemptIDsLocked(stringsx.FirstNonEmpty(b.attemptRoots[requestID], requestID))
+	return b.completedAttemptGenerationsLocked(stringsx.FirstNonEmpty(b.attemptRoots[requestID], requestID))
 }
 
-func (b *Broker) completedAttemptIDsLocked(root string) []string {
-	var ids []string
+func (b *Broker) completedAttemptGenerationsLocked(root string) map[string]string {
+	generations := make(map[string]string)
 	for _, attempt := range b.attempts[root] {
 		if isCompletedTaskStatus(attempt.Status) {
-			ids = append(ids, attempt.RequestID)
+			generations[attempt.RequestID] = attempt.Generation
 		}
 	}
-	return ids
+	return generations
 }
 
 func (b *Broker) closeTaskLocked(requestID string) error {
@@ -2176,20 +2188,14 @@ func (b *Broker) closeTaskLocked(requestID string) error {
 }
 
 // Keep active siblings and any siblings outside the requested deletion scope.
-func (b *Broker) forgetTaskAttemptsLocked(requestID string, attemptIDs map[string]struct{}) {
-	root := strings.TrimSpace(b.attemptRoots[requestID])
-	if root == "" {
-		root = requestID
-	}
+func (b *Broker) forgetTaskAttemptsLocked(root string, generations map[string]string) {
 	attempts := b.attempts[root]
 	kept := make([]taskAttemptState, 0, len(attempts))
 	for _, attempt := range attempts {
-		if attemptIDs != nil && attempt.RequestID != requestID {
-			_, included := attemptIDs[attempt.RequestID]
-			if !included || !isCompletedTaskStatus(attempt.Status) {
-				kept = append(kept, attempt)
-				continue
-			}
+		if generations != nil && (attempt.Generation == "" || generations[attempt.RequestID] != attempt.Generation ||
+			!isCompletedTaskStatus(attempt.Status)) {
+			kept = append(kept, attempt)
+			continue
 		}
 		if task, ok := b.tasks[attempt.RequestID]; ok && task != nil && isActiveTaskStatus(task.Status) {
 			kept = append(kept, attempt)
@@ -2719,6 +2725,10 @@ func (b *Broker) recordTaskAttemptLocked(root, requestID, rerunOf, status, errTe
 		if prURL != "" {
 			attempts[i].PRURL = prURL
 		}
+		// A resumed run keeps its request ID but must outlive deletes of the previous result.
+		if isCompletedTaskStatus(attempts[i].Status) && !isCompletedTaskStatus(status) {
+			attempts[i].Generation = rand.Text()
+		}
 		attempts[i].Status = status
 		attempts[i].Error = errText
 		attempts[i].UpdatedAt = now
@@ -2739,6 +2749,8 @@ func (b *Broker) recordTaskAttemptLocked(root, requestID, rerunOf, status, errTe
 		StartedAt: now,
 		UpdatedAt: now,
 		Seq:       b.attemptSeq,
+
+		Generation: rand.Text(),
 	})
 }
 

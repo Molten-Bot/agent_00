@@ -1606,14 +1606,15 @@
       }
     }
 
-    function loadTaskIDMarkers(key) {
+    function loadTaskMarkers(key) {
       const legacyIDs = loadStoredTaskIDs(key);
-      const ids = new Set(legacyIDs);
+      const markers = new Map(Array.from(legacyIDs, (id) => [id, "1"]));
       const prefix = `${key}.`;
       try {
         for (const storageKey of Object.keys(localStorage)) {
           if (storageKey.startsWith(prefix) && storageKey.length > prefix.length) {
-            ids.add(storageKey.slice(prefix.length));
+            const value = localStorage.getItem(storageKey);
+            if (value !== null) markers.set(storageKey.slice(prefix.length), value);
           }
         }
         // Migrate the old shared list only after its entries have been saved individually.
@@ -1626,24 +1627,24 @@
           localStorage.removeItem(key);
         }
       } catch (_err) {
-        // Keep any IDs already read if storage is unavailable or full.
+        // Keep any markers already read if storage is unavailable or full.
       }
-      return ids;
+      return markers;
     }
 
     function loadPendingTaskDeletes() {
       const deletes = new Map();
-      for (const requestID of loadTaskIDMarkers(PENDING_TASK_DELETES_KEY)) {
-        let attemptIDs = [];
+      for (const [requestID, stored] of loadTaskMarkers(PENDING_TASK_DELETES_KEY)) {
+        let generations = {};
         try {
-          const stored = JSON.parse(localStorage.getItem(`${PENDING_TASK_DELETES_KEY}.${requestID}`));
-          if (Array.isArray(stored)) {
-            attemptIDs = stored.filter((id) => typeof id === "string");
+          const scope = JSON.parse(stored);
+          if (scope && typeof scope === "object" && !Array.isArray(scope)) {
+            generations = Object.fromEntries(Object.entries(scope).filter(([, value]) => typeof value === "string"));
           }
         } catch (_err) {
-          // An unreadable scope can only delete the named task.
+          // An unreadable scope, like an older ID-only queue, cannot identify a result.
         }
-        deletes.set(requestID, attemptIDs);
+        deletes.set(requestID, { generations, stored });
       }
       return deletes;
     }
@@ -1864,8 +1865,8 @@
       customLibraryGeneration: null,
       snapshot: null,
       selectedTaskId: "",
-      dismissedTaskIDs: new Set([...loadTaskIDMarkers(DISMISSED_TASKS_KEY), ...pendingTaskDeletes.keys()]),
-      hiddenRemovedTaskIDs: loadTaskIDMarkers(HIDDEN_REMOVED_TASKS_KEY),
+      dismissedTaskGenerations: loadTaskMarkers(DISMISSED_TASKS_KEY),
+      hiddenRemovedTaskGenerations: loadTaskMarkers(HIDDEN_REMOVED_TASKS_KEY),
       libraryTasks: [],
       libraryLoadError: "",
       repoHistory: loadRepoHistory(),
@@ -2370,7 +2371,7 @@
       }
       for (const task of nextSnapshot?.tasks || []) {
         const requestID = taskRequestID(task);
-        if (!requestID || state.dismissedTaskIDs.has(requestID)) {
+        if (!requestID || isTaskDismissed(task)) {
           continue;
         }
         const status = normalizedTaskStatus(task?.status);
@@ -9816,18 +9817,33 @@
       return normalized === "completed" || normalized === "no_changes" || normalized === "merged";
     }
 
-    function completeTaskDismissal(requestID, immediate = false) {
+    function taskDeleteGeneration(task) {
+      const id = taskRequestID(task);
+      return task?.delete_attempt_generations?.[id] || "1";
+    }
+
+    function isTaskDismissed(task) {
+      const id = taskRequestID(task);
+      const generation = taskDeleteGeneration(task);
+      return state.dismissedTaskGenerations.get(id) === generation ||
+        pendingTaskDeletes.get(id)?.generations?.[id] === generation;
+    }
+
+    function isRemovedTaskHidden(task) {
+      return state.hiddenRemovedTaskGenerations.get(taskRequestID(task)) === taskDeleteGeneration(task);
+    }
+
+    function completeTaskDismissal(requestID, immediate = false, observedTask = null) {
       requestID = String(requestID || "").trim();
       if (!requestID) return;
-      const task = (state.snapshot?.tasks || []).find((candidate) => String(candidate?.request_id || "").trim() === requestID);
-      if (isCompletedTask(task)) {
+      const current = (state.snapshot?.tasks || []).find((candidate) => taskRequestID(candidate) === requestID);
+      const task = observedTask || current || state.taskHistoryByID.get(requestID);
+      const generation = taskDeleteGeneration(task);
+      if (isCompletedTask(task) && (!current || taskDeleteGeneration(current) === generation)) {
         const copy = cloneTaskForHistory(task);
         if (copy) {
-          if (!(state.taskHistoryByID instanceof Map)) {
-            state.taskHistoryByID = new Map();
-          }
           const existing = state.taskHistoryByID.get(requestID);
-          if (existing?.history_completed_at) {
+          if (existing?.history_completed_at && taskDeleteGeneration(existing) === generation) {
             copy.history_completed_at = existing.history_completed_at;
           }
           if (typeof existing?.prompt === "string" && existing.prompt.trim() !== "") {
@@ -9837,11 +9853,11 @@
           persistTaskHistory();
         }
       }
-      state.dismissedTaskIDs.add(requestID);
+      state.dismissedTaskGenerations.set(requestID, generation);
       if (state.taskHistoryUnseenIDs instanceof Set && state.taskHistoryUnseenIDs.delete(requestID)) {
         persistTaskHistoryUnseenIDs();
       }
-      persistTaskIDMarker(DISMISSED_TASKS_KEY, requestID);
+      persistTaskIDMarker(DISMISSED_TASKS_KEY, requestID, generation);
       if (state.selectedTaskId === requestID) {
         state.selectedTaskId = "";
       }
@@ -10637,30 +10653,31 @@
 
     function dismissTask(requestID, task) {
       if (!requestID) return;
+      const generation = taskDeleteGeneration(task);
       if (task.removed_history) {
-        state.hiddenRemovedTaskIDs.add(requestID);
-        persistTaskIDMarker(HIDDEN_REMOVED_TASKS_KEY, requestID);
-      } else if (state.dismissedTaskIDs.has(requestID)) {
+        state.hiddenRemovedTaskGenerations.set(requestID, generation);
+        persistTaskIDMarker(HIDDEN_REMOVED_TASKS_KEY, requestID, generation);
+      } else if (isTaskDismissed(task)) {
         return;
       }
-      if (pendingTaskDeletes.has(requestID)) {
+      if (pendingTaskDeletes.get(requestID)?.generations?.[requestID] === generation) {
         render(state.snapshot, true);
         return;
       }
       trackAnalyticsEvent("task_close_started");
-      // A deferred redraw can leave the button attached to an older snapshot.
-      const current = state.snapshot?.tasks?.find((candidate) => candidate.request_id === requestID);
-      const attemptIDs = (current || task).delete_attempt_ids || [];
-      pendingTaskDeletes.set(requestID, attemptIDs);
-      persistTaskIDMarker(PENDING_TASK_DELETES_KEY, requestID, JSON.stringify(attemptIDs));
-      completeTaskDismissal(requestID, true);
-      void syncTaskDeletion(requestID, attemptIDs);
+      // Use the rendered card's scope even if a newer snapshot is already waiting to render.
+      const generations = task.delete_attempt_generations || {};
+      const pending = { generations, stored: JSON.stringify(generations) };
+      pendingTaskDeletes.set(requestID, pending);
+      persistTaskIDMarker(PENDING_TASK_DELETES_KEY, requestID, pending.stored);
+      completeTaskDismissal(requestID, true, task);
+      void syncTaskDeletion(requestID, pending);
     }
 
-    async function syncTaskDeletion(requestID, attemptIDs) {
+    async function syncTaskDeletion(requestID, pending) {
       let retryDelay = 1000;
-      const body = JSON.stringify({ attempt_ids: attemptIDs });
-      for (;;) {
+      const body = JSON.stringify({ attempt_generations: pending.generations });
+      while (pendingTaskDeletes.get(requestID) === pending) {
         try {
           const response = await fetch(`/api/tasks/${encodeURIComponent(requestID)}/delete`, {
             method: "POST",
@@ -10668,8 +10685,20 @@
             body,
             signal: AbortSignal.timeout(TASK_DELETE_TIMEOUT_MS),
           });
-          // A task can already be gone if the browser missed a successful response.
-          if (response.ok || response.status === 404) break;
+          // The result may already be gone or have been superseded by a resumed run.
+          if (response.ok || response.status === 404) {
+            if (pendingTaskDeletes.get(requestID) === pending) {
+              pendingTaskDeletes.delete(requestID);
+            }
+            try {
+              const key = `${PENDING_TASK_DELETES_KEY}.${requestID}`;
+              if (localStorage.getItem(key) === pending.stored) localStorage.removeItem(key);
+            } catch (_err) {
+              // Ignore localStorage failures.
+            }
+            trackAnalyticsEvent("task_close_succeeded");
+            return;
+          }
         } catch (_err) {
           // A network error or timeout leaves the delete queued.
         }
@@ -10679,10 +10708,6 @@
         await new Promise((resolve) => window.setTimeout(resolve, retryDelay));
         retryDelay = Math.min(retryDelay * 2, TASK_DELETE_MAX_RETRY_DELAY_MS);
       }
-      persistTaskIDMarker(DISMISSED_TASKS_KEY, requestID);
-      pendingTaskDeletes.delete(requestID);
-      persistTaskIDMarker(PENDING_TASK_DELETES_KEY, requestID, null);
-      trackAnalyticsEvent("task_close_succeeded");
     }
 
     function renderTaskCloseButton(task, requestID) {
@@ -11144,7 +11169,7 @@
           continue;
         }
         const existing = state.taskHistoryByID.get(requestID);
-        if (existing?.history_completed_at) {
+        if (existing?.history_completed_at && taskDeleteGeneration(existing) === taskDeleteGeneration(copy)) {
           copy.history_completed_at = existing.history_completed_at;
         }
         if (typeof existing?.prompt === "string" && existing.prompt.trim() !== "") {
@@ -11163,7 +11188,7 @@
           String(existing.pr_title_url || "") === String(copy.pr_title_url || "") &&
           taskIssueURL(existing) === taskIssueURL(copy) &&
           String(existing.pr_title_updated_at || "") === String(copy.pr_title_updated_at || "") &&
-          JSON.stringify(existing.delete_attempt_ids) === JSON.stringify(copy.delete_attempt_ids) &&
+          JSON.stringify(existing.delete_attempt_generations) === JSON.stringify(copy.delete_attempt_generations) &&
           existingLogsLength === nextLogsLength
         ) {
           continue;
@@ -11213,7 +11238,7 @@
         if (!requestID) {
           continue;
         }
-        if (state.dismissedTaskIDs.has(requestID) && isCompletedTask(task)) {
+        if (isTaskDismissed(task) && isCompletedTask(task)) {
           continue;
         }
         taskItems.push(task);
@@ -11236,7 +11261,7 @@
       const out = [];
       for (const task of liveByID.values()) {
         const requestID = String(task?.request_id || "").trim();
-        if (!requestID || state.dismissedTaskIDs.has(requestID)) {
+        if (!requestID || isTaskDismissed(task)) {
           continue;
         }
         const historyCopy = state.taskHistoryByID.get(requestID);
@@ -11259,7 +11284,7 @@
 
       for (const task of state.taskHistoryByID.values()) {
         const requestID = String(task?.request_id || "").trim();
-        if (!requestID || liveByID.has(requestID) || state.dismissedTaskIDs.has(requestID) || isTaskHistoryExpired(task, nowMs)) {
+        if (!requestID || liveByID.has(requestID) || isTaskDismissed(task) || isTaskHistoryExpired(task, nowMs)) {
           continue;
         }
         out.push({
@@ -11394,7 +11419,7 @@
       const out = [];
       for (const task of liveByID.values()) {
         const requestID = String(task?.request_id || "").trim();
-        if (!requestID || state.hiddenRemovedTaskIDs.has(requestID) || !state.dismissedTaskIDs.has(requestID) || !isCompletedTask(task)) {
+        if (!requestID || isRemovedTaskHidden(task) || !isTaskDismissed(task) || !isCompletedTask(task)) {
           continue;
         }
         const historyCopy = state.taskHistoryByID.get(requestID);
@@ -11416,7 +11441,7 @@
 
       for (const task of state.taskHistoryByID.values()) {
         const requestID = String(task?.request_id || "").trim();
-        if (!requestID || liveByID.has(requestID) || state.hiddenRemovedTaskIDs.has(requestID) || !state.dismissedTaskIDs.has(requestID) || isTaskHistoryExpired(task, nowMs)) {
+        if (!requestID || liveByID.has(requestID) || isRemovedTaskHidden(task) || !isTaskDismissed(task) || isTaskHistoryExpired(task, nowMs)) {
           continue;
         }
         out.push({
@@ -14823,8 +14848,8 @@
     void refreshSpeechStatus();
     loadInitial();
     startStream();
-    for (const [requestID, attemptIDs] of pendingTaskDeletes) {
-      void syncTaskDeletion(requestID, attemptIDs);
+    for (const [requestID, pending] of pendingTaskDeletes) {
+      void syncTaskDeletion(requestID, pending);
     }
   </script>
 

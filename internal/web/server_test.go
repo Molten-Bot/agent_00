@@ -733,7 +733,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "if (!requestID || isTaskHistoryExpired(task, nowMs)) {") {
 		t.Fatalf("expected index html to skip invalid and expired completed tasks while rebuilding history")
 	}
-	if !strings.Contains(markup, "if (!requestID || liveByID.has(requestID) || state.dismissedTaskIDs.has(requestID) || isTaskHistoryExpired(task, nowMs)) {") {
+	if !strings.Contains(markup, "if (!requestID || liveByID.has(requestID) || isTaskDismissed(task) || isTaskHistoryExpired(task, nowMs)) {") {
 		t.Fatalf("expected index html history mode to exclude dismissed or expired tasks from persisted history output")
 	}
 	if !strings.Contains(markup, `const TASK_HISTORY_KEY = "hubui.taskHistory.v1";`) {
@@ -917,7 +917,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		t.Fatalf("expected completed task history dedupe key to include reviewers")
 	}
 	if !strings.Contains(markup, "function removedTasks(snapshot)") ||
-		!strings.Contains(markup, "state.dismissedTaskIDs.has(requestID)") ||
+		!strings.Contains(markup, "|| !isTaskDismissed(task) ||") ||
 		!strings.Contains(markup, "return removedTasks(snapshot);") {
 		t.Fatalf("expected index html to include removed completed-task history filter")
 	}

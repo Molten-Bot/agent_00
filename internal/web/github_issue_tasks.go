@@ -147,7 +147,7 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 			task.Error = stringsx.FirstNonEmpty(latest.Error, latest.RunError, task.Error)
 		}
 		if !live && isCompletedTaskStatus(task.Status) {
-			task.DeleteAttemptIDs = s.Broker.completedAttemptIDs(requestID)
+			task.DeleteScope = s.Broker.completedAttemptGenerations(requestID)
 		}
 
 		for i, attempt := range attempts {

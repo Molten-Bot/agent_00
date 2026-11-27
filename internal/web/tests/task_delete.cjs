@@ -22,6 +22,7 @@ test('Close survives overlapping tab retries and a deferred Removed redraw', asy
   let otherAttempts = 0;
   let allowDelete = false;
   let allowOtherDelete = false;
+  let allowResumedDelete = false;
   let releaseFirstAttempt;
   const firstAttempt = new Promise(resolve => { releaseFirstAttempt = resolve; });
   await context.route('**/*', async route => {
@@ -39,6 +40,10 @@ test('Close survives overlapping tab retries and a deferred Removed redraw', asy
       case '/api/tasks/other/delete':
         otherAttempts++;
         return allowOtherDelete
+          ? route.continue()
+          : route.fulfill({ status: 503, json: { error: 'temporarily unavailable' } });
+      case '/api/tasks/resumed/delete':
+        return allowResumedDelete
           ? route.continue()
           : route.fulfill({ status: 503, json: { error: 'temporarily unavailable' } });
       case '/api/agent-auth':
@@ -103,10 +108,39 @@ test('Close survives overlapping tab retries and a deferred Removed redraw', asy
   const [otherResponse, legacyResponse] = await Promise.all([otherDeleted, legacyDeleted]);
   assert.equal(otherResponse.status(), 200);
   assert.equal(legacyResponse.status(), 404);
-  assert.deepEqual(legacyResponse.request().postDataJSON(), { attempt_ids: [] });
+  assert.deepEqual(legacyResponse.request().postDataJSON(), { attempt_generations: {} });
   await expect.poll(() => page.evaluate(() => Object.keys(localStorage).filter(key =>
     key.startsWith('hubui.pendingTaskDeletes')
   ))).toEqual([]);
+
+  const resumedCard = page.locator('#task-list .task[data-request-id="resumed"]');
+  const resumedClose = resumedCard.getByRole('button', { name: 'Delete task' });
+  await expect(resumedClose).toBeVisible();
+  const resumedDeleteURL = '/api/tasks/resumed/delete';
+  const failed = page.waitForResponse(response => response.url().endsWith(resumedDeleteURL));
+  await resumedClose.click();
+  await expect(resumedCard).toHaveCount(0);
+  const firstDelete = await failed;
+  assert.equal(firstDelete.status(), 503);
+  const oldScope = firstDelete.request().postDataJSON();
+  assert.ok(oldScope.attempt_generations.resumed);
+
+  assert.equal((await page.request.post(`${baseURL}/test/resume`)).status(), 204);
+  allowResumedDelete = true;
+  const settled = page.waitForResponse(response => response.url().endsWith(resumedDeleteURL));
+  await page.reload();
+  const staleDelete = await settled;
+  assert.equal(staleDelete.status(), 404);
+  assert.deepEqual(staleDelete.request().postDataJSON(), oldScope);
+  await expect(resumedClose).toBeVisible();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('hubui.pendingTaskDeletes.resumed'))).toBeNull();
+
+  const freshDelete = page.waitForResponse(response => response.url().endsWith(resumedDeleteURL));
+  await resumedClose.click();
+  await expect(resumedCard).toHaveCount(0);
+  const freshResponse = await freshDelete;
+  assert.equal(freshResponse.status(), 200);
+  assert.notEqual(freshResponse.request().postDataJSON().attempt_generations.resumed, oldScope.attempt_generations.resumed);
 
   const filter = page.locator('#task-history-toggle');
   await filter.click();
