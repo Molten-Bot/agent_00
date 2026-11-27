@@ -8793,7 +8793,7 @@ func prepareAgentIOEnv(runDir string, environ []string) ([]string, error) {
 		return nil, fmt.Errorf("resolve agent io run directory: %w", err)
 	}
 
-	root := filepath.Join(runDir, ".agent00-agent-io")
+	root := filepath.Join(runDir, workspace.AgentIODirName)
 	homeDir := filepath.Join(root, "home")
 	tmpDir := filepath.Join(root, "tmp")
 	configDir := filepath.Join(root, "config")

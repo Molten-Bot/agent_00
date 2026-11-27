@@ -25,6 +25,9 @@ const (
 	workspaceRootNameEnv = "HARNESS_WORKSPACE_ROOT_NAME"
 )
 
+// AgentIODirName holds per-run tool state alongside the checkouts.
+const AgentIODirName = ".agent00-agent-io"
+
 var baseAllowsExecCache sync.Map
 
 // procSelfMountInfoPath and procMountsPath are overridden in tests so the
@@ -380,6 +383,11 @@ func pathWithinMount(path, mountPoint string) bool {
 		return strings.HasPrefix(path, "/")
 	}
 	return path == mountPoint || strings.HasPrefix(path, mountPoint+"/")
+}
+
+func cacheMountIntersects(root, path, mountPoint string) bool {
+	return mountPoint != root && pathWithinMount(mountPoint, root) &&
+		(pathWithinMount(path, mountPoint) || pathWithinMount(mountPoint, path))
 }
 
 func unescapeMountField(v string) string {

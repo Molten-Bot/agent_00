@@ -3,6 +3,7 @@
 package workspace
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,25 @@ import (
 
 	"golang.org/x/sys/unix"
 )
+
+// CheckCacheMounts rejects mounts between root and path or within path,
+// including bind mounts on the same filesystem.
+func CheckCacheMounts(root, path string) error {
+	f, err := os.Open(procSelfMountInfoPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 4096), 1024*1024)
+	for scanner.Scan() {
+		point, _, ok := parseMountInfoLine(scanner.Text())
+		if ok && cacheMountIntersects(root, path, point) {
+			return fmt.Errorf("cache tree contains mount %s", point)
+		}
+	}
+	return scanner.Err()
+}
 
 // statfsFunc is overridden in tests to simulate low-disk-space conditions
 // without requiring a real filesystem with little free space.

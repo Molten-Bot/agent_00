@@ -29,6 +29,7 @@ type AdaptiveScheduler struct {
 	logf           func(string, ...any)
 	sample         resourceSampler
 	diskSpace      func(string) (string, uint64, uint64, error)
+	reclaimDisk    func(path, device string, targetFree uint64)
 	memoryPressure func() bool
 	memoryPaused   bool
 
@@ -36,6 +37,7 @@ type AdaptiveScheduler struct {
 	waiters  []*taskWaiter
 	reserved map[string]*diskReservation
 	draining map[string]*taskWaiter
+	reclaims map[string]time.Time
 	running  int
 	allowed  int
 	window   []resourceSample
@@ -56,7 +58,8 @@ type taskWaiter struct {
 	root         string
 	device       string
 	diskBytes    uint64
-	diskBlocked  bool
+	diskBlock    string
+	queued       bool
 	drainDevices []string
 }
 
@@ -108,6 +111,12 @@ func WithSchedulerDiskSpace(sample func(string) (string, uint64, uint64, error))
 	return func(c *AdaptiveScheduler) { c.diskSpace = sample }
 }
 
+// WithSchedulerDiskReclaim supplies cleanup for a filesystem blocking admission.
+// The callback runs outside the scheduler lock.
+func WithSchedulerDiskReclaim(reclaim func(path, device string, targetFree uint64)) func(*AdaptiveScheduler) {
+	return func(c *AdaptiveScheduler) { c.reclaimDisk = reclaim }
+}
+
 // WithSchedulerMemoryPressure holds normal admission during severe host memory pressure.
 func WithSchedulerMemoryPressure(check func() bool) func(*AdaptiveScheduler) {
 	return func(c *AdaptiveScheduler) { c.memoryPressure = check }
@@ -126,6 +135,7 @@ func NewAdaptiveScheduler(cfg SchedulerConfig, logf func(string, ...any), option
 		diskSpace: workspace.DiskSpace,
 		reserved:  make(map[string]*diskReservation),
 		draining:  make(map[string]*taskWaiter),
+		reclaims:  make(map[string]time.Time),
 		allowed:   cfg.MaxParallel,
 		stopCh:    make(chan struct{}),
 	}
@@ -218,11 +228,12 @@ func (c *AdaptiveScheduler) acquire(ctx context.Context, requestID string, disk 
 	acquireErr = waiter.err
 	queued = !granted && acquireErr == nil
 	if queued {
+		waiter.queued = true
 		queueDepth = len(c.waiters)
 		running = c.running
 		allowed = c.allowed
-		if waiter.diskBlocked {
-			queueReason = " reason=disk_space"
+		if waiter.diskBlock != "" {
+			queueReason = " reason=disk_space " + waiter.diskBlock
 		} else if c.memoryPressure != nil && c.memoryPressure() {
 			queueReason = " reason=host_memory_pressure"
 		}
@@ -307,7 +318,7 @@ func (c *AdaptiveScheduler) acquireForce(ctx context.Context, requestID string, 
 	}
 
 	requestID = strings.TrimSpace(requestID)
-	waiter := &taskWaiter{disk: disk}
+	waiter := &taskWaiter{disk: disk, requestID: requestID}
 
 	c.mu.Lock()
 	if c.closed {
@@ -351,6 +362,7 @@ func (c *AdaptiveScheduler) releaseLocked(waiter *taskWaiter) {
 		reservation := c.reserved[waiter.device]
 		bytes := new(big.Int).SetUint64(waiter.diskBytes)
 		reservation.total.Sub(&reservation.total, bytes)
+		delete(reservation.holders, waiter)
 		if waiter.disk.CleanupOnCompletion {
 			reservation.cleanupWorkspaces--
 		}
@@ -381,9 +393,13 @@ func (c *AdaptiveScheduler) tryGrantLocked(start int) {
 	}
 	for i := start; c.running < c.allowed && i < len(c.waiters); {
 		waiter := c.waiters[i]
+		wasDiskBlocked := waiter.diskBlock != ""
 		granted, err := c.reserveDiskLocked(waiter, false, samples, preparedRoots)
 		if !granted && err == nil {
-			waiter.diskBlocked = true
+			if waiter.queued && !wasDiskBlocked {
+				c.logf("task status=queued request_id=%s reason=disk_space %s",
+					stringsx.FirstNonEmpty(waiter.requestID, fmt.Sprintf("queued-%d", waiter.id)), waiter.diskBlock)
+			}
 			for _, device := range waiter.drainDevices {
 				c.draining[device] = waiter
 			}

@@ -4,6 +4,8 @@ package workspace
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -11,6 +13,35 @@ import (
 
 	"golang.org/x/sys/unix"
 )
+
+func TestCheckCacheMountsRejectsBindMounts(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "mountinfo")
+	orig := procSelfMountInfoPath
+	procSelfMountInfoPath = source
+	t.Cleanup(func() { procSelfMountInfoPath = orig })
+	const root = "/data/issue-workspaces"
+	const cache = root + "/archive/cache/npm"
+	for _, tc := range []struct {
+		mount string
+		block bool
+	}{
+		{mount: root},
+		{mount: root + "/active/cache"},
+		{mount: root + "/archive", block: true},
+		{mount: cache, block: true},
+		{mount: cache + "/content", block: true},
+	} {
+		t.Run(tc.mount, func(t *testing.T) {
+			mountInfo := fmt.Sprintf("24 23 8:1 /other/source %s rw,relatime - ext4 /dev/sda1 rw\n", tc.mount)
+			if err := os.WriteFile(source, []byte(mountInfo), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := CheckCacheMounts(root, cache); (err != nil) != tc.block {
+				t.Fatalf("mount %s, want block=%t, got %v", tc.mount, tc.block, err)
+			}
+		})
+	}
+}
 
 // TestCheckWorkspaceSpaceReturnsErrorForNonexistentPath exercises the real
 // statfs error path: no fake/seam is needed since a nonexistent path
