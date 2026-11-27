@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -189,5 +190,72 @@ func TestIssueTaskSnapshotKeepsRetryAndCompletionOnOneTask(t *testing.T) {
 	}
 	if len(f.submissions) != 1 {
 		t.Fatalf("test fixture submitted %d issue tasks", len(f.submissions))
+	}
+}
+
+func TestIssueTaskUsesDurableStateAfterRestart(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	reconcileOrAdmitTestIssue(t.Context(), s)
+	record := completeRecoveryRecord(t, s, workflow.OutcomeReviewPending, 1)
+	record.PRURL = "https://github.com/acme/repo/pull/42"
+	record.RunError = "review: the current head has no clean review"
+	definitions, err := s.Workflows.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := workflow.Run{
+		ID: record.Run.Workflow.EventID, RequestID: record.RequestID, PRURL: record.PRURL,
+		Workflow: definitions.Workflows[0], Status: "awaiting_review",
+		Reason: "Waiting for review", GitHubRetryAt: time.Now().Add(time.Minute),
+		Outcome: &workflow.Outcome{Status: workflow.OutcomeReviewPending, Reason: record.RunError},
+	}
+	journal, err := json.Marshal(map[string]any{
+		"version": 2, "observations": map[string]any{}, "baselines": map[string]bool{}, "runs": []workflow.Run{run},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(s.Workflows.StatePath, journal, 0600); err != nil {
+		t.Fatal(err)
+	}
+	s.Broker = NewBroker()
+	s.ResolveTaskControls = func(string) TaskControls { return TaskControls{Run: true} }
+	taskID := issueTaskID(record.Run.GitHubIssue, record.Run.Workflow)
+	for _, tc := range []struct{ state, status, issueState string }{
+		{"verifying", "queued", "awaiting_review"},
+		{localruntime.IssueChecksPending, "queued", localruntime.IssueChecksPending},
+		{"blocked", "error", "blocked"},
+		{localruntime.IssueStateMergedUnverified, "merged", localruntime.IssueStateMerged},
+	} {
+		t.Run(tc.state, func(t *testing.T) {
+			record.State, record.Error = tc.state, mergedUnverifiedIssueError
+			if err := s.IssueClaims.Save(record); err != nil {
+				t.Fatal(err)
+			}
+			tasks := s.snapshot().Tasks
+			if len(tasks) != 1 || tasks[0].TaskID != taskID || tasks[0].Status != tc.status || tasks[0].IssueState != tc.issueState {
+				t.Fatalf("task status after restart: %+v", tasks)
+			}
+			task := tasks[0]
+			if tc.status == "merged" && (task.RetryAt != "" || task.ReviewGate != "" || task.Error != "" ||
+				task.CanRerun || task.Controls.Run || task.IssueAttempts[0].Error != record.RunError ||
+				task.IssueAttempts[0].Detail != mergedUnverifiedIssueError) {
+				t.Fatalf("merged task lost history or kept active controls: %+v", task)
+			}
+		})
+	}
+
+	var transitions []string
+	s.Workflows.Logf = func(format string, args ...any) {
+		transitions = append(transitions, fmt.Sprintf(format, args...))
+	}
+	if err := s.ReconcileIssueWork(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := s.Workflows.Runs()
+	if err != nil || len(runs) != 0 || len(f.submissions) != 1 || len(transitions) != 1 ||
+		!strings.Contains(transitions[0], "status=merged reason=external_merge") {
+		t.Fatalf("merged claim did not settle stale workflow: %+v, transitions %v (err %v)", runs, transitions, err)
 	}
 }

@@ -78,6 +78,10 @@ func prepareIssueExecution(store *localruntime.IssueClaimStore, run config.Confi
 		lock.Close()
 		return nil, "", err
 	}
+	if record.PRMerged() {
+		lock.Close()
+		return nil, record.RequestID, nil
+	}
 	if record.Control != "" {
 		lock.Close()
 		return nil, "", fmt.Errorf("issue is %s; explicit resume required", record.Control)
@@ -214,6 +218,11 @@ func (e *issueExecution) finish(ctx context.Context, state string, result app.Re
 				record.NextAttemptAt = e.policy.RetryDeadline(stoppedAt, record.ID, record.Failures, result.Err)
 				record.Error = fmt.Sprintf("Waiting for GitHub check verification. Retry after %s.", record.NextAttemptAt.UTC().Format(time.RFC3339))
 			}
+		}
+		if result.ReviewInterrupted && record.PRURL != "" {
+			record.State = localruntime.IssueStateMerged
+			record.NextAttemptAt = time.Time{}
+			record.UnlockPending = record.LabelAdded
 		}
 		if journalErr != nil || ((state == "error" || state == "interrupted") &&
 			(workspace.IsDiskFull(result.Err) || errors.Is(result.Err, workspace.ErrUnsuitableStorage))) {

@@ -37,6 +37,19 @@ func (f *recoveryGitHub) Run(ctx context.Context, cmd execx.Command) (execx.Resu
 	if strings.Contains(args, "/pulls?") {
 		return execx.Result{Stdout: f.prs}, nil
 	}
+	if _, number, ok := strings.Cut(args, "/pulls/"); ok {
+		var prs []json.RawMessage
+		if err := json.Unmarshal([]byte(f.prs), &prs); err != nil {
+			return execx.Result{}, err
+		}
+		for _, raw := range prs {
+			var pr struct{ Number int }
+			if json.Unmarshal(raw, &pr) == nil && fmt.Sprint(pr.Number) == number {
+				return execx.Result{Stdout: string(raw)}, nil
+			}
+		}
+		return execx.Result{Stdout: "{}"}, nil
+	}
 	if strings.Contains(args, "--method DELETE") {
 		f.deletes++
 		if f.deleteError {
@@ -630,7 +643,7 @@ func TestIssueRecoveryVerifiesPRDespiteFailure(t *testing.T) {
 				t.Fatal(err)
 			}
 			got := latestRecoveryRecord(t, s)
-			if (got.State == "fulfilled") != tc.fulfilled {
+			if (got.Fulfilled() || got.PRMerged()) != tc.fulfilled || got.PRMerged() != (tc.merged != "null") {
 				t.Fatalf("state=%s", got.State)
 			}
 			if tc.fulfilled && got.PRURL != prURL {
@@ -687,8 +700,8 @@ func TestIssueRecoveryKeepsExistingMergeTarget(t *testing.T) {
 	if err := s.ReconcileIssueWork(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := latestRecoveryRecord(t, s); got.State != "fulfilled" || got.PRURL != "https://github.com/acme/repo/pull/42" {
-		t.Fatalf("recovery state = %q, PR = %q, want fulfilled with PR 42", got.State, got.PRURL)
+	if got := latestRecoveryRecord(t, s); !got.PRMerged() || got.PRURL != "https://github.com/acme/repo/pull/42" {
+		t.Fatalf("recovery state = %q, PR = %q, want merged with PR 42", got.State, got.PRURL)
 	}
 	task, ok := s.Broker.Task(record.RequestID)
 	if !ok || task.PRURL != trackedURL || task.Status != "completed" {
@@ -917,7 +930,7 @@ func TestIssueRecoveryPreservesFailedVerificationAfterExternalMerge(t *testing.T
 			restarted.GitHubIssueRunner, restarted.IssueRecovery, restarted.Workflows = f, s.IssueRecovery, s.Workflows
 			if mode == "explicit retry" {
 				if response := retryIssue(t, restarted, record.ID, true); response.Code != http.StatusConflict ||
-					!strings.Contains(response.Body.String(), mergedUnverifiedIssueError) {
+					!strings.Contains(response.Body.String(), "pull request is already merged") {
 					t.Fatalf("retry after merge: status=%d body=%s", response.Code, response.Body.String())
 				}
 			}
@@ -934,6 +947,43 @@ func TestIssueRecoveryPreservesFailedVerificationAfterExternalMerge(t *testing.T
 				t.Fatalf("external merge lost failed verification history: %+v, submissions=%d", got, len(f.submissions))
 			}
 		})
+	}
+}
+
+func TestMergedIssueStopsChecksAndReleasesReservation(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	reconcileOrAdmitTestIssue(t.Context(), s)
+	record := latestRecoveryRecord(t, s)
+	record.PRURL = "https://github.com/acme/repo/pull/42"
+	record.PRVerification = "Verify draft on the current head."
+	record.State, record.Outcome = localruntime.IssueChecksPending, localruntime.IssueChecksPending
+	record.NextAttemptAt = time.Now().Add(time.Hour)
+	if err := s.IssueClaims.BeginExecution(record); err != nil {
+		t.Fatal(err)
+	}
+	reserve := filepath.Join(s.IssueClaims.Root, ".storage-reserve-"+record.ID)
+	if _, err := os.Stat(reserve); err != nil {
+		t.Fatal(err)
+	}
+	s.Broker.IngestLog("task status=queued request_id=" + record.RequestID)
+	s.StopTask = func(_ context.Context, requestID string) error {
+		s.Broker.IngestLog("task status=stopped request_id=" + requestID)
+		return nil
+	}
+	// The exact linked PR still identifies the task after a branch rename.
+	f.prs = recoveryPR("closed", `"2026-01-01T00:00:00Z"`, "renamed-branch", "main")
+	if err := s.ReconcileIssueWork(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	got := latestRecoveryRecord(t, s)
+	task, ok := s.Broker.Task(record.RequestID)
+	if !got.PRMerged() || got.PRVerification != record.PRVerification || !got.NextAttemptAt.IsZero() ||
+		got.LabelAdded || got.UnlockPending || f.deletes != 1 || len(f.submissions) != 1 || !ok || task.Status != "merged" {
+		t.Fatalf("merge left queued checks or lost history: record=%+v task=%+v", got, task)
+	}
+	if _, err := os.Stat(reserve); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("execution reserve still exists: %v", err)
 	}
 }
 

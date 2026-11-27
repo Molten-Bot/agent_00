@@ -2057,6 +2057,9 @@ func (s Server) withTaskControls(snapshot Snapshot) Snapshot {
 	}
 
 	for i := range snapshot.Tasks {
+		if snapshot.Tasks[i].IssueState == localruntime.IssueStateMerged {
+			continue
+		}
 		snapshot.Tasks[i].Controls = s.ResolveTaskControls(snapshot.Tasks[i].RequestID)
 	}
 	return snapshot

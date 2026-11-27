@@ -1273,7 +1273,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if strings.Contains(markup[promptOnlyStart:promptOnlyCloseAction], "renderOutputToggle") {
 		t.Fatalf("expected index html prompt-only mode to hide terminal output controls")
 	}
-	if !strings.Contains(markup[promptOnlyStart:promptOnlyCloseAction], "const githubAction = renderTaskPullRequestAction(task);") {
+	if !strings.Contains(markup[promptOnlyStart:promptOnlyCloseAction], "const githubAction = !issuePrimaryAction && renderTaskPullRequestAction(task);") {
 		t.Fatalf("expected index html prompt-only mode to include completed-task GitHub pull request links")
 	}
 	if !strings.Contains(markup, "function githubRepoPathFromValue(value)") ||
@@ -1297,11 +1297,11 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, "`${repoURL}/tree/${branch.split(\"/\").map(encodeURIComponent).join(\"/\")}`") {
 		t.Fatalf("expected index html to use branch links when no pull-request URL is available")
 	}
-	if !strings.Contains(markup, "function renderTaskPullRequestAction(task)") ||
-		!strings.Contains(markup, `link.className = "task-github-link";`) ||
+	if !strings.Contains(markup, `function renderTaskPullRequestAction(task, text = "")`) ||
+		!strings.Contains(markup, `link.className = text ? "task-issue-action" : "task-github-link";`) ||
 		!strings.Contains(markup, `link.href = prURL;`) ||
 		!strings.Contains(markup, `logo.src = GITHUB_LOGO_URL;`) ||
-		strings.Count(markup, "const githubAction = renderTaskPullRequestAction(task);") < 2 {
+		strings.Count(markup, "const githubAction = !issuePrimaryAction && renderTaskPullRequestAction(task);") < 2 {
 		t.Fatalf("expected completed task cards to render GitHub-logo pull request links")
 	}
 	if !strings.Contains(markup, "function openExternalTaskLink(event, url, trackOpen)") ||

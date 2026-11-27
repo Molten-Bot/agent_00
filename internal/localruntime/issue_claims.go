@@ -86,7 +86,12 @@ func (r IssueClaimRecord) FailureDetail() string {
 
 // Fulfilled excludes older records that reconciled a merge with pending verification.
 func (r IssueClaimRecord) Fulfilled() bool {
-	return r.State == "fulfilled" && r.PRVerification == ""
+	return (r.State == "fulfilled" || r.State == IssueStateMerged) && r.PRVerification == ""
+}
+
+// PRMerged includes legacy receipts with incomplete verification evidence.
+func (r IssueClaimRecord) PRMerged() bool {
+	return r.State == IssueStateMerged || r.State == IssueStateMergedUnverified
 }
 
 type IssueClaimStore struct {
@@ -102,6 +107,7 @@ var issueClaimIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 var ErrIssueOwnershipChanged = errors.New("issue ownership changed; start the issue again to create a new attempt")
 
 const (
+	IssueStateMerged                = "merged"
 	IssueStateMergedUnverified      = "merged_unverified"
 	IssueChecksPending              = "checks_pending"
 	IssueIncidentUnmergedDependency = "unmerged_dependency"
@@ -280,7 +286,7 @@ func readIssueRecord(path string) (IssueClaimRecord, error) {
 	if !issueClaimIDPattern.MatchString(record.ID) || filepath.Base(path) != record.ID+".json" || record.Run.GitHubIssue == nil || record.Run.GitHubIssue.Claim == nil || record.Run.GitHubIssue.Claim.ID != record.ID {
 		return record, fmt.Errorf("invalid persisted issue claim")
 	}
-	if record.ExecutionAgentAttempts != nil && (record.Outcome == "" || record.Outcome == IssueChecksPending) {
+	if record.ExecutionAgentAttempts != nil && !record.PRMerged() && (record.Outcome == "" || record.Outcome == IssueChecksPending) {
 		_, err := os.Stat(issueStorageReserve(filepath.Dir(path), record.ID))
 		if errors.Is(err, os.ErrNotExist) {
 			record.AgentAttempts = *record.ExecutionAgentAttempts

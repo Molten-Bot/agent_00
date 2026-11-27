@@ -828,7 +828,7 @@ test('Studio keeps issue retries and completion under one task', async t => {
     workflow_name: 'Issue delivery', issue_planning_status: 'In review',
     github_issue_url: 'https://github.com/example/project/issues/42',
     pr_url: 'https://github.com/example/project/pull/43', repo: 'example/project',
-    started_at: now, updated_at: now, status: 'error', issue_state: 'blocked',
+    started_at: now, updated_at: now, status: 'error', issue_state: 'blocked', can_rerun: true,
     error: 'Pull request head changed', issue_attempts: [{
       number: 1, request_id: 'issue-first', status: 'review_pending', stage: 'review',
       error: 'Pull request head changed',
@@ -837,33 +837,45 @@ test('Studio keeps issue retries and completion under one task', async t => {
   const { page } = await openPage(t, 'current-work', { width: 430, height: 932 }, true, [first]);
   const cards = page.locator('#task-list .task');
   const task = cards.locator('xpath=self::*[@data-task-id="issue-workflow-42"]');
-  await task.getByText('Pull request head changed', { exact: true }).waitFor();
+  await task.getByText('Blocked', { exact: true }).waitFor();
+  await task.getByRole('button', { name: 'Retry task' }).waitFor();
+  assert.equal(await task.getByText(/Pull request head changed/).isVisible(), false);
   await task.locator('summary').click();
+  await task.getByText(/Pull request head changed/).waitFor();
+  assert.equal(await task.getByText(/Pull request head changed/).count(), 1);
 
   const update = changes => page.evaluate(next => {
-    queueStreamSnapshot(JSON.stringify({ ...state.snapshot, tasks: [next] }));
+    render({ ...state.snapshot, tasks: [next] });
   }, { ...first, ...changes });
   const attempts = [...first.issue_attempts, {
-    number: 2, request_id: 'issue-retry', status: 'running', stages: ['checks', 'review', 'pr_verification'],
+    number: 2, request_id: 'issue-retry', status: 'running', stage: 'review', stages: ['checks', 'review', 'pr_verification', 'review'],
   }];
+  await update({ status: 'queued', issue_state: 'awaiting_review' });
+  await task.getByText('Waiting for review on the current head', { exact: true }).waitFor();
+  await update({ status: 'queued', issue_state: 'checks_pending' });
+  await task.getByText('Waiting for GitHub checks', { exact: true }).waitFor();
   await update({
     request_id: 'issue-retry', status: 'queued', issue_state: 'retry_wait', error: 'GitHub checks unavailable',
     retry_at: new Date(Date.now() + 60_000).toISOString(), issue_attempts: attempts,
   });
   await task.getByText(/Waiting to retry/).waitFor();
   await task.getByText(/GitHub checks unavailable.*Retry after/).waitFor();
-  await task.getByText(/Attempt 2.*checks.*pr verification/).waitFor();
+  await task.getByText('Attempt 2 · running · checks → review → pr verification', { exact: true }).waitFor();
   assert.equal(await cards.count(), 1);
   assert.equal(await task.getByRole('link', { name: 'Open pull request on GitHub.' }).getAttribute('href'), first.pr_url);
 
   await update({
-    request_id: 'issue-retry', status: 'merged', issue_state: 'fulfilled',
-    issue_planning_status: 'Done', error: '', issue_attempts: [
-      attempts[0], { ...attempts[1], status: 'completed' },
+    request_id: 'issue-retry', status: 'merged', issue_state: 'merged',
+    error: '', can_rerun: false, issue_attempts: [
+      attempts[0], { ...attempts[1], status: 'error', error: 'Pull request merged before draft verification passed' },
     ],
   });
+  await task.waitFor({ state: 'hidden' });
   await page.locator('#task-history-toggle').click();
-  await task.getByText(/Issue delivery · Done · Attempt history \(2\)/).waitFor();
+  await task.getByText('Merged', { exact: true }).waitFor();
+  assert.equal(await task.getByRole('button', { name: /rerun|re-run|retry|resume|recover/i }).count(), 0);
+  if (await task.locator('details').getAttribute('open') === null) await task.locator('summary').click();
+  await task.getByText(/Pull request merged before draft verification passed/).waitFor();
   assert.equal(await cards.count(), 1);
   assert.equal(await task.getByRole('link', { name: 'Open issue on GitHub.' }).getAttribute('href'), first.github_issue_url);
 });

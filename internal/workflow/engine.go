@@ -248,6 +248,7 @@ var ErrIssueAdmissionPending = errors.New("waiting for issue claim recovery")
 var ErrActivationNotFound = errors.New("workflow activation not found")
 
 const awaitingReview = "awaiting_review"
+const observedIssueMergeReason = "Issue pull request merge observed"
 
 func (e *Engine) load() (State, error) {
 	s := State{Version: 2, Observations: map[string]observation{}, Baselines: map[string]bool{}, Runs: []Run{}}
@@ -324,6 +325,8 @@ func (e *Engine) logRun(r Run, event string) {
 	case "Review writeback paused: workflow changed or was disabled":
 		reason = "review_writeback_paused"
 	case "Pull request merged externally during review":
+		reason = "external_merge"
+	case observedIssueMergeReason:
 		reason = "external_merge"
 	case "Pull request was already merged when the workflow checked":
 		reason = "merge_unconfirmed"
@@ -938,7 +941,9 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		if stale {
 			return nil
 		}
-		if i.Merged && reviewRequired {
+		if i.Merged && r.Item.Kind == "issue" {
+			r.Status, r.Reason = "merged", observedIssueMergeReason
+		} else if i.Merged && reviewRequired {
 			r.Status = "completed"
 			r.Reason = "Pull request was already merged when the workflow checked"
 		} else if i.Merged {
@@ -1026,6 +1031,36 @@ func (r Run) hasFailedPendingReview() bool {
 
 func (r Run) hasPendingReview() bool {
 	return r.Outcome != nil && r.Outcome.Status == OutcomeReviewPending && !r.Outcome.ReviewInterrupted
+}
+
+// ObserveIssueMerge releases the activation after the issue claim records the merge.
+func (e *Engine) ObserveIssueMerge(id, requestID, prURL string) error {
+	if id == "" || prURL == "" {
+		return nil
+	}
+	// A tick can be publishing the app's merge receipt or waiting on issue
+	// admission. Reconciliation retries this cleanup on its next pass.
+	if !e.tickMu.TryLock() {
+		return nil
+	}
+	defer e.tickMu.Unlock()
+	var merged Run
+	err := e.transaction(func(s *State) error {
+		r := s.run(id)
+		if r == nil || e.submitting[id] || r.Status == "merged" || (r.RequestID != "" && r.RequestID != requestID) ||
+			!strings.HasPrefix(r.Workflow.Trigger.Event, "issue.") ||
+			(r.PRURL != "" && !strings.EqualFold(r.PRURL, prURL)) {
+			return errJournalUnchanged
+		}
+		r.Status, r.Reason, r.PRURL = "merged", observedIssueMergeReason, prURL
+		r.RequestID, r.UpdatedAt, r.GitHubRetryAt = requestID, e.now(), time.Time{}
+		merged = *r
+		return nil
+	})
+	if err == nil && merged.ID != "" {
+		e.logRun(merged, "transition")
+	}
+	return err
 }
 
 // PrepareIssueRecovery retains the original event and merge policy before an

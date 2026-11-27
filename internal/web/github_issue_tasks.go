@@ -20,6 +20,7 @@ type issueTaskAttempt struct {
 	Stage     string   `json:"stage,omitempty"`
 	Stages    []string `json:"stages,omitempty"`
 	Error     string   `json:"error,omitempty"`
+	Detail    string   `json:"detail,omitempty"`
 }
 
 func issueTaskID(issue *config.GitHubIssueConfig, policy *config.WorkflowRunConfig) string {
@@ -79,8 +80,9 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 		latest := attempts[len(attempts)-1]
 		requestID := stringsx.FirstNonEmpty(latest.RequestID, "issue-"+latest.ID)
 		task, live := byRequest[requestID]
+		task.CanRerun = task.CanRerun && isCompletedTaskStatus(task.Status)
 		if !live && (latest.Version != 2 || s.Broker.issueTaskClosed(requestID) ||
-			(isCompletedTaskStatus(latest.Outcome) && latest.State != "blocked" &&
+			((latest.PRMerged() || isCompletedTaskStatus(latest.Outcome)) && latest.State != "blocked" &&
 				latest.State != "retry_wait" && time.Since(latest.UpdatedAt) >= defaultClosedTaskRetention)) {
 			continue
 		}
@@ -103,16 +105,24 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 			task.ReviewPolicy = taskReviewPolicy(latest.Run.Workflow, latest.Run.Review != nil || latest.Run.LibraryTaskName == "code-review")
 		}
 		task.PRURL = stringsx.FirstNonEmpty(latest.PRURL, task.PRURL)
+		merged := latest.PRMerged() || latest.PlanningStatus == issueDone || task.Status == "merged"
 		if latest.Run.Workflow != nil && !latest.Run.Workflow.IsDefaultExecution() {
 			task.WorkflowID, task.WorkflowName = latest.Run.Workflow.ID, latest.Run.Workflow.Name
 			task.WorkflowTriggered = true
-			if run := delivery[latest.Run.Workflow.EventID]; run.RequestID == latest.RequestID {
+			if run := delivery[latest.Run.Workflow.EventID]; run.ID != "" && run.RequestID == latest.RequestID {
+				if run.Status == "merged" && run.PRURL != "" && (task.PRURL == "" || strings.EqualFold(task.PRURL, run.PRURL)) {
+					merged = true
+					task.PRURL = stringsx.FirstNonEmpty(task.PRURL, run.PRURL)
+				}
 				switch run.Status {
 				case "waiting", "awaiting_review":
-					task.IssueState = run.Status
-					task.ReviewGate = run.Reason
-					task.RetryAt = stringsx.FirstNonEmpty(formatTimeOrEmpty(run.GitHubRetryAt), task.RetryAt)
-					task.PRURL = stringsx.FirstNonEmpty(task.PRURL, run.PRURL)
+					switch task.IssueState {
+					case "", "verifying", "fulfilled", "review_pending":
+						task.IssueState = run.Status
+						task.ReviewGate = run.Reason
+						task.RetryAt = stringsx.FirstNonEmpty(formatTimeOrEmpty(run.GitHubRetryAt), task.RetryAt)
+						task.PRURL = stringsx.FirstNonEmpty(task.PRURL, run.PRURL)
+					}
 				}
 			}
 		}
@@ -133,16 +143,17 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 		if latest.UpdatedAt.After(parseTimeOrZero(task.UpdatedAt)) {
 			task.UpdatedAt = formatTimeOrEmpty(latest.UpdatedAt)
 		}
-		switch {
-		case latest.PlanningStatus == issueDone:
-			task.Status, task.Error, task.ReviewGate = "merged", "", ""
-		case task.IssueState == "retry_wait" || task.IssueState == localruntime.IssueChecksPending ||
-			task.IssueState == "waiting" || task.IssueState == "awaiting_review":
+		if (task.IssueState == "" || task.IssueState == "verifying" || task.IssueState == "fulfilled") &&
+			latest.Outcome == workflow.OutcomeReviewPending {
+			task.IssueState = workflow.OutcomeReviewPending
+		}
+		switch task.IssueState {
+		case "retry_wait", localruntime.IssueChecksPending, workflow.OutcomeReviewPending, "waiting", "awaiting_review":
 			if isCompletedTaskStatus(task.Status) || !live {
 				task.Status = "queued"
 			}
 			task.Error = stringsx.FirstNonEmpty(latest.Error, task.Error)
-		case task.IssueState == "blocked" || task.IssueState == localruntime.IssueStateMergedUnverified:
+		case "blocked":
 			task.Status = "error"
 			task.Error = stringsx.FirstNonEmpty(latest.Error, latest.RunError, task.Error)
 		}
@@ -156,8 +167,17 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 			}
 			task.IssueAttempts = append(task.IssueAttempts, issueTaskAttempt{
 				Number: attempt.Run.GitHubIssue.Claim.Attempt, RequestID: attempt.RequestID,
-				Status: status, Stage: stage, Stages: attempt.Stages, Error: attempt.FailureDetail(),
+				Status: status, Stage: stage, Stages: attempt.Stages, Error: attempt.FailureDetail(), Detail: attempt.Error,
 			})
+		}
+		if merged {
+			task.Status, task.IssueState, task.RetryAt = "merged", localruntime.IssueStateMerged, ""
+			task.Stage, task.StageStatus, task.ExitCode = "finalize", "merged", 0
+			task.CanRerun, task.Controls = false, TaskControls{}
+			task.Error, task.ReviewGate, task.Warning = "", "", ""
+			if task.PRTitleURL != "" && !strings.EqualFold(task.PRTitleURL, task.PRURL) {
+				task.PRTitle, task.PRTitleURL, task.PRTitleUpdatedAt = "", "", ""
+			}
 		}
 		for i := len(attempts) - 1; task.PRURL == "" && i >= 0; i-- {
 			task.PRURL = stringsx.FirstNonEmpty(attempts[i].PRURL, byRequest[attempts[i].RequestID].PRURL)
