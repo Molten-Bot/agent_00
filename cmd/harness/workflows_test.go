@@ -9,8 +9,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/config"
+	"github.com/Molten-Bot/agent_00/internal/githubutil"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/web"
 	"github.com/Molten-Bot/agent_00/internal/workflow"
@@ -263,6 +265,82 @@ func TestConfigureWorkflowsNeverImportsLegacyConfiguration(t *testing.T) {
 				t.Fatal("startup changed legacy settings", err)
 			}
 		})
+	}
+}
+
+func TestWorkflowWritebackClearsPendingReviewArchive(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	cfg := localruntime.InitConfig{RuntimeConfigPath: filepath.Join(root, "config.json")}
+	if err := os.WriteFile(cfg.RuntimeConfigPath, []byte(`{"workflow_enabled":true}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	broker := web.NewBroker()
+	server := web.NewServer("", broker)
+	if err := configureWorkflows(t.Context(), cfg, nil, &server, broker, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	engine := server.Workflows
+	w := workflow.Definition{ID: "review-writeback", Name: "Review writeback", Repository: "acme/repo", Enabled: true,
+		Trigger: workflow.Trigger{Event: "app.prompt"}, Filters: workflow.Filters{Mode: "all"},
+		Task: workflow.Task{Kind: "implement", IssueLinkMode: "reference"}, Merge: workflow.Merge{Method: "squash"}}
+	if _, err := engine.Store.Save(workflow.Document{Version: workflow.Version, Workflows: []workflow.Definition{w}}); err != nil {
+		t.Fatal(err)
+	}
+	const requestID, prURL, head = "local-review", "https://github.com/acme/repo/pull/42", "abc"
+	finishedAt := time.Now().UTC()
+	engine.Now = func() time.Time { return finishedAt }
+	outcome := workflow.Outcome{Status: "succeeded", PRURL: prURL, CompletedAt: finishedAt.Add(-time.Minute),
+		ReviewReceipt: &githubutil.ReviewReceipt{PRURL: prURL, Head: head, Run: requestID, Pass: 1, ReviewID: 42,
+			Marker: "<!-- test review -->", URL: prURL + "#pullrequestreview-42",
+			Policy: githubutil.ReviewPolicy{Hash: w.ExecutionPolicyHash()},
+			Result: json.RawMessage(`{"status":"clean","mergeReady":true,"findings":[]}`)},
+		PendingReviewGate: &githubutil.PendingReviewGate{MarkReady: true},
+	}
+	var activationID string
+	_, err := engine.DispatchInput(t.Context(), w, func(run workflow.Run) (string, error) {
+		activationID = run.ID
+		policy := run.ReviewPolicy()
+		outcome.ReviewReceipt.Policy.FixPasses = policy.ReviewCycles
+		outcome.ReviewReceipt.Policy.Complexity = policy.ReviewAgent.Complexity
+		return requestID, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := archiveTaskReviewOutcome(root, requestID, false, outcome); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Complete(activationID, outcome); err != nil {
+		t.Fatal(err)
+	}
+	engine.InspectPR = func(context.Context, string, string) (workflow.Item, error) {
+		return workflow.Item{Open: true, Draft: true, HeadSHA: head}, nil
+	}
+	engine.FinishReview = func(context.Context, githubutil.ReviewReceipt, *githubutil.PendingReviewGate) error {
+		return githubutil.ErrReviewThreadsPending
+	}
+	if err := engine.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if retain, err := retainMergedReviewLogs(root, requestID); err != nil || !retain {
+		t.Fatalf("pending writeback should keep logs: retain=%t, err=%v", retain, err)
+	}
+	engine.FinishReview = func(context.Context, githubutil.ReviewReceipt, *githubutil.PendingReviewGate) error {
+		return nil
+	}
+	if err := engine.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if runs, err := engine.Runs(); err != nil || len(runs) != 0 {
+		t.Fatalf("completed writeback left an active workflow: %+v, %v", runs, err)
+	}
+	if retain, err := retainMergedReviewLogs(root, requestID); err != nil || retain {
+		t.Fatalf("completed writeback should allow cleanup: retain=%t, err=%v", retain, err)
+	}
+	archived, err := workflow.LoadReviewOutcome(root, requestID)
+	if err != nil || archived.ReviewReceipt == nil || archived.ReviewReceipt.Head != head || !archived.CompletedAt.Equal(finishedAt) {
+		t.Fatalf("completed archive lost review evidence or timing: %+v, %v", archived, err)
 	}
 }
 

@@ -892,7 +892,13 @@ func runServer(args []string) int {
 			usage := localruntime.ReadRuntimeConfigLibraryTaskUsage(cfg.RuntimeConfigPath)
 			return library.OrderSummariesByUsage(catalog.Summaries(), usage), nil
 		}
-		cleanupTaskLogs := func(requestID string, automatic bool) error {
+		cleanupTaskLogs := func(ctx context.Context, requestID string, automatic bool) error {
+			if automatic {
+				// The monitor can see a merge before the worker archives its evidence.
+				if err := localTaskController.waitForCompletion(ctx, requestID); err != nil {
+					return err
+				}
+			}
 			records, err := issueClaims.List()
 			if err != nil {
 				return err
@@ -902,11 +908,6 @@ func runServer(args []string) int {
 				return fmt.Errorf("unresolved issue evidence is retained; resolve or explicitly abandon the issue before deleting it")
 			}
 			if automatic {
-				// Terminal status can reach the monitor while the worker is still
-				// archiving review evidence.
-				if _, err := localTaskController.handleFor(requestID); err == nil {
-					return nil
-				}
 				if retainMergedIssueLogs(record) {
 					return nil
 				}
@@ -1015,8 +1016,8 @@ func runServer(args []string) int {
 				return enqueueLocalRun(reqCtx, retryCfg, rerunSource, force)
 			})
 		}
-		uiServer.CloseTask = func(_ context.Context, requestID string) error {
-			return cleanupTaskLogs(requestID, false)
+		uiServer.CloseTask = func(ctx context.Context, requestID string) error {
+			return cleanupTaskLogs(ctx, requestID, false)
 		}
 		uiServer.ResolveTaskControls = localTaskController.Controls
 		uiServer.PauseTask = func(_ context.Context, requestID string) error {
@@ -1080,8 +1081,8 @@ func runServer(args []string) int {
 			Runner:   runner,
 			Broker:   monitorBroker,
 			Logf:     daemonLogger,
-			CleanupTask: func(_ context.Context, requestID string) error {
-				return cleanupTaskLogs(requestID, true)
+			CleanupTask: func(ctx context.Context, requestID string) error {
+				return cleanupTaskLogs(ctx, requestID, true)
 			},
 			MemoryPressure:    memoryPressure,
 			RepositoryAllowed: uiServer.RepositoryAllowed,

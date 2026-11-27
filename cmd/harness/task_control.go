@@ -20,6 +20,7 @@ type localTaskController struct {
 
 type localTaskHandle struct {
 	cancel context.CancelCauseFunc
+	done   chan struct{}
 
 	mu            sync.Mutex
 	paused        bool
@@ -46,7 +47,7 @@ func (c *localTaskController) Register(requestID string, cancel context.CancelCa
 		return nil
 	}
 
-	handle := &localTaskHandle{cancel: cancel}
+	handle := &localTaskHandle{cancel: cancel, done: make(chan struct{})}
 	c.mu.Lock()
 	if c.tasks == nil {
 		c.tasks = map[string]*localTaskHandle{}
@@ -66,8 +67,25 @@ func (c *localTaskController) Complete(requestID string) {
 	}
 
 	c.mu.Lock()
+	if handle := c.tasks[requestID]; handle != nil {
+		close(handle.done)
+	}
 	delete(c.tasks, requestID)
 	c.mu.Unlock()
+}
+
+func (c *localTaskController) waitForCompletion(ctx context.Context, requestID string) error {
+	for {
+		handle, err := c.handleFor(requestID)
+		if err != nil {
+			return ctx.Err()
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-handle.done:
+		}
+	}
 }
 
 func (c *localTaskController) handleFor(requestID string) (*localTaskHandle, error) {

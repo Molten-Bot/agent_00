@@ -160,6 +160,82 @@ func TestPendingChecksReserveActivationUntilCurrentHeadIsReviewed(t *testing.T) 
 	}
 }
 
+func TestPausedWorkflowReconcilesExternalMergeWithoutWriteback(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name, status string
+		outcome      *Outcome
+	}{
+		{name: "checks pending", status: OutcomeChecksPending},
+		{name: "review pending", status: awaitingReview, outcome: &Outcome{Status: OutcomeReviewPending}},
+		{name: "writeback pending", status: awaitingReview, outcome: &Outcome{Status: "succeeded", PendingReviewGate: &githubutil.PendingReviewGate{MarkReady: true}}},
+		{name: "merge pending", status: "waiting"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			w := definition("paused")
+			w.Merge.Enabled = true
+			paused := w
+			paused.Enabled = false
+			e, _, submissions := testEngine(t, paused)
+			const prURL = "https://github.com/acme/repo/pull/42"
+			item := Item{Kind: "issue", Repository: w.Repository, Number: 1}
+			run := Run{ID: "activation", RequestID: "task", Workflow: w, Item: item, PRURL: prURL, Status: test.status, Outcome: test.outcome}
+			if run.Outcome != nil && run.Outcome.PendingReviewGate != nil {
+				run.Outcome.PRURL = prURL
+				run.Outcome.ReviewReceipt = fixtureReviewReceipt(w, prURL)
+			}
+			state, err := e.load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			state.Runs = []Run{run}
+			if err := e.save(state); err != nil {
+				t.Fatal(err)
+			}
+			e.InspectPR = func(context.Context, string, string) (Item, error) {
+				t.Fatal("paused workflow ran eligibility inspection")
+				return Item{}, nil
+			}
+			e.FinishReview = func(context.Context, githubutil.ReviewReceipt, *githubutil.PendingReviewGate) error {
+				t.Fatal("paused workflow ran writeback")
+				return nil
+			}
+			e.Merge = func(context.Context, Run) error {
+				t.Fatal("paused workflow requested merge")
+				return nil
+			}
+			mergedAt := time.Now().UTC()
+			pr := Item{Open: true}
+			e.InspectPRState = func(_ context.Context, repo, url string) (Item, error) {
+				if repo != w.Repository || url != prURL {
+					t.Fatalf("unexpected inspection of %s %s", repo, url)
+				}
+				return pr, nil
+			}
+			recorded := 0
+			e.RecordMerge = func(got Run, at time.Time) error {
+				recorded++
+				if got.ID != run.ID || got.RequestID != run.RequestID || got.Status != "merged" ||
+					got.Reason != externalMergeReason || !at.Equal(mergedAt) {
+					t.Fatalf("unexpected merge receipt: %+v at %v", got, at)
+				}
+				return nil
+			}
+			tick(t, e)
+			if runs, err := e.Runs(); err != nil || len(runs) != 1 || runs[0].Status != test.status || recorded != 0 {
+				t.Fatalf("open PR changed paused activation: %+v, %v, receipts=%d", runs, err, recorded)
+			}
+			pr = Item{Merged: true, MergedAt: mergedAt}
+			tick(t, e)
+			tick(t, e)
+			if runs, err := e.Runs(); err != nil || len(runs) != 0 || recorded != 1 || *submissions != 0 {
+				t.Fatalf("confirmed merge did not retire once: %+v, %v, receipts=%d, submissions=%d", runs, err, recorded, *submissions)
+			}
+		})
+	}
+}
+
 func TestPendingReviewRecoversFailedActivation(t *testing.T) {
 	t.Parallel()
 	for _, recorded := range []bool{false, true} {

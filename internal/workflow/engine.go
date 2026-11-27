@@ -252,9 +252,10 @@ type Engine struct {
 	Merge     func(context.Context, Run) error
 	Logf      func(string, ...any)
 
-	InspectPRState func(context.Context, string, string) (Item, error)
-	FinishReview   func(context.Context, githubutil.ReviewReceipt, *githubutil.PendingReviewGate) error
-	RecordMerge    func(Run, time.Time) error
+	InspectPRState      func(context.Context, string, string) (Item, error)
+	FinishReview        func(context.Context, githubutil.ReviewReceipt, *githubutil.PendingReviewGate) error
+	RecordReviewOutcome func(string, Outcome) error
+	RecordMerge         func(Run, time.Time) error
 	// MemoryPressure defers background ticks while host memory is exhausted.
 	MemoryPressure func() bool
 
@@ -867,22 +868,6 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		}
 		r.Status = "running"
 	}
-	if r.Status == OutcomeChecksPending {
-		if !active || e.InspectPRState == nil || !strings.Contains(r.PRURL, "/pull/") {
-			return nil
-		}
-		i, err := e.InspectPRState(ctx, r.Item.Repository, r.PRURL)
-		if err != nil {
-			waitForQuota(err)
-			return errors.Join(err, finish())
-		}
-		if !i.Merged {
-			return nil
-		}
-		mergedAt = i.MergedAt
-		r.Status, r.Reason = "merged", externalMergeReason
-		return finish()
-	}
 	if r.Status == "running" || r.hasFailedPendingReview() {
 		var o Outcome
 		if r.Outcome != nil {
@@ -959,8 +944,15 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		}
 		return finish()
 	}
-	if r.Status == awaitingReview && r.hasPendingReview() {
-		if active && e.InspectPRState != nil && strings.Contains(r.PRURL, "/pull/") {
+	pendingReview := r.Status == awaitingReview && r.hasPendingReview()
+	pendingWriteback := r.Status == awaitingReview && r.Outcome != nil && r.Outcome.PendingReviewGate != nil
+	writebackEnabled := pendingWriteback && active && e.StillEnabled(r.Workflow)
+	waiting := r.Status == "waiting" || r.Status == awaitingReview
+	// Observe operator merges even when workflow policy blocks further actions.
+	if r.Status == OutcomeChecksPending || pendingReview ||
+		(pendingWriteback && !writebackEnabled) || (waiting && !pendingWriteback && (!active || !w.Merge.Enabled)) {
+		if e.InspectPRState != nil && e.Allowed(r.Item.Repository) && !e.now().Before(r.GitHubRetryAt) &&
+			strings.Contains(r.PRURL, "/pull/") {
 			i, err := e.InspectPRState(ctx, r.Item.Repository, r.PRURL)
 			if err != nil {
 				waitForQuota(err)
@@ -972,6 +964,11 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 				return finish()
 			}
 		}
+	}
+	if r.Status == OutcomeChecksPending {
+		return nil
+	}
+	if pendingReview {
 		if !exists {
 			r.Status, r.Reason = "completed", "Originating workflow removed before review resumed"
 		} else if original.Status == awaitingReview {
@@ -980,12 +977,12 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		return finish()
 	}
 
-	if r.Status == awaitingReview && r.Outcome != nil && r.Outcome.PendingReviewGate != nil {
+	if pendingWriteback {
 		if !exists {
 			r.Status, r.Reason = "completed", "Originating workflow removed before review writeback"
 			return finish()
 		}
-		if !active || !e.StillEnabled(r.Workflow) {
+		if !writebackEnabled {
 			r.Reason = "Review writeback paused: workflow changed or was disabled"
 			return finish()
 		}
@@ -1053,8 +1050,15 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		case err != nil:
 			r.Reason = "Review writeback pending: " + err.Error()
 		default:
-			outcome.PendingReviewGate = nil
-			outcome.CompletedAt = e.now()
+			completed := outcome
+			completed.PendingReviewGate = nil
+			completed.CompletedAt = e.now()
+			if e.RecordReviewOutcome != nil && r.RequestID != "" {
+				if err := e.RecordReviewOutcome(r.RequestID, completed); err != nil {
+					return errors.Join(fmt.Errorf("archive completed review writeback: %w", err), finish())
+				}
+			}
+			r.Outcome = &completed
 			if r.Workflow.Merge.Enabled && w.Merge.Enabled {
 				r.Status, r.Reason = "waiting", "Waiting for checks and merge requirements"
 			} else {
@@ -1063,7 +1067,6 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		}
 		return finish()
 	}
-	waiting := r.Status == "waiting" || r.Status == awaitingReview
 	if waiting && (!exists || !w.Merge.Enabled) {
 		r.Status = "succeeded"
 		r.Reason = "Automatic merge disabled in current definition"
