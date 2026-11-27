@@ -1111,6 +1111,11 @@ func (h Harness) finalizePullRequestReview(
 			if err := h.requireWorkspace(ctx); err != nil {
 				return ExitWorkspace, "workspace", err
 			}
+			if repo.ReviewReceipt.Pass > 1 {
+				err = h.confirmPublishedReviewHead(ctx, *repo, repo.ReviewReceipt.Head)
+			}
+		}
+		if err == nil {
 			h.logf("stage=pr_verification status=start action=verify_handoff")
 			err = h.verifyDraftHandoff(ctx, *repo, runtime, codexOpts, evidence)
 		}
@@ -1137,6 +1142,9 @@ func (h Harness) finalizePullRequestReview(
 		h.logf("stage=pr_verification status=ok")
 	}
 	if repo.ReviewReceipt.Pass > 1 || repo.PRVerification != "" {
+		if err := h.requireWorkspace(ctx); err != nil {
+			return ExitWorkspace, "workspace", err
+		}
 		if err := h.confirmPublishedReviewHead(ctx, *repo, repo.ReviewReceipt.Head); err != nil {
 			repo.ReviewReceipt = nil
 			return ExitPR, "review", err
@@ -1638,10 +1646,12 @@ func (h Harness) checkPublishedPullRequest(
 				if err != nil {
 					return ExitPR, "checks", err
 				}
-				if !emptyCheckRollupSettled(required, bucket) {
+				if bucket == "pending" || (bucket == "" && len(required) > 0) {
 					return ExitPR, "checks", fmt.Errorf("%w: current check results are pending or missing", ErrChecksUnavailable)
 				}
 				if bucket != "fail" {
+					// The deferred current-head gate verifies required results even
+					// when the CLI rollup lags a completed dispatch.
 					return ExitSuccess, "", nil
 				}
 				checkSummary = summary
@@ -5053,6 +5063,9 @@ func (h Harness) runFinalReviewCycle(
 		)
 		if err != nil {
 			return exitCode, stage, err
+		}
+		if repo.PRAlreadyMerged {
+			return ExitSuccess, "", nil
 		}
 		h.logf(
 			"stage=review_checks status=ok action=verify review_mode=%s pass=%d total=%d repo=%s repo_dir=%s pr_url=%s",

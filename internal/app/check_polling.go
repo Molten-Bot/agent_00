@@ -14,7 +14,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/stringsx"
 )
 
-// CheckTimings learns how long check waits take per repository and phase.
+// CheckTimings learns how long CI waits take per repository.
 // Share one instance across the daemon's task attempts.
 type CheckTimings struct {
 	mu       sync.Mutex
@@ -77,7 +77,8 @@ func newCheckPoll(stage, prURL string) checkPoll {
 	target := strings.ToLower(githubutil.PullRequestRepository(prURL))
 	var key string
 	if target != "" {
-		key = target + "/" + stage
+		// Draft verification waits on the same CI, but starts partway through it.
+		key = target + "/checks"
 	}
 	return checkPoll{stage: stage, key: key, started: time.Now()}
 }
@@ -127,17 +128,26 @@ func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) (merged
 	poll := newCheckPoll("checks", prURL)
 	timeout := h.prChecksWatchTimeout()
 	deadline := poll.started.Add(timeout)
+	parent := ctx
+	var missingRequiredHead prStateView
+	var observedHead string
+	observedPending := make(map[string]bool)
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithDeadlineCause(ctx, deadline, ErrChecksUnavailable)
 		defer cancel()
-		defer func() {
-			if err != nil && errors.Is(context.Cause(ctx), ErrChecksUnavailable) {
-				err = ErrChecksUnavailable
-			}
-		}()
 	}
-	pending := false
+	defer func() {
+		if err != nil && errors.Is(context.Cause(ctx), ErrChecksUnavailable) {
+			err = ErrChecksUnavailable
+		}
+		if errors.Is(err, ErrChecksUnavailable) && time.Until(deadline) <= 0 && missingRequiredHead.HeadRefOID != "" && parent.Err() == nil {
+			merged, err = h.reconcileResumedDispatchChecks(parent, prURL, missingRequiredHead, observedPending)
+			if errors.Is(err, context.DeadlineExceeded) && parent.Err() == nil {
+				err = errors.Join(ErrChecksUnavailable, err)
+			}
+		}
+	}()
 	var policyBase string
 	var required []string
 	for {
@@ -164,6 +174,14 @@ func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) (merged
 		if !pullRequestStateIsOpen(pr.prStateView) {
 			return false, nil
 		}
+		missingRequiredHead = prStateView{}
+		if pr.BaseRefName == "" || pr.HeadRefName == "" || pr.HeadRefOID == "" {
+			return false, fmt.Errorf("%w: resumed pull request branches or head were missing", ErrChecksUnavailable)
+		}
+		if observedHead != pr.HeadRefOID {
+			clear(observedPending)
+			observedHead = pr.HeadRefOID
+		}
 		visible := make(map[string]bool, len(pr.StatusCheckRollup))
 		var names []string
 		for _, check := range pr.StatusCheckRollup {
@@ -173,13 +191,11 @@ func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) (merged
 			}
 			visible[name] = true
 			if passed, failed := githubutil.CIStatus([]githubutil.StatusCheck{check}); !passed && !failed {
+				observedPending[name] = true
 				names = append(names, name)
 			}
 		}
 		if len(names) == 0 {
-			if pr.BaseRefName == "" || pr.HeadRefName == "" || pr.HeadRefOID == "" {
-				return false, fmt.Errorf("%w: resumed pull request branches or head were missing", ErrChecksUnavailable)
-			}
 			repo := repoWorkspace{PRURL: prURL, BaseBranch: pr.BaseRefName, Branch: pr.HeadRefName}
 			if policyBase != pr.BaseRefName {
 				required, err = h.requiredCIStatusChecks(ctx, repo, false)
@@ -193,20 +209,35 @@ func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) (merged
 					names = append(names, name)
 				}
 			}
-			settled := len(visible) > 0 && len(names) == 0
+			missingRequired := len(names) > 0
+			for name := range observedPending {
+				if !visible[name] {
+					names = append(names, name)
+				}
+			}
+			settled := len(names) == 0
+			if missingRequired && len(visible) > 0 {
+				missingRequiredHead = pr.prStateView
+			}
 			if len(visible) == 0 {
 				bucket, summary, err := h.readWorkflowDispatchResult(ctx, repo, pr.HeadRefOID)
 				if err != nil {
 					return false, err
 				}
-				settled = emptyCheckRollupSettled(required, bucket)
+				if missingRequired && bucket != "" && bucket != "pending" {
+					missingRequiredHead = pr.prStateView
+				}
+				if bucket == "fail" {
+					settled = true // Let the normal check path handle the dispatch failure.
+				}
 				if bucket == "pending" {
+					settled = false
 					workflow, _, _ := strings.Cut(summary, "\t")
 					names = append(names, workflow)
 				}
 			}
 			if settled {
-				if pending {
+				if poll.waited {
 					poll.finish(h, false)
 				}
 				return false, nil
@@ -215,7 +246,7 @@ func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) (merged
 		if timeout == 0 {
 			return false, ErrChecksUnavailable
 		}
-		pending = true
+		poll.waited = true
 		slices.Sort(names)
 		deadline, _ := ctx.Deadline()
 		delay := min(time.Until(deadline), poll.delay(h))
@@ -226,10 +257,71 @@ func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) (merged
 	}
 }
 
-// A dispatch failure is actionable on its own. A successful dispatch cannot
-// supply missing required PR check results.
-func emptyCheckRollupSettled(required []string, dispatchBucket string) bool {
-	return dispatchBucket == "fail" || (len(required) == 0 && dispatchBucket != "pending")
+// After the propagation wait, confirm missing results with the paginated PR
+// rollup and current policy before failing without another automatic retry.
+func (h Harness) reconcileResumedDispatchChecks(ctx context.Context, prURL string, expected prStateView, observedPending map[string]bool) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, checkQueryTimeout)
+	defer cancel()
+	repo := repoWorkspace{PRURL: prURL, BaseBranch: expected.BaseRefName, Branch: expected.HeadRefName}
+	state, err := h.readCheckPRState(ctx, prStateViewCommand("", prURL, "id"))
+	if err != nil {
+		return false, err
+	}
+	if err := checkPRMatches(state, repo, expected.HeadRefOID); err != nil {
+		if errors.Is(err, githubutil.ErrReviewInterrupted) {
+			return true, nil
+		}
+		return false, err
+	}
+	if state.ID == "" {
+		return false, fmt.Errorf("%w: pull request ID was missing", ErrChecksUnavailable)
+	}
+	bucket, summary, err := h.readWorkflowDispatchResult(ctx, repo, expected.HeadRefOID)
+	if err != nil {
+		return false, err
+	}
+	if bucket == "" || bucket == "pending" {
+		return false, ErrChecksUnavailable
+	}
+	required, err := h.requiredCIStatusChecks(ctx, repo, false)
+	if err != nil {
+		return false, err
+	}
+	checks, err := h.readPRCheckRollup(ctx, repo, state.ID, expected.HeadRefOID)
+	if errors.Is(err, githubutil.ErrReviewInterrupted) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	reported := make(map[string]bool, len(checks))
+	for _, check := range checks {
+		if check.Name == githubutil.ReviewCheckName || check.Context == githubutil.ReviewCheckName {
+			continue
+		}
+		name := stringsx.FirstNonEmpty(check.Name, check.Context)
+		if passed, failed := githubutil.CIStatus([]githubutil.StatusCheck{check.StatusCheck}); !passed && !failed {
+			return false, ErrChecksUnavailable
+		}
+		reported[name] = reported[name] || check.IsRequired
+	}
+	var missing []string
+	for _, name := range required {
+		if !reported[name] {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		workflow, _, _ := strings.Cut(summary, "\t")
+		slices.Sort(missing)
+		return false, fmt.Errorf("workflow dispatch %q completed, but required checks are missing on current head %s: %s. Verify the workflow publishes these check names on the pull request head, then rerun CI and retry", workflow, expected.HeadRefOID, strings.Join(slices.Compact(missing), ", "))
+	}
+	for name := range observedPending {
+		if _, ok := reported[name]; !ok {
+			return false, ErrChecksUnavailable
+		}
+	}
+	return false, nil
 }
 
 func checkWatchPending(err error) bool {

@@ -177,6 +177,9 @@ func (h Harness) confirmDraftPatchCommits(ctx context.Context, repo repoWorkspac
 	if err := repo.ReviewedPatch.checkCommits(commits); err != nil {
 		return err
 	}
+	if err := h.requireWorkspace(ctx); err != nil {
+		return err
+	}
 	// PR metadata can lag behind the base ref on origin, where the patch base was fetched.
 	ref := "refs/heads/" + normalizeBranchRef(repo.BaseBranch)
 	remote, err := h.runCommand(ctx, "pr_verification", gitCommand(repo.Dir, "ls-remote", "--heads", publishRemoteOrigin, ref))

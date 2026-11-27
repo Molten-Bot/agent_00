@@ -306,11 +306,21 @@ func TestNoReportedCheckRetriesTightenWithoutReadmittingWorkspace(t *testing.T) 
 
 func TestPublishedResumeReconcilesEmptyRollupBeforeRetrying(t *testing.T) {
 	t.Parallel()
+	t.Run("no required checks", func(t *testing.T) {
+		testPublishedResumeReconcilesEmptyRollup(t, `{"contexts":[]}`, `[]`)
+	})
+	t.Run("required result in paginated rollup", func(t *testing.T) {
+		testPublishedResumeReconcilesEmptyRollup(t, `{"contexts":["CI"]}`, `[{"name":"CI","conclusion":"SUCCESS","isRequired":true}]`)
+	})
+}
+
+func testPublishedResumeReconcilesEmptyRollup(t *testing.T, required, rollup string) {
+	t.Helper()
 	const url = "https://github.com/example/repo/pull/42"
 	repo := repoWorkspace{Dir: "/checkout", PRURL: url, BaseBranch: "main", Branch: "task", IssueClaimBranch: true}
 	const state = `{"id":"PR_id","state":"OPEN","baseRefName":"main","headRefName":"task","headRefOid":"current"}`
 	protection := expectedRun{cmd: requiredStatusChecksCommand(repo.Dir, "example/repo", "main"),
-		res: execx.Result{Stdout: `{"contexts":[]}`}}
+		res: execx.Result{Stdout: required}}
 	rules := expectedRun{cmd: ghCommand(repo.Dir, "api", "--paginate", "repos/example/repo/rules/branches/main?per_page=100"),
 		res: execx.Result{Stdout: "[]"}}
 	dispatch := workflowDispatchRunsCommand(repo.Dir, repo.Branch)
@@ -324,12 +334,12 @@ func TestPublishedResumeReconcilesEmptyRollupBeforeRetrying(t *testing.T) {
 		{cmd: prStateViewCommand(repo.Dir, url, "id"), res: execx.Result{Stdout: state}},
 		protection, rules,
 		{cmd: ghCommand(repo.Dir, "api", "graphql", "-f", "id=PR_id", "-f", "query="+prCheckRollupQuery),
-			res: execx.Result{Stdout: checkRollupPageJSON(repo.Branch, "current", "current", "[]", false, "")}},
+			res: execx.Result{Stdout: checkRollupPageJSON(repo.Branch, "current", "current", rollup, false, "")}},
 	}}
 	h := New(runner)
 	h.IssueChecksPRURL = url
 	h.Sleep = func(context.Context, time.Duration) error {
-		t.Fatal("resumed task slept after dispatch completed with no required checks")
+		t.Fatal("resumed task slept after current-head checks were confirmed")
 		return nil
 	}
 	h.AcquireWorkspace = func(context.Context) error {
@@ -397,5 +407,123 @@ func TestRunReturnsSuccessWhenResumedChecksFindPRMerged(t *testing.T) {
 	if result.ExitCode != ExitSuccess || result.Err != nil || result.PRURL != url ||
 		!result.PRAlreadyMerged || result.ReviewInterrupted || result.PRVerificationPassed {
 		t.Fatalf("confirmed merge result = %+v", result)
+	}
+}
+
+func TestResumedCheckWaitRemembersDisappearedCheckUntilHeadChangesOrCheckReturns(t *testing.T) {
+	t.Parallel()
+	const url = "https://github.com/example/repo/pull/42"
+	cmd := prStateViewCommand("", url, "statusCheckRollup")
+	view := func(head, rollup string) expectedRun {
+		return expectedRun{cmd: cmd, res: execx.Result{Stdout: fmt.Sprintf(
+			`{"state":"OPEN","baseRefName":"main","headRefName":"task","headRefOid":%q,"statusCheckRollup":%s}`, head, rollup)}}
+	}
+	dispatch := func(head string) expectedRun {
+		cmd := workflowDispatchRunsCommand("", "task")
+		cmd.Args = append(cmd.Args, "--repo", "example/repo", "--commit", head)
+		return expectedRun{cmd: cmd, res: execx.Result{Stdout: "[]"}}
+	}
+	for _, tc := range []struct {
+		name  string
+		final []expectedRun
+	}{
+		{"check returns", []expectedRun{view("current", `[{"name":"CI","conclusion":"SUCCESS"}]`)}},
+		{"new head", []expectedRun{view("new", "[]"), dispatch("new")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runner := &fakeRunner{t: t, exps: append([]expectedRun{
+				view("current", `[{"name":"CI","status":"IN_PROGRESS"}]`),
+				view("current", "[]"),
+				{cmd: requiredStatusChecksCommand("", "example/repo", "main"), res: execx.Result{Stdout: `{"contexts":[]}`}},
+				{cmd: ghCommand("", "api", "--paginate", "repos/example/repo/rules/branches/main?per_page=100"), res: execx.Result{Stdout: "[]"}},
+				dispatch("current"),
+			}, tc.final...)}
+			h := New(runner)
+			waits := 0
+			var progress string
+			h.Logf = func(format string, args ...any) { progress = fmt.Sprintf(format, args...) }
+			h.Sleep = func(context.Context, time.Duration) error {
+				waits++
+				if !strings.Contains(progress, `pending_checks="CI"`) {
+					t.Fatalf("missing check name in progress: %s", progress)
+				}
+				return nil
+			}
+			if merged, err := h.waitForResumedChecks(t.Context(), url); merged || err != nil || waits != 2 || len(runner.exps) != 0 {
+				t.Fatalf("remote check wait = (%t, %v), waits=%d, remaining queries=%d", merged, err, waits, len(runner.exps))
+			}
+		})
+	}
+}
+
+func TestResumedCompletedDispatchReconcilesMissingRequiredChecks(t *testing.T) {
+	t.Parallel()
+	const url = "https://github.com/example/repo/pull/42"
+	const state = `{"id":"PR_id","state":"OPEN","baseRefName":"main","headRefName":"task","headRefOid":"current"}`
+	const completed = `[{"headSha":"current","status":"completed","conclusion":"success","workflowName":"CI workflow"}]`
+	policy := []expectedRun{
+		{cmd: requiredStatusChecksCommand("", "example/repo", "main"), res: execx.Result{Stdout: `{"contexts":["CI"]}`}},
+		{cmd: ghCommand("", "api", "--paginate", "repos/example/repo/rules/branches/main?per_page=100"), res: execx.Result{Stdout: "[]"}},
+	}
+	dispatch := workflowDispatchRunsCommand("", "task")
+	dispatch.Args = append(dispatch.Args, "--repo", "example/repo", "--commit", "current")
+	for _, tc := range []struct {
+		name, state, checks string
+		merged, retry       bool
+		partial, rerun      bool
+	}{
+		{name: "still missing", state: state, checks: "[]"},
+		{name: "optional result cannot satisfy required check", state: state, partial: true,
+			checks: `[{"name":"CI","conclusion":"SUCCESS","isRequired":false}]`},
+		{name: "result appeared", state: state, checks: `[{"name":"CI","conclusion":"SUCCESS","isRequired":true}]`},
+		{name: "check still pending", state: state, checks: `[{"name":"CI","isRequired":true}]`, retry: true},
+		{name: "dispatch rerun started", state: state, retry: true, rerun: true},
+		{name: "merged", state: `{"state":"MERGED"}`, merged: true},
+		{name: "head changed", state: strings.ReplaceAll(state, "current", "new"), retry: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				initial := state
+				if tc.partial {
+					initial = strings.TrimSuffix(state, "}") + `,"statusCheckRollup":[{"name":"optional","conclusion":"SUCCESS"}]}`
+				}
+				runner := &fakeRunner{t: t, exps: []expectedRun{
+					{cmd: prStateViewCommand("", url, "statusCheckRollup"), res: execx.Result{Stdout: initial}},
+				}}
+				runner.exps = append(runner.exps, policy...)
+				if !tc.partial {
+					runner.exps = append(runner.exps, expectedRun{cmd: dispatch, res: execx.Result{Stdout: completed}})
+				}
+				runner.exps = append(runner.exps, expectedRun{cmd: prStateViewCommand("", url, "id"), res: execx.Result{Stdout: tc.state}})
+				if tc.state == state {
+					runs := completed
+					if tc.rerun {
+						runs = `[{"headSha":"current","status":"in_progress"}]`
+					}
+					runner.exps = append(runner.exps, expectedRun{cmd: dispatch, res: execx.Result{Stdout: runs}})
+				}
+				if tc.checks != "" {
+					runner.exps = append(runner.exps, policy...)
+					runner.exps = append(runner.exps, expectedRun{cmd: ghCommand("", "api", "graphql", "-f", "id=PR_id", "-f", "query="+prCheckRollupQuery),
+						res: execx.Result{Stdout: checkRollupPageJSON("task", "current", "current", tc.checks, false, "")}})
+				}
+				h := New(runner)
+				h.PRChecksWatchTimeout = 5 * time.Second
+				start := time.Now()
+				merged, err := h.waitForResumedChecks(t.Context(), url)
+				if merged != tc.merged || errors.Is(err, ErrChecksUnavailable) != tc.retry || len(runner.exps) != 0 || time.Since(start) != h.PRChecksWatchTimeout {
+					t.Fatalf("remote check wait = (%t, %v) after %v, remaining queries=%d", merged, err, time.Since(start), len(runner.exps))
+				}
+				if tc.checks == "[]" || tc.partial {
+					if err == nil || !strings.Contains(err.Error(), `"CI workflow" completed, but required checks are missing on current head current: CI`) {
+						t.Fatalf("missing actionable failure: %v", err)
+					}
+				} else if !tc.retry && err != nil {
+					t.Fatalf("unexpected failure: %v", err)
+				}
+			})
+		})
 	}
 }

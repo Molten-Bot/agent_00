@@ -269,12 +269,6 @@ func (h Harness) collectDraftVerificationEvidence(ctx context.Context, repo repo
 	if !state.IsDraft {
 		return nil, errDraftRestoring
 	}
-	if receipt.Pass > 1 {
-		if err := h.confirmPublishedReviewHead(ctx, repo, receipt.Head); err != nil {
-			return nil, err
-		}
-	}
-
 	commitChecks, err := githubutil.CommitCheckNames(ctx, readGH, targetRepo, receipt.Head)
 	if err != nil {
 		return nil, fmt.Errorf("load reviewed head check inventory: %w", err)
