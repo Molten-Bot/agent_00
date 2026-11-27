@@ -814,6 +814,21 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 	if r.AppMerge != nil && !r.AppMerge.PendingVerification {
 		mergedPR = Item{Title: r.AppMerge.Title, MergedAt: r.AppMerge.MergedAt}
 		mergedByApp = true
+		if mergedPR.MergedAt.IsZero() && e.InspectPR != nil {
+			observed, err := e.InspectPR(ctx, r.Item.Repository, r.PRURL)
+			if err != nil {
+				return err
+			}
+			if observed.Merged && !observed.MergedAt.IsZero() {
+				mergedPR.MergedAt = observed.MergedAt
+				if observed.Title != "" {
+					mergedPR.Title = observed.Title
+				}
+				if err := checkpointMerge(&mergeReceipt{Title: mergedPR.Title, MergedAt: mergedPR.MergedAt}, true); err != nil || stale {
+					return err
+				}
+			}
+		}
 		r.Status, r.Reason = "merged", "Pull request merged"
 		return finish()
 	}
@@ -1140,6 +1155,11 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 					mergedPR.MergedAt = observed.MergedAt
 					if observed.Title != "" {
 						mergedPR.Title = observed.Title
+					}
+					if !mergedPR.MergedAt.IsZero() {
+						if err := checkpointMerge(&mergeReceipt{Title: mergedPR.Title, MergedAt: mergedPR.MergedAt}, true); err != nil || stale {
+							return err
+						}
 					}
 				}
 			}

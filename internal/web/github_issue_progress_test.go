@@ -233,6 +233,15 @@ func TestIssueTaskUsesDurableStateAfterRestart(t *testing.T) {
 	s.Broker = NewBroker()
 	s.ResolveTaskControls = func(string) TaskControls { return TaskControls{Run: true} }
 	taskID := issueTaskID(record.Run.GitHubIssue, record.Run.Workflow)
+	record.State = "verifying"
+	record.PRURL = "https://github.com/acme/repo/pull/43"
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	if task := s.snapshot().Tasks[0]; task.IssueState == "awaiting_review" || task.ReviewGate != "" || task.PRURL != record.PRURL {
+		t.Fatalf("stale workflow PR changed current task: %+v", task)
+	}
+	record.PRURL = run.PRURL
 	for _, tc := range []struct{ state, status, issueState string }{
 		{"verifying", "queued", "awaiting_review"},
 		{localruntime.IssueChecksPending, "queued", localruntime.IssueChecksPending},
@@ -256,7 +265,6 @@ func TestIssueTaskUsesDurableStateAfterRestart(t *testing.T) {
 			}
 		})
 	}
-
 	var transitions []string
 	s.Workflows.RecordIssueMerge = s.RecordIssueMerge
 	s.Workflows.Logf = func(format string, args ...any) {
@@ -273,6 +281,40 @@ func TestIssueTaskUsesDurableStateAfterRestart(t *testing.T) {
 	task := s.snapshot().Tasks[0]
 	if task.ReviewGate != "" || task.IssueAttempts[0].ReviewDetail != run.Reason {
 		t.Fatalf("pruned workflow gate was not kept in attempt history: %+v", task)
+	}
+}
+
+func TestRecordIssueMergeUpdatesLatestMatchingAttempt(t *testing.T) {
+	t.Parallel()
+	s, _ := recoveryServer(t)
+	reconcileOrAdmitTestIssue(t.Context(), s)
+	old := completeRecoveryRecord(t, s, "error", 1)
+	old.PRURL = "https://github.com/acme/repo/pull/42"
+	if err := s.IssueClaims.Save(old); err != nil {
+		t.Fatal(err)
+	}
+	latest := old
+	latest.ID = strings.Repeat("b", 32)
+	latest.Run.GitHubIssue.Claim.Attempt = 2
+	latest.Run.GitHubIssue.Claim.ID = latest.ID
+	if err := s.IssueClaims.Save(latest); err != nil {
+		t.Fatal(err)
+	}
+	run := workflow.Run{ID: old.Run.Workflow.EventID, RequestID: old.RequestID}
+	pr := workflow.Item{URL: old.PRURL, MergedAt: time.Now().UTC()}
+	if err := s.RecordIssueMerge(run, pr, true); err != nil {
+		t.Fatal(err)
+	}
+	oldSaved, err := s.IssueClaims.Load(old.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	latestSaved, err := s.IssueClaims.Load(latest.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oldSaved.PRMerged() || !latestSaved.PRMerged() || !latestSaved.PRMergedByApp || !latestSaved.PRMergedAt.Equal(pr.MergedAt) {
+		t.Fatalf("merge receipt attached to wrong attempt: old=%+v latest=%+v", oldSaved, latestSaved)
 	}
 }
 

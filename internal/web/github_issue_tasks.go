@@ -58,21 +58,28 @@ func (s *Server) RecordIssueMerge(run workflow.Run, pr workflow.Item, mergedByAp
 		return nil
 	}
 	records, listErr := s.IssueClaims.List()
+	var latest localruntime.IssueClaimRecord
 	for _, record := range records {
 		if record.Run.Workflow == nil || record.Run.Workflow.EventID != run.ID ||
 			(run.RequestID != "" && record.RequestID != run.RequestID) {
 			continue
 		}
-		if known := s.knownIssuePR(record); known != "" && !strings.EqualFold(known, pr.URL) {
-			continue
+		if latest.ID == "" || record.Run.GitHubIssue.Claim.Attempt > latest.Run.GitHubIssue.Claim.Attempt ||
+			(record.Run.GitHubIssue.Claim.Attempt == latest.Run.GitHubIssue.Claim.Attempt && record.UpdatedAt.After(latest.UpdatedAt)) {
+			latest = record
 		}
-		if record.PRMerged() && (run.Reason == "" || record.ReviewDetail == run.Reason) &&
-			(pr.MergedAt.IsZero() || record.PRMergedAt.Equal(pr.MergedAt)) && (!mergedByApp || record.PRMergedByApp) {
-			return nil
-		}
-		return s.saveMergedIssuePR(record, issuePullRequest{URL: pr.URL, Title: pr.Title, MergedAt: pr.MergedAt}, run.Reason, mergedByApp)
 	}
-	return listErr
+	if latest.ID == "" {
+		return listErr
+	}
+	if known := s.knownIssuePR(latest); known != "" && !strings.EqualFold(known, pr.URL) {
+		return nil
+	}
+	if latest.PRMerged() && (run.Reason == "" || latest.ReviewDetail == run.Reason) &&
+		(pr.MergedAt.IsZero() || latest.PRMergedAt.Equal(pr.MergedAt)) && (!mergedByApp || latest.PRMergedByApp) {
+		return nil
+	}
+	return s.saveMergedIssuePR(latest, issuePullRequest{URL: pr.URL, Title: pr.Title, MergedAt: pr.MergedAt}, run.Reason, mergedByApp)
 }
 
 func issueTaskID(issue *config.GitHubIssueConfig, policy *config.WorkflowRunConfig) string {
@@ -166,7 +173,8 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 		if latest.Run.Workflow != nil && !latest.Run.Workflow.IsDefaultExecution() {
 			task.WorkflowID, task.WorkflowName = latest.Run.Workflow.ID, latest.Run.Workflow.Name
 			task.WorkflowTriggered = true
-			if run := delivery[latest.Run.Workflow.EventID]; run.ID != "" && run.RequestID == latest.RequestID {
+			if run := delivery[latest.Run.Workflow.EventID]; run.ID != "" && run.RequestID == latest.RequestID &&
+				(latest.PRURL == "" || strings.EqualFold(latest.PRURL, run.LinkedPRURL())) {
 				knownPR := stringsx.FirstNonEmpty(task.PRURL, latest.Run.Workflow.ResumePRURL)
 				if prURL := run.LinkedPRURL(); run.PRMergeConfirmed() && prURL != "" &&
 					(knownPR == "" || strings.EqualFold(knownPR, prURL)) {
