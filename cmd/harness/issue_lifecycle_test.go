@@ -151,13 +151,16 @@ func TestIssueExecutionStopPreservesObservedMerge(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := work.finish(t.Context(), "stopped", app.Result{}, nil); err != nil {
+	verificationErr := errors.New("pr_verification: check failed on the draft head")
+	if err := work.finish(t.Context(), "stopped", app.Result{Err: verificationErr}, nil); err != nil {
 		t.Fatal(err)
 	}
-	got, err := store.Load(record.ID)
+	restarted := &localruntime.IssueClaimStore{Root: store.Root}
+	got, err := restarted.Load(record.ID)
 	if err != nil || !got.PRMerged() || got.Outcome != localruntime.IssueChecksPending ||
+		got.FailureDetail() != verificationErr.Error() ||
 		got.Error != "pull request merged before draft verification passed" || got.StoppedAt.IsZero() || got.ExecutionAgentAttempts != nil {
-		t.Fatalf("worker stop overwrote merge receipt: %+v, %v", got, err)
+		t.Fatalf("late worker failure lost history or overwrote merge receipt: %+v, %v", got, err)
 	}
 }
 

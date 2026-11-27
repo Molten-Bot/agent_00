@@ -156,6 +156,9 @@ func (e *issueExecution) finishWithClaimUpdate(ctx context.Context, state string
 	holdPersisted := false
 	update := func(record *localruntime.IssueClaimRecord) error {
 		if record.PRMerged() {
+			if result.Err != nil {
+				record.RunError = result.Err.Error()
+			}
 			// The workflow can publish its merge receipt before this worker
 			// saves the draft verification that authorized delivery.
 			if record.State == localruntime.IssueStateMergedUnverified && state == "completed" &&

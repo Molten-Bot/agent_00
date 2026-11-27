@@ -1045,6 +1045,7 @@ func runServer(args []string) int {
 			// The worker publishes terminal status after recording workspace usage.
 			return localTaskController.Stop(requestID)
 		}
+		uiServer.CancelMergedTask = localTaskController.CancelMergedTask
 		go func() {
 			if err := uiServer.Run(ctx); err != nil {
 				daemonLogger("localruntime.ui status=error err=%q", err)

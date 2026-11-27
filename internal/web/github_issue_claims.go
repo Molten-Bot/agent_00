@@ -972,6 +972,12 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		if err := pr.recoveryBlocker(claimedIssue); err != nil {
 			return issueRetryResult{}, http.StatusConflict, err
 		}
+		if !automatic && previous.PRRecoveryBlocker != "" && knownPR != "" && strings.EqualFold(pr.URL, knownPR) {
+			if err := s.recordIssuePRBlocker(&previous, pr, nil); err != nil {
+				return issueRetryResult{}, http.StatusServiceUnavailable, err
+			}
+			s.Broker.notifyIssueTaskUpdate()
+		}
 		if metadataRetry {
 			if pr.URL == "" || !strings.EqualFold(pr.URL, previous.PRURL) ||
 				pr.Closed || pr.Merged || previous.InstanceID != s.instanceID() {

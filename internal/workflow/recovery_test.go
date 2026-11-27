@@ -167,6 +167,11 @@ func TestIssueMergeReceiptRetriesAfterWorkflowRestart(t *testing.T) {
 				if merges == 0 {
 					return Item{Open: true, HeadSHA: "head", ChecksPassed: true}, nil
 				}
+				restarted := &Engine{StatePath: e.StatePath}
+				runs, err := restarted.Runs()
+				if err != nil || len(runs) != 1 || !runs[0].PRMergeConfirmed() || runs[0].AppMerge == nil {
+					t.Fatalf("app attribution missing before timestamp lookup: runs=%+v err=%v", runs, err)
+				}
 				return Item{Merged: true, MergedAt: mergedAt}, nil
 			}
 			e.Merge = func(context.Context, Run) error {

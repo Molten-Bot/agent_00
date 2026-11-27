@@ -1131,6 +1131,10 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		} else {
 			mergedPR = Item{Title: i.Title}
 			if r.Item.Kind == "issue" {
+				// Persist the confirmed merge before requesting optional metadata.
+				if err := checkpointMerge(&mergeReceipt{Title: i.Title}, true); err != nil || stale {
+					return err
+				}
 				// The pre-merge inspection cannot supply GitHub's merge timestamp.
 				if observed, err := e.InspectPR(ctx, r.Item.Repository, r.PRURL); err == nil && observed.Merged {
 					mergedPR.MergedAt = observed.MergedAt

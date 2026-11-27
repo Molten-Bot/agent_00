@@ -99,6 +99,7 @@ type Server struct {
 	RunTask                 func(context.Context, string) error
 	ForceRunTask            func(context.Context, string) error
 	StopTask                func(context.Context, string) error
+	CancelMergedTask        func(string)
 	ResolveTaskControls     func(string) TaskControls
 	CustomLibrarySources    *localruntime.CustomLibrarySources
 	LoadLibraryTasks        func() ([]library.TaskSummary, error)

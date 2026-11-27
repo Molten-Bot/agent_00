@@ -323,7 +323,8 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 			return nil
 		}
 		if record.PRMerged() {
-			return s.stopMergedIssueWorker(ctx, record.RequestID)
+			s.cancelMergedIssueWorker(record.RequestID)
+			return nil
 		}
 		if record.State != "queued" {
 			return nil
@@ -343,7 +344,8 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		if err := s.saveMergedIssuePR(record, pr, "", false); err != nil {
 			return err
 		}
-		return s.stopMergedIssueWorker(ctx, record.RequestID)
+		s.cancelMergedIssueWorker(record.RequestID)
+		return nil
 	}
 	// Retain the lock through verification/unlock. Release before dispatch;
 	// admission serialization and the instance lock prevent local races.
@@ -953,9 +955,7 @@ func (s Server) finishMergedIssue(ctx context.Context, record localruntime.Issue
 	task, ok := s.Broker.Task(record.RequestID)
 	markMerged := ok && task.Status != "merged" && (task.PRURL == "" || strings.EqualFold(task.PRURL, record.PRURL))
 	if markMerged && !isCompletedTaskStatus(task.Status) {
-		if err := s.stopMergedIssueWorker(ctx, record.RequestID); err != nil {
-			return err
-		}
+		s.cancelMergedIssueWorker(record.RequestID)
 	}
 	if stopped, err := localruntime.IssueProcessesStopped(record); err != nil || !stopped {
 		return err
@@ -1007,7 +1007,11 @@ func (s Server) finishMergedIssue(ctx context.Context, record localruntime.Issue
 
 func (s Server) backfillIssueReleaseMergeTime(ctx context.Context, record localruntime.IssueClaimRecord) error {
 	// Terminal cleanup can finish before GitHub's timestamp becomes available.
-	if record.PRMergedAt.IsZero() && record.PRURL != "" {
+	// Retry optional metadata within the task history retention window.
+	if record.PRMergedAt.IsZero() && record.PRURL != "" &&
+		s.Broker.now().Sub(record.UpdatedAt) < defaultClosedTaskRetention &&
+		!s.linkedIssuePRDeferred(record.ID, record.PRURL) {
+		s.deferLinkedIssuePRPoll(record.ID, record.PRURL)
 		repo := record.Run.GitHubIssue.Repository
 		if allowed, err := s.RepositoryAllowed(ctx, repo); err == nil && allowed {
 			if pr, err := s.linkedIssuePR(ctx, repo, record.PRURL); err == nil && pr.Merged && !pr.MergedAt.IsZero() {
@@ -1022,15 +1026,10 @@ func (s Server) backfillIssueReleaseMergeTime(ctx context.Context, record localr
 	return nil
 }
 
-func (s Server) stopMergedIssueWorker(ctx context.Context, requestID string) error {
-	if s.StopTask == nil {
-		return nil
+func (s Server) cancelMergedIssueWorker(requestID string) {
+	if s.CancelMergedTask != nil {
+		s.CancelMergedTask(requestID)
 	}
-	err := s.StopTask(ctx, requestID)
-	if errors.Is(err, ErrTaskNotFound) || errors.Is(err, ErrTaskNotCompleted) {
-		return nil
-	}
-	return err
 }
 
 func (s Server) publishVerifiedIssuePR(record localruntime.IssueClaimRecord) {

@@ -98,6 +98,22 @@ func TestLocalTaskControllerStopCancelsContextWithStopCause(t *testing.T) {
 	}
 }
 
+func TestLocalTaskControllerCancelsMergedTaskWithoutPersistingOperatorStop(t *testing.T) {
+	t.Parallel()
+	controller := newLocalTaskController()
+	controller.persistStop = func(string) error { return errors.New("unreadable claim") }
+	ctx, cancel := context.WithCancelCause(t.Context())
+	defer cancel(nil)
+	controller.Register("queued", cancel)
+	if err := controller.Stop("queued"); err == nil || ctx.Err() != nil {
+		t.Fatalf("operator stop should require persistence: stop=%v context=%v", err, ctx.Err())
+	}
+	controller.CancelMergedTask("queued")
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		t.Fatalf("merged worker still queued: context=%v", ctx.Err())
+	}
+}
+
 func TestLocalTaskControllerPauseRunningTaskDefersUntilNextRunnableWait(t *testing.T) {
 	t.Parallel()
 

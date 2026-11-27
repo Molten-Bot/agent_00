@@ -570,6 +570,8 @@ func TestOrdinaryPRMonitorContinuesWithUnreadableIssueClaim(t *testing.T) {
 func TestIssueRecoveryBackfillsReleaseMergeTimeAfterTaskRetires(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)
+	now := time.Now()
+	s.Broker.now = func() time.Time { return now }
 	reconcileOrAdmitTestIssue(t.Context(), s)
 	record := completeRecoveryRecord(t, s, "completed", 1)
 	record.State, record.PRURL = localruntime.IssueStateMerged, "https://github.com/acme/repo/pull/42"
@@ -592,6 +594,7 @@ func TestIssueRecoveryBackfillsReleaseMergeTimeAfterTaskRetires(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.prs = `[{"number":42,"state":"closed","merged_at":"` + mergedAt + `"}]`
+	now = now.Add(retainedIssuePRPollInterval)
 	if err := s.reconcileIssueRecord(t.Context(), record); err != nil {
 		t.Fatal(err)
 	}
