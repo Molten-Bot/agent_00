@@ -423,13 +423,14 @@ func TestIssueRetentionPreservesUnresolvedEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	logRoot := t.TempDir()
-	if err := retainIssueEvidence(store, repairs, logRoot, time.Now()); err != nil {
+	if _, err := retainIssueEvidence(t.Context(), store, repairs, logRoot, nil, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(file); err != nil {
 		t.Fatal("unresolved work deleted")
 	}
 	record.State = "fulfilled"
+	record.LabelAdded = false
 	record.VerifiedAt = time.Now().Add(-31 * 24 * time.Hour)
 	if err := store.Save(record); err != nil {
 		t.Fatal(err)
@@ -438,7 +439,7 @@ func TestIssueRetentionPreservesUnresolvedEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := retainIssueEvidence(store, repairs, logRoot, time.Now()); err != nil {
+	if _, err := retainIssueEvidence(t.Context(), store, repairs, logRoot, nil, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(file); err != nil {
@@ -452,7 +453,7 @@ func TestIssueRetentionPreservesUnresolvedEvidence(t *testing.T) {
 	// skips busy locks and tries again on a later pass; exercise that contract.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		if err := retainIssueEvidence(store, repairs, logRoot, time.Now()); err != nil {
+		if _, err := retainIssueEvidence(t.Context(), store, repairs, logRoot, nil, time.Now()); err != nil {
 			t.Fatal(err)
 		}
 		_, err := os.Stat(file)
@@ -489,6 +490,8 @@ func TestIssueRetentionAfterRetryWithBlockedRepair(t *testing.T) {
 				t.Fatal(err)
 			}
 			issue.State = "incident"
+			issue.Outcome = "error"
+			issue.LabelAdded = false
 			issue.RepairRequestID = repair.RequestID
 			issue.WorkspaceDir = filepath.Join(filepath.Dir(claims.Root), "issue-workspaces", issue.ID)
 			logRoot := t.TempDir()
@@ -502,23 +505,27 @@ func TestIssueRetentionAfterRetryWithBlockedRepair(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			logPath := filepath.Join(logDir, logFileName)
+			if err := os.WriteFile(logPath, []byte("task evidence"), 0600); err != nil {
+				t.Fatal(err)
+			}
 			if err := claims.Save(issue); err != nil {
 				t.Fatal(err)
 			}
 			now := time.Now()
-			checkRetention := func(now time.Time, remove bool) {
+			checkRetention := func(now time.Time, removeWorkspace, removeLogs bool) {
 				t.Helper()
-				if err := retainIssueEvidence(claims, repairs, logRoot, now); err != nil {
+				if _, err := retainIssueEvidence(t.Context(), claims, repairs, logRoot, nil, now); err != nil {
 					t.Fatal(err)
 				}
-				for _, path := range paths {
+				for path, remove := range map[string]bool{issue.WorkspaceDir: removeWorkspace, logPath: removeLogs} {
 					_, err := os.Stat(path)
 					if (remove && !errors.Is(err, os.ErrNotExist)) || (!remove && err != nil) {
 						t.Errorf("stat %s after retention = %v, want removed=%t", path, err, remove)
 					}
 				}
 			}
-			checkRetention(now, false)
+			checkRetention(now, false, false)
 			retry := issue
 			retry.ID = strings.Repeat("c", 32)
 			retry.RequestID = "issue-" + retry.ID
@@ -535,8 +542,8 @@ func TestIssueRetentionAfterRetryWithBlockedRepair(t *testing.T) {
 			if err := claims.Save(retry); err != nil {
 				t.Fatal(err)
 			}
-			checkRetention(now.Add(29*24*time.Hour), false)
-			checkRetention(now.Add(31*24*time.Hour), tc.remove)
+			checkRetention(now.Add(29*24*time.Hour), tc.remove, false)
+			checkRetention(now.Add(31*24*time.Hour), tc.remove, tc.remove)
 		})
 	}
 }

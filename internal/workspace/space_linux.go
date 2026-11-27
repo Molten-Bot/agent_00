@@ -3,6 +3,7 @@
 package workspace
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -47,7 +48,8 @@ func checkWorkspaceSpace(path string) error {
 	}
 	available := stat.Bavail * uint64(stat.Bsize)
 	if available < MinimumFreeBytes {
-		return fmt.Errorf("workspace storage %s has only %d MiB free; at least 512 MiB is required; configure HARNESS_WORKSPACE_DISK_BASE on a disk-backed filesystem: %w", path, available/(1024*1024), syscall.ENOSPC)
+		return fmt.Errorf("workspace storage %s has only %d MiB free on its filesystem (capacity %d MiB); at least 512 MiB is required; free space or expand the filesystem backing this path: %w",
+			path, available/(1024*1024), stat.Blocks*uint64(stat.Bsize)/(1024*1024), syscall.ENOSPC)
 	}
 	return checkWorkspaceInodes(path, stat)
 }
@@ -58,4 +60,27 @@ func checkWorkspaceInodes(path string, stat syscall.Statfs_t) error {
 		return fmt.Errorf("workspace storage %s has no free inodes; free up workspace storage or move it to another filesystem: %w", path, syscall.ENOSPC)
 	}
 	return nil
+}
+
+// CheckNoMountsWithin detects separately mounted data inside a task directory,
+// including bind mounts on the same filesystem.
+func CheckNoMountsWithin(path string) error {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return err
+	}
+	f, err := os.Open(procSelfMountInfoPath)
+	if err != nil {
+		return fmt.Errorf("inspect workspace mounts: %w", err)
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 4096), 1024*1024)
+	for scanner.Scan() {
+		mount, _, ok := parseMountInfoLine(scanner.Text())
+		if ok && pathWithinMount(mount, resolved) {
+			return fmt.Errorf("workspace contains a mount at %s; unmount it before cleanup", mount)
+		}
+	}
+	return scanner.Err()
 }

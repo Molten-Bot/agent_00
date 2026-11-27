@@ -58,6 +58,11 @@ func (s Server) runIssueRecovery(ctx context.Context) {
 	defer ticker.Stop()
 	for ctx.Err() == nil {
 		err := s.ReconcileIssueWork(ctx)
+		if s.MaintainIssueWorkspaces != nil && ctx.Err() == nil {
+			s.issueAutomation.admission.Lock()
+			s.MaintainIssueWorkspaces(ctx)
+			s.issueAutomation.admission.Unlock()
+		}
 		var status issueAutomationStatus
 		var rate *githubutil.RateLimitError
 		if err != nil && !errors.Is(err, errIssueRecoveryDeferred) && ctx.Err() == nil {

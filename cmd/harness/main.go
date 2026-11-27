@@ -828,6 +828,33 @@ func runServer(args []string) int {
 		uiServer.IssueRecovery = &cfg.IssueRecovery
 		uiServer.IssueExternalPrerequisiteFromLogs = repairHistory.externalPrerequisiteFromLogs
 		uiServer.IssueRepairs = repairHistory.store
+		var issueMaintenanceMu sync.Mutex
+		defer func() {
+			stop()
+			// Finish any deletion before releasing the runtime instance lock.
+			issueMaintenanceMu.Lock()
+			issueMaintenanceMu.Unlock()
+		}()
+		uiServer.MaintainIssueWorkspaces = func(ctx context.Context) {
+			issueMaintenanceMu.Lock()
+			defer issueMaintenanceMu.Unlock()
+			if ctx.Err() != nil {
+				return
+			}
+			stats, err := retainIssueEvidence(ctx, issueClaims, repairHistory.store, logRoot, workflowEngine, time.Now())
+			if logErr := persistentLogs.maintainAggregate(maxAggregateLogSize); logErr != nil {
+				err = errors.Join(err, fmt.Errorf("maintain aggregate log: %w", logErr))
+			}
+			if err != nil {
+				daemonLogger("event=issue_workspace_cleanup status=warn action=retry_on_next_pass err=%q", err)
+			}
+			if stats.reclaimedBytes > 0 || stats.protected > 0 {
+				daemonLogger("event=issue_workspace_cleanup status=ok reclaimed_bytes=%d protected_workspaces=%d", stats.reclaimedBytes, stats.protected)
+			}
+			if stats.reclaimedBytes > 0 {
+				scheduler.RecheckQueue()
+			}
+		}
 		uiServer.IssueReady = func(checkCtx context.Context) error {
 			if err := signingSubmissionGate(checkCtx, cfg, runner); err != nil {
 				return err
@@ -2355,38 +2382,41 @@ func removeManagedWorkspaceDir(workspaceDir string) (bool, error) {
 	if !workspace.IsManagedRunDir(workspaceDir) {
 		return false, nil
 	}
-	if err := os.RemoveAll(workspaceDir); err != nil {
-		if !errors.Is(err, os.ErrPermission) {
-			return false, fmt.Errorf("remove workspace dir %s: %w", workspaceDir, err)
+	root, err := os.OpenRoot(filepath.Dir(workspaceDir))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return true, nil
 		}
-		// Go module caches contain read-only directories. Restore owner write
-		// permission only inside this closed task before retrying cleanup.
-		root, openErr := os.OpenRoot(workspaceDir)
-		if openErr != nil {
-			return false, fmt.Errorf("open workspace for cleanup: %w", openErr)
-		}
-		defer root.Close()
-		walkErr := fs.WalkDir(root.FS(), ".", func(path string, entry fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if !entry.IsDir() {
-				return nil
-			}
-			info, err := entry.Info()
-			if err != nil {
-				return err
-			}
-			return root.Chmod(path, info.Mode().Perm()|0700)
-		})
-		if walkErr != nil {
-			return false, fmt.Errorf("prepare workspace cleanup: %w", walkErr)
-		}
-		if err := os.RemoveAll(workspaceDir); err != nil {
-			return false, fmt.Errorf("remove workspace dir %s: %w", workspaceDir, err)
-		}
+		return false, err
+	}
+	defer root.Close()
+	if err := removeWorkspaceArtifact(root, filepath.Base(workspaceDir)); err != nil {
+		return false, fmt.Errorf("remove workspace dir %s: %w", workspaceDir, err)
 	}
 	return true, nil
+}
+
+func removeWorkspaceArtifact(root *os.Root, name string) error {
+	err := root.RemoveAll(name)
+	if !errors.Is(err, os.ErrPermission) {
+		return err
+	}
+	// Go module caches contain read-only directories. Restore owner write
+	// permission only inside the workspace artifact before retrying cleanup.
+	err = fs.WalkDir(root.FS(), filepath.ToSlash(name), func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || !entry.IsDir() {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		return root.Chmod(filepath.FromSlash(path), info.Mode().Perm()|0700)
+	})
+	if err != nil {
+		return fmt.Errorf("prepare workspace cleanup: %w", err)
+	}
+	return root.RemoveAll(name)
 }
 
 func monitorURL(addr string) string {

@@ -177,9 +177,19 @@ Durable state lives beside runtime `config.json`: `issue-claims/`,
 Keep this directory on persistent storage. The standard Compose configuration
 already mounts `/workspace/config`. Only one daemon may use the same runtime
 directory; separate instances coordinate through GitHub ownership tags. Logs
-survive startup. Unresolved work and evidence are retained; fulfilled issue
-artifacts become eligible for cleanup after 30 days, provided no unresolved
-repair still needs them. Journals remain available for audit.
+survive startup. Maintenance runs at startup and during issue recovery.
+Once the latest claim is verified as fulfilled, maintenance removes checkouts and
+regenerable caches from both `issue-workspaces/` and the older
+`issue-queue/issue-workspaces/` layout. This includes superseded failed and
+stopped attempts. Active workers, blocked or retryable work, explicit resume
+targets, and pending verification, review, or repair keep their workspaces.
+A stopped task with unresolved issue evidence remains available for recovery.
+Task logs and review receipts expire 30 days after fulfillment. Claim and repair
+journals remain available for audit. The shared daemon log rotates at 64 MiB
+during maintenance and keeps one previous file. Cleanup reports reclaimed bytes,
+protected workspaces, and errors in the daemon log. Maintenance retries failed
+passes independently of delivery. Workspaces without a matching claim remain
+available for operator inspection.
 
 The local recovery protocol uses inherited Unix file locks and records process
 groups. A surviving agent or uncertain process termination prevents takeover.
@@ -268,9 +278,13 @@ the same directory layout so saved claims can find their workspaces.
 
 The daemon logs issue workspace capacity and free bytes at startup and when
 queueing an issue. On Linux it rejects tmpfs and ramfs for issue workspaces.
-Tasks wait for enough free space on their filesystem. Force start can override
-the historical estimate but still requires at least 512 MiB free for issue
-workspaces. If a task hits disk exhaustion, it remains blocked with its
+Tasks wait for enough free space on their filesystem. The pre-staging check
+measures the checkout path itself. A nested mount or filesystem quota can report
+less space there than the host reports elsewhere. The 512 MiB check measures
+available filesystem space, and the scheduler also accounts for concurrent
+reservations. For staging failures, compare free space on the checkout mount
+with host-wide disk readings. Force start can override the historical estimate,
+and it still requires at least 512 MiB free for issue workspaces. If a task hits disk exhaustion, it remains blocked with its
 workspace retained. Free disk space or expand the workspace filesystem, then
 select **Retry** in **Settings → GitHub Issues**. Preserve unresolved checkouts
 and journals when freeing space. If the claim journal is also full, keep the

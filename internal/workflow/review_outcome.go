@@ -7,7 +7,8 @@ import (
 	"path/filepath"
 )
 
-func reviewOutcomePath(root, requestID string) string {
+// ReviewOutcomePath locates the durable review evidence for a task request.
+func ReviewOutcomePath(root, requestID string) string {
 	return filepath.Join(root, "review-receipts", fmt.Sprintf("%x.json", sha256.Sum256([]byte(requestID))))
 }
 
@@ -15,12 +16,12 @@ func reviewOutcomePath(root, requestID string) string {
 // and the workflow activation is retired.
 func SaveReviewOutcome(root, requestID string, outcome Outcome) error {
 	outcome.Reason = ""
-	return writeAtomic(reviewOutcomePath(root, requestID), outcome)
+	return writeAtomic(ReviewOutcomePath(root, requestID), outcome)
 }
 
 func LoadReviewOutcome(root, requestID string) (Outcome, error) {
 	var outcome Outcome
-	data, err := os.ReadFile(reviewOutcomePath(root, requestID))
+	data, err := os.ReadFile(ReviewOutcomePath(root, requestID))
 	if err != nil {
 		return outcome, err
 	}
