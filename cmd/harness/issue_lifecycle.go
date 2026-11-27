@@ -105,6 +105,9 @@ func prepareIssueExecution(store *localruntime.IssueClaimStore, run config.Confi
 	record.NextAttemptAt = time.Time{}
 	if err := store.BeginExecution(record); err != nil {
 		lock.Close()
+		if errors.Is(err, localruntime.ErrIssuePRMerged) {
+			return nil, record.RequestID, nil
+		}
 		return nil, "", err
 	}
 	return &issueExecution{store: store, record: record, lock: lock, policy: policy.Defaults()}, "", nil
@@ -149,6 +152,15 @@ func (e *issueExecution) finish(ctx context.Context, state string, result app.Re
 	holdPersisted := false
 	update := func(record *localruntime.IssueClaimRecord) error {
 		if record.PRMerged() {
+			// The workflow can publish its merge receipt before this worker
+			// saves the draft verification that authorized delivery.
+			if record.State == localruntime.IssueStateMergedUnverified && state == "completed" &&
+				result.PRVerificationPassed && result.PRURL != "" && strings.EqualFold(record.PRURL, result.PRURL) {
+				record.State = localruntime.IssueStateMerged
+				record.PRVerification = ""
+				record.VerifiedAt = stoppedAt
+				record.Error = ""
+			}
 			record.StoppedAt = stoppedAt
 			record.ExecutionAgentAttempts = nil
 			return nil
@@ -339,7 +351,7 @@ func (e *issueExecution) configure(ctx context.Context, h *app.Harness) (context
 		}
 		err := e.store.Update(e.record.ID, func(record *localruntime.IssueClaimRecord) error {
 			if record.PRMerged() {
-				return errors.New("issue task pull request is already merged")
+				return localruntime.ErrIssuePRMerged
 			}
 			record.State = "running"
 			record.Step = step

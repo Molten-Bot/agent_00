@@ -337,7 +337,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		if err != nil || !pr.Merged {
 			return err
 		}
-		if err := s.saveMergedIssuePR(record, pr, ""); err != nil {
+		if err := s.saveMergedIssuePR(record, pr, "", false); err != nil {
 			return err
 		}
 		return s.stopMergedIssueWorker(ctx, record.RequestID)
@@ -536,7 +536,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		return nil
 	}
 	if record.Outcome == localruntime.IssueChecksPending && linkedPRErr == nil {
-		if staleOwner || record.Control != "" || record.State == "blocked" {
+		if staleOwner || record.Control != "" || record.State == "blocked" || record.PRRecoveryBlocker != "" {
 			return nil
 		}
 		lock.Close()
@@ -810,7 +810,7 @@ func (s Server) recordVerifiedIssuePR(record localruntime.IssueClaimRecord, pr i
 }
 
 func (s Server) recordMergedIssuePR(ctx context.Context, record localruntime.IssueClaimRecord, pr issuePullRequest) error {
-	if err := s.saveMergedIssuePR(record, pr, ""); err != nil {
+	if err := s.saveMergedIssuePR(record, pr, "", false); err != nil {
 		return err
 	}
 	record, err := s.IssueClaims.Load(record.ID)
@@ -833,7 +833,7 @@ func (s Server) knownIssuePR(record localruntime.IssueClaimRecord) string {
 	return ""
 }
 
-func (s Server) saveMergedIssuePR(record localruntime.IssueClaimRecord, pr issuePullRequest, reviewDetail string) error {
+func (s Server) saveMergedIssuePR(record localruntime.IssueClaimRecord, pr issuePullRequest, reviewDetail string, mergedByApp bool) error {
 	return s.IssueClaims.Update(record.ID, func(current *localruntime.IssueClaimRecord) error {
 		if known := s.knownIssuePR(*current); known != "" && !strings.EqualFold(known, pr.URL) {
 			return fmt.Errorf("merged pull request does not match the issue task's linked pull request")
@@ -845,6 +845,7 @@ func (s Server) saveMergedIssuePR(record localruntime.IssueClaimRecord, pr issue
 		if !pr.MergedAt.IsZero() {
 			current.PRMergedAt = pr.MergedAt
 		}
+		current.PRMergedByApp = current.PRMergedByApp || mergedByApp
 		if reviewDetail != "" {
 			current.ReviewDetail = reviewDetail
 		}
@@ -873,22 +874,23 @@ func (s Server) finishMergedIssue(ctx context.Context, record localruntime.Issue
 		}()
 	}
 	s.publishVerifiedIssuePR(record)
-	if s.Broker != nil {
-		if task, ok := s.Broker.Task(record.RequestID); ok && task.Status != "merged" &&
-			(task.PRURL == "" || strings.EqualFold(task.PRURL, record.PRURL)) {
-			if !isCompletedTaskStatus(task.Status) {
-				if err := s.stopMergedIssueWorker(ctx, record.RequestID); err != nil {
-					return err
-				}
-			}
-			mergedAt := formatTimeOrEmpty(record.PRMergedAt)
-			task.PRURL = record.PRURL
-			s.Broker.RecordReleaseFromTask(task, mergedAt)
-			_ = s.Broker.MarkTaskPRMerged(record.RequestID, mergedAt)
+	task, ok := s.Broker.Task(record.RequestID)
+	markMerged := ok && task.Status != "merged" && (task.PRURL == "" || strings.EqualFold(task.PRURL, record.PRURL))
+	if markMerged && !isCompletedTaskStatus(task.Status) {
+		if err := s.stopMergedIssueWorker(ctx, record.RequestID); err != nil {
+			return err
 		}
 	}
 	if stopped, err := localruntime.IssueProcessesStopped(record); err != nil || !stopped {
 		return err
+	}
+	if markMerged {
+		mergedAt := formatTimeOrEmpty(record.PRMergedAt)
+		task.PRURL = record.PRURL
+		s.Broker.RecordReleaseFromTask(task, mergedAt)
+		if err := s.Broker.MarkTaskPRMerged(record.RequestID, mergedAt); err == nil && record.Fulfilled() {
+			cleanupMergedTask(ctx, s.Broker, s.CloseTask, s.logf, task)
+		}
 	}
 	if record.ExecutionAgentAttempts != nil {
 		if err := s.IssueClaims.ReleaseExecutionReserve(record.ID); err != nil {

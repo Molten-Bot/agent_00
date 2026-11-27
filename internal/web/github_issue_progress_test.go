@@ -256,7 +256,7 @@ func TestIssueTaskUsesDurableStateAfterRestart(t *testing.T) {
 	}
 
 	var transitions []string
-	s.Workflows.RecordObservedIssueMerge = s.RecordObservedIssueMerge
+	s.Workflows.RecordIssueMerge = s.RecordIssueMerge
 	s.Workflows.Logf = func(format string, args ...any) {
 		transitions = append(transitions, fmt.Sprintf(format, args...))
 	}
@@ -276,6 +276,15 @@ func TestIssueTaskUsesDurableStateAfterRestart(t *testing.T) {
 
 func TestWorkflowMergeObservationSurvivesRestartWithoutPRLookup(t *testing.T) {
 	t.Parallel()
+	for _, name := range []string{"app merge", "external merge"} {
+		t.Run(name, func(t *testing.T) {
+			testWorkflowMergeSurvivesRestartWithoutPRLookup(t, name == "app merge")
+		})
+	}
+}
+
+func testWorkflowMergeSurvivesRestartWithoutPRLookup(t *testing.T, mergedByApp bool) {
+	t.Helper()
 	s, f := recoveryServer(t)
 	engine := s.Workflows
 	doc, err := engine.Store.Load()
@@ -283,14 +292,22 @@ func TestWorkflowMergeObservationSurvivesRestartWithoutPRLookup(t *testing.T) {
 		t.Fatal(err)
 	}
 	doc.Workflows[0].Merge.Enabled = true
+	doc.Workflows[0].Merge.RequireApproval = false
 	if doc, err = engine.Store.Save(doc); err != nil {
 		t.Fatal(err)
 	}
 	reconcileOrAdmitTestIssue(t.Context(), s)
-	record := completeRecoveryRecord(t, s, "error", 1)
+	record := completeRecoveryRecord(t, s, "completed", 1)
 	record.PRURL = "https://github.com/acme/repo/pull/42"
-	record.PRVerification = "Verify draft on the current head."
-	record.RunError = "pr_verification: checks never finished"
+	wantState, wantReviewDetail := localruntime.IssueStateMerged, ""
+	var mergedAt time.Time
+	if !mergedByApp {
+		record.Outcome = "error"
+		record.PRVerification = "Verify draft on the current head."
+		record.RunError = "pr_verification: checks never finished"
+		wantState, wantReviewDetail = localruntime.IssueStateMergedUnverified, "Waiting for successful checks"
+		mergedAt = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	}
 	record.NextAttemptAt = time.Now().Add(time.Hour)
 	if err := s.IssueClaims.Save(record); err != nil {
 		t.Fatal(err)
@@ -309,16 +326,24 @@ func TestWorkflowMergeObservationSurvivesRestartWithoutPRLookup(t *testing.T) {
 	if err := os.WriteFile(engine.StatePath, journal, 0600); err != nil {
 		t.Fatal(err)
 	}
-	mergedAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	engine.InspectPR = func(context.Context, string, string) (workflow.Item, error) {
-		return workflow.Item{Merged: true, MergedAt: mergedAt, Title: recoveryPRTitle}, nil
+		return workflow.Item{Open: mergedByApp, Merged: !mergedByApp, MergedAt: mergedAt,
+			Title: recoveryPRTitle, HeadSHA: "reviewed-head", ChecksPassed: true}, nil
+	}
+	merges := 0
+	engine.Merge = func(context.Context, workflow.Run) error {
+		merges++
+		return nil
 	}
 	engine.Fetch = func(context.Context, string, workflow.ScanNeeds) ([]workflow.Item, error) {
 		return nil, nil
 	}
-	engine.RecordObservedIssueMerge = s.RecordObservedIssueMerge
+	engine.RecordIssueMerge = s.RecordIssueMerge
 	if err := engine.Tick(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+	if (merges == 1) != mergedByApp || merges > 1 {
+		t.Fatalf("app merge count = %d, expected app merge = %t", merges, mergedByApp)
 	}
 	if runs, err := engine.Runs(); err != nil || len(runs) != 0 {
 		t.Fatalf("workflow still active after observing merge: %+v (%v)", runs, err)
@@ -333,8 +358,8 @@ func TestWorkflowMergeObservationSurvivesRestartWithoutPRLookup(t *testing.T) {
 	s.Workflows = &workflow.Engine{StatePath: engine.StatePath}
 	f.prs = "invalid pull request response"
 	merged := latestRecoveryRecord(t, s)
-	if merged.State != localruntime.IssueStateMergedUnverified || !merged.PRMergedAt.Equal(mergedAt) ||
-		merged.PRTitle != recoveryPRTitle || !merged.NextAttemptAt.IsZero() || merged.ReviewDetail != run.Reason {
+	if merged.State != wantState || !merged.PRMergedAt.Equal(mergedAt) || merged.PRMergedByApp != mergedByApp ||
+		merged.PRTitle != recoveryPRTitle || !merged.NextAttemptAt.IsZero() || merged.ReviewDetail != wantReviewDetail {
 		t.Fatalf("workflow pruned before persisting the merge receipt: %+v", merged)
 	}
 	tasks := s.snapshot().Tasks

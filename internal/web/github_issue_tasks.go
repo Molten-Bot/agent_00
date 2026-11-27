@@ -24,8 +24,8 @@ type issueTaskAttempt struct {
 	ReviewDetail string   `json:"review_detail,omitempty"`
 }
 
-// RecordObservedIssueMerge persists the linked PR merge and workflow gate on the matching attempt.
-func (s *Server) RecordObservedIssueMerge(run workflow.Run, pr workflow.Item) error {
+// RecordIssueMerge persists the linked PR merge and workflow gate on the matching attempt.
+func (s *Server) RecordIssueMerge(run workflow.Run, pr workflow.Item, mergedByApp bool) error {
 	if s.IssueClaims == nil {
 		return nil
 	}
@@ -42,10 +42,10 @@ func (s *Server) RecordObservedIssueMerge(run workflow.Run, pr workflow.Item) er
 			continue
 		}
 		if record.PRMerged() && (run.Reason == "" || record.ReviewDetail == run.Reason) &&
-			(pr.MergedAt.IsZero() || record.PRMergedAt.Equal(pr.MergedAt)) {
+			(pr.MergedAt.IsZero() || record.PRMergedAt.Equal(pr.MergedAt)) && (!mergedByApp || record.PRMergedByApp) {
 			return nil
 		}
-		return s.saveMergedIssuePR(record, issuePullRequest{URL: pr.URL, Title: pr.Title, MergedAt: pr.MergedAt}, run.Reason)
+		return s.saveMergedIssuePR(record, issuePullRequest{URL: pr.URL, Title: pr.Title, MergedAt: pr.MergedAt}, run.Reason, mergedByApp)
 	}
 	return nil
 }
@@ -121,7 +121,10 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 		task.Repo = stringsx.FirstNonEmpty(task.Repo, latest.Run.RepoURL)
 		task.Source = stringsx.FirstNonEmpty(task.Source, "github_issues")
 		task.IssueState = latest.State
-		if latest.PRRecoveryBlocker != "" || (latest.State == "blocked" && requiresIssueBranchRecovery(latest)) {
+		if latest.PRRecoveryBlocker != "" {
+			task.IssueState = "blocked"
+			task.CanRerun = false
+		} else if latest.State == "blocked" && requiresIssueBranchRecovery(latest) {
 			task.CanRerun = false
 		}
 		task.IssuePlanningStatus = latest.PlanningStatus

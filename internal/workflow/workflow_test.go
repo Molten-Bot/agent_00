@@ -605,10 +605,18 @@ func TestImplementationMergeRequiresPersistedReceiptOnCurrentHead(t *testing.T) 
 				Fetch: e.Fetch, Submit: e.Submit, Status: e.Status,
 				InspectPR: gh.Inspect, Merge: gh.Merge,
 			}
+			receipts := 0
+			restarted.RecordIssueMerge = func(previous Run, pr Item, mergedByApp bool) error {
+				receipts++
+				if !mergedByApp || prState != "MERGED" || previous.ID != runs[0].ID || pr.URL != o.PRURL {
+					t.Fatalf("incorrect app merge receipt: run=%+v PR=%+v by app=%t", previous, pr, mergedByApp)
+				}
+				return nil
+			}
 			tick(t, restarted)
 			tick(t, restarted)
-			if (merges == 1) != tc.merge || merges > 1 {
-				t.Fatalf("merge attempts = %d", merges)
+			if (merges == 1) != tc.merge || merges > 1 || receipts != merges {
+				t.Fatalf("merge attempts = %d, receipts = %d", merges, receipts)
 			}
 		})
 	}

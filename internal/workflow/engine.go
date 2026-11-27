@@ -235,8 +235,8 @@ type Engine struct {
 	Logf      func(string, ...any)
 
 	FinishReview func(context.Context, githubutil.ReviewReceipt, *githubutil.PendingReviewGate) error
-	// RecordObservedIssueMerge saves the merge and prior gate before pruning an issue activation.
-	RecordObservedIssueMerge func(Run, Item) error
+	// RecordIssueMerge saves the merge before pruning an issue activation.
+	RecordIssueMerge func(previous Run, pr Item, mergedByApp bool) error
 	// MemoryPressure defers background ticks while host memory is exhausted.
 	MemoryPressure func() bool
 
@@ -711,7 +711,8 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 	// excluded from the tick snapshot. Compare the outcome before replacing it.
 	expected := original
 	stale := false
-	var observedPR Item
+	var mergedPR Item
+	mergedByApp := false
 	commit := func() error {
 		return e.transaction(func(s *State) error {
 			current := s.run(r.ID)
@@ -719,8 +720,8 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 				stale = true
 				return errJournalUnchanged
 			}
-			if r.Status == "merged" && r.Reason == observedIssueMergeReason {
-				if err := e.recordObservedIssueMerge(*current, r.PRURL, observedPR); err != nil {
+			if r.Status == "merged" && r.Item.Kind == "issue" {
+				if err := e.recordIssueMerge(*current, r.PRURL, mergedPR, mergedByApp); err != nil {
 					return err
 				}
 			}
@@ -869,7 +870,7 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 			return errors.Join(err, finish())
 		}
 		if i.Merged && r.Item.Kind == "issue" {
-			observedPR = i
+			mergedPR = i
 			r.Status, r.Reason = "merged", observedIssueMergeReason
 			return finish()
 		}
@@ -959,7 +960,7 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 			return nil
 		}
 		if i.Merged && r.Item.Kind == "issue" {
-			observedPR = i
+			mergedPR = i
 			r.Status, r.Reason = "merged", observedIssueMergeReason
 		} else if i.Merged && reviewRequired {
 			r.Status = "completed"
@@ -1007,6 +1008,8 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 				r.Reason = "Merge blocked: " + mergeErr.Error()
 			}
 		} else {
+			mergedPR = Item{Title: i.Title}
+			mergedByApp = true
 			r.Status = "merged"
 			r.Reason = "Pull request merged"
 		}
@@ -1054,15 +1057,15 @@ func (r Run) hasPendingReview() bool {
 	return r.Outcome != nil && r.Outcome.Status == OutcomeReviewPending && !r.Outcome.ReviewInterrupted
 }
 
-func (e *Engine) recordObservedIssueMerge(r Run, prURL string, pr Item) error {
-	if e.RecordObservedIssueMerge == nil {
+func (e *Engine) recordIssueMerge(r Run, prURL string, pr Item, mergedByApp bool) error {
+	if e.RecordIssueMerge == nil {
 		return nil
 	}
-	if r.Status != awaitingReview && r.Status != "waiting" && r.Status != OutcomeChecksPending && !r.hasFailedPendingReview() {
+	if mergedByApp || (r.Status != awaitingReview && r.Status != "waiting" && r.Status != OutcomeChecksPending && !r.hasFailedPendingReview()) {
 		r.Reason = ""
 	}
 	pr.URL = prURL
-	return e.RecordObservedIssueMerge(r, pr)
+	return e.RecordIssueMerge(r, pr, mergedByApp)
 }
 
 // ObserveIssueMerge releases the activation after the issue claim records the merge.
@@ -1084,7 +1087,7 @@ func (e *Engine) ObserveIssueMerge(id, requestID, prURL string) error {
 			(r.PRURL != "" && !strings.EqualFold(r.PRURL, prURL)) {
 			return errJournalUnchanged
 		}
-		if err := e.recordObservedIssueMerge(*r, prURL, Item{}); err != nil {
+		if err := e.recordIssueMerge(*r, prURL, Item{}, false); err != nil {
 			return err
 		}
 		r.Status, r.Reason, r.PRURL = "merged", observedIssueMergeReason, prURL

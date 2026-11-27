@@ -215,14 +215,18 @@ func (m *PRMergeMonitor) applyPRState(ctx context.Context, task Task, state prVi
 			return
 		}
 	}
-	m.Broker.DropTaskRunConfig(task.RequestID)
-	if m.CleanupTask != nil {
-		if err := m.CleanupTask(ctx, task.RequestID); err != nil {
-			m.Logf("localruntime.ui status=warn event=pr_monitor_cleanup request_id=%s pr_url=%s err=%q", task.RequestID, task.PRURL, err)
-		}
-	}
+	cleanupMergedTask(ctx, m.Broker, m.CleanupTask, m.Logf, task)
 	m.markMerged(task.RequestID)
 	m.Logf("localruntime.ui status=ok event=pr_merged request_id=%s pr_url=%s", task.RequestID, task.PRURL)
+}
+
+func cleanupMergedTask(ctx context.Context, broker *Broker, cleanup func(context.Context, string) error, logf func(string, ...any), task Task) {
+	broker.DropTaskRunConfig(task.RequestID)
+	if cleanup != nil {
+		if err := cleanup(ctx, task.RequestID); err != nil {
+			logf("localruntime.ui status=warn event=pr_monitor_cleanup request_id=%s pr_url=%s err=%q", task.RequestID, task.PRURL, err)
+		}
+	}
 }
 
 func (m *PRMergeMonitor) prState(ctx context.Context, prURL string) (prViewState, error) {

@@ -49,6 +49,7 @@ type IssueClaimRecord struct {
 	PRURL            string        `json:"prUrl,omitempty"`
 	PRTitle          string        `json:"prTitle,omitempty"`
 	PRMergedAt       time.Time     `json:"prMergedAt,omitzero"`
+	PRMergedByApp    bool          `json:"prMergedByApp,omitempty"`
 	ReviewDetail     string        `json:"mergeReviewDetail,omitempty"`
 	VerifiedAt       time.Time     `json:"verifiedAt,omitempty"`
 	LabelAdded       bool          `json:"labelAdded,omitempty"`
@@ -109,6 +110,7 @@ type IssueClaimStore struct {
 var issueClaimIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
 var ErrIssueOwnershipChanged = errors.New("issue ownership changed; start the issue again to create a new attempt")
+var ErrIssuePRMerged = errors.New("issue task pull request is already merged")
 
 const (
 	IssueStateMerged                = "merged"
@@ -137,10 +139,11 @@ func (s *IssueClaimStore) Save(record IssueClaimRecord) error {
 	defer s.mu.Unlock()
 	// Workflow reconciliation can record a merge while another caller
 	// holds a pre-merge snapshot. Keep the terminal receipt in that case.
-	if !record.PRMerged() {
-		if current, err := s.read(filepath.Join(s.Root, record.ID+".json")); err == nil && current.PRMerged() {
+	if current, err := s.read(filepath.Join(s.Root, record.ID+".json")); err == nil && current.PRMerged() {
+		if !record.PRMerged() {
 			return nil
 		}
+		record.PRMergedByApp = record.PRMergedByApp || current.PRMergedByApp
 	}
 	return s.save(record)
 }
@@ -166,6 +169,13 @@ func (s *IssueClaimStore) beginExecution(record IssueClaimRecord, openReserve fu
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	current, err := s.read(filepath.Join(s.Root, record.ID+".json"))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if current.PRMerged() {
+		return ErrIssuePRMerged
+	}
 	file, err := openReserve(issueStorageReserve(s.Root, record.ID), os.O_CREATE|os.O_WRONLY, 0600)
 	if err == nil {
 		if err = file.Close(); err == nil {

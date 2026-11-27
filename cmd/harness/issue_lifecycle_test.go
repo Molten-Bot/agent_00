@@ -161,6 +161,35 @@ func TestIssueExecutionStopPreservesObservedMerge(t *testing.T) {
 	}
 }
 
+func TestIssueExecutionSavesPassedVerificationAfterAppMergeReceipt(t *testing.T) {
+	t.Parallel()
+	store, record := lifecycleRecord(t)
+	work, _, err := prepareIssueExecution(store, record.Run, localruntime.IssueRecoveryConfig{})
+	if err != nil || work == nil {
+		t.Fatalf("prepare issue execution = %v, %v", work, err)
+	}
+	defer work.lock.Close()
+	const prURL = "https://github.com/acme/repo/pull/12"
+	if err := store.Update(record.ID, func(r *localruntime.IssueClaimRecord) error {
+		r.State = localruntime.IssueStateMergedUnverified
+		r.PRMergedByApp = true
+		r.PRURL = prURL
+		r.PRVerification = "Verify draft on the current head."
+		r.Error = "pull request merged before draft verification passed"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := work.finish(t.Context(), "completed", app.Result{PRURL: prURL, PRVerificationPassed: true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Load(record.ID)
+	if err != nil || !got.PRMerged() || !got.PRMergedByApp || !got.Fulfilled() || got.VerifiedAt.IsZero() ||
+		got.Error != "" || got.ExecutionAgentAttempts != nil {
+		t.Fatalf("completed verification was lost after the merge receipt: %+v, %v", got, err)
+	}
+}
+
 func TestIssueCheckWaitResumesSameClaimAndPreservesBackoff(t *testing.T) {
 	t.Parallel()
 	store, record := lifecycleRecord(t)

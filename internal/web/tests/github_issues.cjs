@@ -80,6 +80,27 @@ test('issue task history shows each verification error once', async t => {
   assert.equal(history.split('pr verification').length - 1, 1);
   assert.ok(history.includes(reviewDetail));
   assert.equal(await card.getByRole('button', { name: 'Retry task' }).count(), 0);
+
+  await card.locator('.task-output-toggle').click();
+  const result = page.locator('#task-fullscreen-result');
+  await result.getByText('Merged', { exact: true }).waitFor();
+  const consoleHistory = result.locator('details');
+  assert.equal(await consoleHistory.getAttribute('open'), null);
+  await consoleHistory.locator('summary').click();
+  assert.equal((await consoleHistory.innerText()).split(failure).length - 1, 1);
+  assert.ok((await consoleHistory.innerText()).includes(reviewDetail));
+  assert.equal(await result.getByRole('link', { name: 'Open pull request on GitHub.' }).getAttribute('href'),
+    'https://github.com/example/project/pull/17');
+
+  const lateDetail = 'Verification evidence arrived after opening the console';
+  await page.evaluate(detail => {
+    const task = state.snapshot.tasks[0];
+    render({ ...state.snapshot, tasks: [{
+      ...task, issue_attempts: [{ ...task.issue_attempts[0], review_detail: detail }],
+    }] });
+  }, lateDetail);
+  await consoleHistory.getByText(lateDetail, { exact: false }).waitFor();
+  assert.notEqual(await consoleHistory.getAttribute('open'), null);
   assert.deepEqual(errors, []);
 });
 

@@ -19,11 +19,14 @@ func TestBeginExecutionReleasesReserveWhenReceiptSaveFails(t *testing.T) {
 	// A directory at the receipt path lets reserve creation succeed but
 	// prevents the temporary receipt from being renamed into place.
 	receipt := filepath.Join(store.Root, id+".json")
-	if err := os.Mkdir(receipt, 0700); err != nil {
-		t.Fatal(err)
-	}
 	var renameErr *os.LinkError
-	if err := store.BeginExecution(IssueClaimRecord{ID: id}); !errors.As(err, &renameErr) || renameErr.New != receipt {
+	err := store.beginExecution(IssueClaimRecord{ID: id}, func(path string, flags int, mode os.FileMode) (*os.File, error) {
+		if err := os.Mkdir(receipt, 0700); err != nil {
+			t.Fatal(err)
+		}
+		return os.OpenFile(path, flags, mode)
+	})
+	if !errors.As(err, &renameErr) || renameErr.New != receipt {
 		t.Fatalf("BeginExecution error = %v, want receipt rename failure", err)
 	}
 	if _, err := os.Stat(issueStorageReserve(store.Root, id)); !errors.Is(err, os.ErrNotExist) {
@@ -47,17 +50,16 @@ func TestBeginExecutionDiskFullHoldsIssueWithoutChargingRetry(t *testing.T) {
 				t.Fatal(err)
 			}
 			receipt := filepath.Join(store.Root, id+".json")
-			if name == "hold receipt write fails" {
-				// Force the hold write to fail at rename while keeping the issue
-				// visible to readers during the journal outage.
-				if err := os.Rename(receipt, receipt+".backup"); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Mkdir(receipt, 0700); err != nil {
-					t.Fatal(err)
-				}
-			}
 			err := store.beginExecution(record, func(path string, _ int, _ os.FileMode) (*os.File, error) {
+				if name == "hold receipt write fails" {
+					// Force the hold write to fail after reading the current claim.
+					if err := os.Rename(receipt, receipt+".backup"); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Mkdir(receipt, 0700); err != nil {
+						t.Fatal(err)
+					}
+				}
 				return nil, &os.PathError{Op: "open", Path: path, Err: syscall.ENOSPC}
 			})
 			if !errors.Is(err, syscall.ENOSPC) {
@@ -90,6 +92,34 @@ func TestBeginExecutionDiskFullHoldsIssueWithoutChargingRetry(t *testing.T) {
 				got.AgentAttempts != record.AgentAttempts || got.Failures != record.Failures || got.PriorRunFailures != record.PriorRunFailures ||
 				!strings.Contains(got.Error, "select Retry") || !strings.Contains(got.FailureDetail(), syscall.ENOSPC.Error()) {
 				t.Fatalf("restarted receipt = %+v, error = %v", got, err)
+			}
+		})
+	}
+}
+
+func TestBeginExecutionRejectsStaleSnapshotAfterMerge(t *testing.T) {
+	t.Parallel()
+	for _, state := range []string{IssueStateMerged, IssueStateMergedUnverified} {
+		t.Run(state, func(t *testing.T) {
+			t.Parallel()
+			store := &IssueClaimStore{Root: t.TempDir()}
+			id := strings.Repeat("a", 32)
+			queued := IssueClaimRecord{ID: id, State: "queued",
+				Run: config.Config{GitHubIssue: &config.GitHubIssueConfig{Claim: &config.GitHubIssueClaim{ID: id}}}}
+			merged := queued
+			merged.State, merged.PRMergedAt = state, time.Now().UTC()
+			if err := store.Save(merged); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.BeginExecution(queued); !errors.Is(err, ErrIssuePRMerged) {
+				t.Fatalf("stale reservation returned %v, want ErrIssuePRMerged", err)
+			}
+			got, err := store.Load(id)
+			if err != nil || got.State != state || !got.PRMergedAt.Equal(merged.PRMergedAt) {
+				t.Fatalf("terminal receipt overwritten: %+v, %v", got, err)
+			}
+			if _, err := os.Stat(issueStorageReserve(store.Root, id)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("stat execution reserve = %v, want missing reserve", err)
 			}
 		})
 	}

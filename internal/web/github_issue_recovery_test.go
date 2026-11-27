@@ -2642,15 +2642,34 @@ func TestIssueRecoveryRecordsReleaseWithoutMergeTimestamp(t *testing.T) {
 			reconcileOrAdmitTestIssue(t.Context(), s)
 			record := completeRecoveryRecord(t, s, "error", 1)
 			record.PRURL = "https://github.com/acme/repo/pull/42"
+			verified := state == localruntime.IssueStateMerged
+			if !verified {
+				record.PRVerification = "Draft verification incomplete"
+			}
 			record.State = state
 			if err := s.IssueClaims.Save(record); err != nil {
 				t.Fatal(err)
 			}
 			now := time.Now().UTC().Truncate(time.Second)
 			s.Broker.now = func() time.Time { return now }
+			s.Broker.RecordTaskRunConfig(record.RequestID, []byte(`{}`))
 			s.Broker.IngestLog("task status=error request_id=" + record.RequestID + " pr_url=" + record.PRURL)
-			if err := s.ReconcileIssueWork(t.Context()); err != nil {
-				t.Fatal(err)
+			cleanups := 0
+			s.CloseTask = func(_ context.Context, requestID string) error {
+				if requestID != record.RequestID {
+					t.Fatalf("cleanup targeted another task: %s", requestID)
+				}
+				cleanups++
+				return nil
+			}
+			for range 2 {
+				if err := s.ReconcileIssueWork(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, hasConfig := s.Broker.TaskRunConfig(record.RequestID)
+			if (cleanups == 1) != verified || cleanups > 1 || hasConfig == verified {
+				t.Fatalf("verified=%t cleanups=%d run config retained=%t", verified, cleanups, hasConfig)
 			}
 			task, _ := s.Broker.Task(record.RequestID)
 			releases := s.Broker.Snapshot().Releases
@@ -2693,6 +2712,45 @@ func TestIssueRecoveryDisablesTaskRetryWhenLinkedPRBlocksRecovery(t *testing.T) 
 			if len(tasks) != 1 || tasks[0].CanRerun != (tc.blocker == "") || !strings.Contains(tasks[0].Error, tc.blocker) ||
 				tasks[0].IssueAttempts[0].Error != record.RunError {
 				t.Fatalf("wrong retry eligibility or missing attempt evidence: %+v", tasks)
+			}
+		})
+	}
+}
+
+func TestIssueRecoveryResumesChecksOnlyAfterLinkedPRBlockerClears(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	reconcileOrAdmitTestIssue(t.Context(), s)
+	record := completeRecoveryRecord(t, s, localruntime.IssueChecksPending, 1)
+	record.PRURL = "https://github.com/acme/repo/pull/42"
+	record.State, record.UnlockPending = localruntime.IssueChecksPending, false
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct{ state, base, blocker string }{
+		{"closed", "main", "reopen the existing pull request"},
+		{"open", "other", "retarget the existing pull request"},
+		{"open", "main", ""},
+	} {
+		t.Run(tc.state+"/"+tc.base, func(t *testing.T) {
+			f.prs = recoveryPR(tc.state, "null", record.Run.GitHubIssue.Claim.Branch, tc.base)
+			before := len(f.submissions)
+			if err := s.ReconcileIssueWork(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			claim := latestRecoveryRecord(t, s)
+			delta := len(f.submissions) - before
+			if tc.blocker == "" {
+				if delta != 1 || claim.PRRecoveryBlocker != "" || claim.RequestID != record.RequestID {
+					t.Fatalf("corrected PR did not resume the same task: claim=%+v, submissions=%d", claim, delta)
+				}
+				return
+			}
+			tasks := s.snapshot().Tasks
+			if delta != 0 || !strings.Contains(claim.PRRecoveryBlocker, tc.blocker) || len(tasks) != 1 ||
+				tasks[0].IssueState != "blocked" || tasks[0].CanRerun || !strings.Contains(tasks[0].Error, tc.blocker) {
+				t.Fatalf("blocked PR resumed or rendered as active: blocker=%q, submissions=%d, tasks=%+v", claim.PRRecoveryBlocker, delta, tasks)
 			}
 		})
 	}

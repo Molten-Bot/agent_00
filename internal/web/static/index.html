@@ -12076,14 +12076,22 @@
     function clearTaskResult(node) {
       if (!node) return;
       node.className = "task-result";
+      delete node.dataset.requestId;
       node.replaceChildren();
     }
 
     function renderTaskResult(task, node) {
       if (!node) return;
+      const historyOpen = node.dataset.requestId === task?.request_id &&
+        Boolean(node.querySelector(".task-issue-history details[open]"));
       clearTaskResult(node);
 
-      if (!task || task.issue_attempts?.length) {
+      if (!task) return;
+      if (task.issue_attempts?.length) {
+        const action = renderTaskPullRequestAction(task, "View pull request") || renderTaskIssueAction(task, "View issue");
+        node.className = `task-result show ${statusClass(taskDisplayStatus(task))}`;
+        node.dataset.requestId = task.request_id;
+        node.appendChild(renderIssueTaskHistory(task, historyOpen, true, action));
         return;
       }
 
@@ -13615,21 +13623,31 @@
       const selectedLabel = taskDisplayLabel(selected);
       const logs = Array.isArray(selected.logs) ? selected.logs : [];
       const lastLog = logs.length ? logs[logs.length - 1] : null;
-      const renderSig = [
+      const issueTask = Boolean(selected.issue_attempts?.length);
+      const renderSig = JSON.stringify([
         selected.request_id || "",
         selectedLabel,
         taskPullRequestURL(selected),
+        taskCardPullRequestURL(selected),
+        taskIssueURL(selected),
         selected.review_gate || "",
         selected.review_url || "",
         selected.status || "",
         selected.stage || "",
         selected.stage_status || "",
         selected.warning || "",
+        selected.error,
+        selected.issue_state,
+        selected.issue_attempts,
+        selected.retry_at,
+        selected.workflow_id,
+        selected.workflow_name,
+        Boolean(state.reviewSettings?.workflowEnabled),
         logs.length,
         lastLog?.time || "",
         lastLog?.stream || "",
         lastLog?.text || "",
-      ].join("|");
+      ]);
       if (terminalNode.dataset.renderSig === renderSig) {
         terminalNode.dataset.pendingRenderSig = "";
         return;
@@ -13642,7 +13660,7 @@
       terminalNode.dataset.renderSig = renderSig;
       terminalNode.dataset.pendingRenderSig = "";
 
-      headLabelNode.textContent = `${selectedLabel} | ${selected.status || "pending"} | ${selected.stage || "-"}`;
+      headLabelNode.textContent = issueTask ? selectedLabel : `${selectedLabel} | ${selected.status || "pending"} | ${selected.stage || "-"}`;
       renderTaskResult(selected, resultNode);
       const wasPinnedToBottom = terminalNode.scrollTop + terminalNode.clientHeight >= terminalNode.scrollHeight - 24;
       if (!renderXtermTaskLogs(logs, terminalNode)) {

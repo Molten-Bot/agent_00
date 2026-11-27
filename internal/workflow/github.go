@@ -380,7 +380,7 @@ func (g GitHub) Merge(ctx context.Context, r Run) error {
 	if _, err = g.command(ctx, args...); err != nil {
 		return err
 	}
-	if !r.requiresReview() && appID == 0 {
+	if r.Item.Kind != "issue" && !r.requiresReview() && appID == 0 {
 		return nil
 	}
 	raw, err := g.command(ctx, "pr", "view", r.PRURL, "--repo", r.Item.Repository, "--json", "state")
