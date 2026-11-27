@@ -9608,7 +9608,7 @@
       const branch = String(task?.branch || "").trim();
       const baseBranch = String(task?.base_branch || "").trim();
       if (baseBranch && branch && baseBranch !== branch) {
-        return `from:${baseBranch} to:${branch}`;
+        return `${baseBranch}:${branch}`;
       }
       return branch || baseBranch || "-";
     }
@@ -12867,7 +12867,7 @@
             repos.appendChild(siteLinks);
           }
           const branch = document.createElement("div");
-          branch.textContent = `branch: ${formatTaskBranch(task)}`;
+          branch.textContent = formatTaskBranch(task);
           const update = document.createElement("div");
           update.className = "task-timing-summary";
           update.dataset.requestId = requestID;
