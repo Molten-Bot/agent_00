@@ -510,6 +510,9 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		if err != nil {
 			return h.failWithRepos(code, stage, err, runDir, published)
 		}
+		if h.IssueChecksPRURL != "" && published[0].PRAlreadyMerged {
+			return buildResult(runDir, published, false)
+		}
 		repos = published
 	} else if err := h.cloneRepositories(ctx, repos, cloneBaseBranch); err != nil {
 		if feedbackPRURL != "" {
@@ -1638,21 +1641,20 @@ func (h Harness) checkPublishedPullRequest(
 			}
 			noChecksReported := isNoChecksReported(checkRes, checkErr)
 			if noChecksReported && h.IssueChecksPRURL == repo.PRURL && repo.IssueClaimBranch {
-				required, err := h.requiredCIStatusChecks(ctx, *repo, false)
-				if err != nil {
-					return ExitPR, "checks", err
-				}
 				bucket, summary, err := h.readWorkflowDispatchResult(ctx, *repo, checkHead)
 				if err != nil {
 					return ExitPR, "checks", err
 				}
-				if bucket == "pending" || (bucket == "" && len(required) > 0) {
+				if bucket == "pending" {
 					return ExitPR, "checks", fmt.Errorf("%w: current check results are pending or missing", ErrChecksUnavailable)
 				}
 				if bucket != "fail" {
-					// The deferred current-head gate verifies required results even
-					// when the CLI rollup lags a completed dispatch.
+					// The deferred current-head gate verifies the paginated rollup
+					// when the CLI does not report any results.
 					return ExitSuccess, "", nil
+				}
+				if _, err := h.requiredCIStatusChecks(ctx, *repo, false); err != nil {
+					return ExitPR, "checks", err
 				}
 				checkSummary = summary
 				break

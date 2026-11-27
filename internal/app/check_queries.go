@@ -227,6 +227,9 @@ type prCheckRollupContexts struct {
 }
 
 func (h Harness) readPRCheckRollup(ctx context.Context, repo repoWorkspace, id, expected string) ([]prCheckRollupEntry, error) {
+	if id == "" {
+		return nil, fmt.Errorf("%w: pull request ID was missing", ErrChecksUnavailable)
+	}
 	var checks []prCheckRollupEntry
 	var cursor string
 	seenCursors := make(map[string]bool)
@@ -326,9 +329,6 @@ func (h Harness) confirmHeadChecks(ctx context.Context, repo repoWorkspace, expe
 	}
 	if err := checkPRMatches(state, repo, expected); err != nil {
 		return err
-	}
-	if state.ID == "" {
-		return fmt.Errorf("%w: pull request ID was missing", ErrChecksUnavailable)
 	}
 	required, err := h.requiredCIStatusChecks(ctx, repo, ready)
 	if err != nil {

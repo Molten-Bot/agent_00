@@ -1088,7 +1088,11 @@ func (e *Engine) Complete(id string, outcome Outcome) error {
 		if r == nil {
 			return ErrActivationNotFound
 		}
-		if r.Status == OutcomeChecksPending || ((r.Status == awaitingReview || r.Status == "failed") && r.hasPendingReview()) {
+		if outcome.Status == OutcomeAlreadyMerged {
+			// A confirmed merge needs no further GitHub reads.
+			r.GitHubRetryAt = time.Time{}
+			r.Status = "running"
+		} else if r.Status == OutcomeChecksPending || ((r.Status == awaitingReview || r.Status == "failed") && r.hasPendingReview()) {
 			r.Status = "running"
 		}
 		r.Outcome = &outcome

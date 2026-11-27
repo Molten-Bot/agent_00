@@ -735,6 +735,12 @@ func (s Server) recordVerifiedIssuePR(record *localruntime.IssueClaimRecord, pr 
 }
 
 func (s Server) recordMergedIssuePR(record localruntime.IssueClaimRecord, pr issuePullRequest) error {
+	if policy := record.Run.Workflow; s.Workflows != nil && policy != nil && !policy.IsDefaultExecution() && !policy.DetachedReview {
+		err := s.Workflows.Complete(policy.EventID, workflow.Outcome{Status: workflow.OutcomeAlreadyMerged, PRURL: pr.URL})
+		if err != nil && !errors.Is(err, workflow.ErrActivationNotFound) {
+			return fmt.Errorf("complete merged issue workflow: %w", err)
+		}
+	}
 	if record.State != localruntime.IssueStateMergedUnverified {
 		record.RunError = record.FailureDetail()
 	}

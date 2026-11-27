@@ -918,6 +918,23 @@ func TestIssueRecoveryRecordsExternalMergeAsTerminalSuccess(t *testing.T) {
 			record := completeRecoveryRecord(t, s, "error", 1)
 			const failure = "pr_verification: reviewed patch evidence is truncated"
 			const prURL = "https://github.com/acme/repo/pull/42"
+			engine := s.Workflows
+			policy := record.Run.Workflow
+			item := workflow.Item{Kind: "issue", Repository: record.Run.GitHubIssue.Repository, Number: record.Run.GitHubIssue.Number}
+			if err := engine.PrepareIssueRecovery(policy.ID, policy.PolicyHash, policy.EventID, "", item, nil); err != nil {
+				t.Fatal(err)
+			}
+			engine.Fetch = func(context.Context, string, workflow.ScanNeeds) ([]workflow.Item, error) { return nil, nil }
+			engine.Reconcile = func(string) string { return record.RequestID }
+			if err := engine.Complete(policy.EventID, workflow.Outcome{Status: workflow.OutcomeChecksPending, PRURL: prURL}); err != nil {
+				t.Fatal(err)
+			}
+			if err := engine.Tick(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if runs, err := engine.Runs(); err != nil || len(runs) != 1 || runs[0].Status != workflow.OutcomeChecksPending {
+				t.Fatalf("expected retained checks-pending activation, got %+v, %v", runs, err)
+			}
 			record.PRVerification = "Verify CI and submitted review on the published head."
 			record.RunError, record.Error = failure, failure
 			record.PriorRunFailures = 1
@@ -968,6 +985,12 @@ func TestIssueRecoveryRecordsExternalMergeAsTerminalSuccess(t *testing.T) {
 				if err := restarted.ReconcileIssueWork(t.Context()); err != nil {
 					t.Fatal(err)
 				}
+			}
+			if err := engine.Tick(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if runs, err := engine.Runs(); err != nil || len(runs) != 0 {
+				t.Fatalf("external merge left a workflow activation: %+v, %v", runs, err)
 			}
 			got := latestRecoveryRecord(t, restarted)
 			if !got.Fulfilled() || !got.PRAlreadyMerged || got.Error != "" || got.Incident != "" ||

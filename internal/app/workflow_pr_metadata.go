@@ -97,6 +97,11 @@ func (h Harness) checkoutPublishedPRs(ctx context.Context, cfg config.Config, re
 		if err != nil {
 			return published, ExitPR, "pr", err
 		}
+		if pullRequestStateIsMerged(state) {
+			h.logf("stage=checks status=ok action=observe_merge pr_url=%s", repo.PRURL)
+			h.recordObservedMerge(repo)
+			continue
+		}
 		repo.PRURL = state.URL
 		repo.RequireExistingPR = true
 		repo.ResumeWorkflowPR = true
@@ -141,6 +146,9 @@ func (h Harness) loadWorkflowPRToResume(ctx context.Context, cfg config.Config, 
 	state, err := loadState(ctx, "", target)
 	if err != nil {
 		return prStateView{}, err
+	}
+	if h.IssueChecksPRURL != "" && pullRequestStateIsMerged(state) {
+		return state, nil
 	}
 	if !pullRequestStateIsOpen(state) || state.HeadRefName == "" || state.BaseRefName == "" ||
 		!strings.EqualFold(githubutil.PullRequestRepository(state.URL), repository) ||

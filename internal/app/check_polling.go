@@ -129,7 +129,7 @@ func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) (merged
 	timeout := h.prChecksWatchTimeout()
 	deadline := poll.started.Add(timeout)
 	parent := ctx
-	var missingRequiredHead prStateView
+	var incompleteRollupHead prStateView
 	var observedHead string
 	observedPending := make(map[string]bool)
 	if timeout > 0 {
@@ -141,8 +141,8 @@ func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) (merged
 		if err != nil && errors.Is(context.Cause(ctx), ErrChecksUnavailable) {
 			err = ErrChecksUnavailable
 		}
-		if errors.Is(err, ErrChecksUnavailable) && time.Until(deadline) <= 0 && missingRequiredHead.HeadRefOID != "" && parent.Err() == nil {
-			merged, err = h.reconcileResumedDispatchChecks(parent, prURL, missingRequiredHead, observedPending)
+		if errors.Is(err, ErrChecksUnavailable) && time.Until(deadline) <= 0 && incompleteRollupHead.HeadRefOID != "" && parent.Err() == nil {
+			merged, err = h.reconcileResumedChecks(parent, prURL, incompleteRollupHead, observedPending)
 			if errors.Is(err, context.DeadlineExceeded) && parent.Err() == nil {
 				err = errors.Join(ErrChecksUnavailable, err)
 			}
@@ -154,7 +154,7 @@ func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) (merged
 		if timeout > 0 && time.Until(deadline) <= 0 && ctx.Err() == nil {
 			return false, ErrChecksUnavailable
 		}
-		res, err := h.runCheckQuery(ctx, "checks", prStateViewCommand("", prURL, "statusCheckRollup"), checkQueryTimeout)
+		res, err := h.runCheckQuery(ctx, "checks", prStateViewCommand("", prURL, "statusCheckRollup", "id"), checkQueryTimeout)
 		if err != nil {
 			return false, commandErrorWithDetails("refresh resumed PR checks", err, res, maxGitErrorDetailChars)
 		}
@@ -174,7 +174,7 @@ func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) (merged
 		if !pullRequestStateIsOpen(pr.prStateView) {
 			return false, nil
 		}
-		missingRequiredHead = prStateView{}
+		incompleteRollupHead = prStateView{}
 		if pr.BaseRefName == "" || pr.HeadRefName == "" || pr.HeadRefOID == "" {
 			return false, fmt.Errorf("%w: resumed pull request branches or head were missing", ErrChecksUnavailable)
 		}
@@ -209,23 +209,33 @@ func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) (merged
 					names = append(names, name)
 				}
 			}
-			missingRequired := len(names) > 0
-			for name := range observedPending {
-				if !visible[name] {
-					names = append(names, name)
+			if len(names) == 0 && len(required) > 0 {
+				// The CLI rollup only carries names. GitHub's required flag
+				// distinguishes a required result from a same-name optional one.
+				checks, err := h.readPRCheckRollup(ctx, repo, pr.ID, pr.HeadRefOID)
+				if errors.Is(err, githubutil.ErrReviewInterrupted) {
+					return true, nil
+				}
+				if err != nil {
+					return false, err
+				}
+				missing, pending := resumedRollupPending(checks, required, observedPending)
+				names = append(missing, pending...)
+			} else {
+				for name := range observedPending {
+					if !visible[name] {
+						names = append(names, name)
+					}
 				}
 			}
 			settled := len(names) == 0
-			if missingRequired && len(visible) > 0 {
-				missingRequiredHead = pr.prStateView
+			if !settled {
+				incompleteRollupHead = pr.prStateView
 			}
 			if len(visible) == 0 {
 				bucket, summary, err := h.readWorkflowDispatchResult(ctx, repo, pr.HeadRefOID)
 				if err != nil {
 					return false, err
-				}
-				if missingRequired && bucket != "" && bucket != "pending" {
-					missingRequiredHead = pr.prStateView
 				}
 				if bucket == "fail" {
 					settled = true // Let the normal check path handle the dispatch failure.
@@ -257,9 +267,9 @@ func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) (merged
 	}
 }
 
-// After the propagation wait, confirm missing results with the paginated PR
-// rollup and current policy before failing without another automatic retry.
-func (h Harness) reconcileResumedDispatchChecks(ctx context.Context, prURL string, expected prStateView, observedPending map[string]bool) (bool, error) {
+// After the propagation wait, reconcile missing results with the paginated PR
+// rollup and current branch policy before deciding whether to retry.
+func (h Harness) reconcileResumedChecks(ctx context.Context, prURL string, expected prStateView, observedPending map[string]bool) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, checkQueryTimeout)
 	defer cancel()
 	repo := repoWorkspace{PRURL: prURL, BaseBranch: expected.BaseRefName, Branch: expected.HeadRefName}
@@ -273,14 +283,11 @@ func (h Harness) reconcileResumedDispatchChecks(ctx context.Context, prURL strin
 		}
 		return false, err
 	}
-	if state.ID == "" {
-		return false, fmt.Errorf("%w: pull request ID was missing", ErrChecksUnavailable)
-	}
 	bucket, summary, err := h.readWorkflowDispatchResult(ctx, repo, expected.HeadRefOID)
 	if err != nil {
 		return false, err
 	}
-	if bucket == "" || bucket == "pending" {
+	if bucket == "pending" {
 		return false, ErrChecksUnavailable
 	}
 	required, err := h.requiredCIStatusChecks(ctx, repo, false)
@@ -294,6 +301,19 @@ func (h Harness) reconcileResumedDispatchChecks(ctx context.Context, prURL strin
 	if err != nil {
 		return false, err
 	}
+	missing, pending := resumedRollupPending(checks, required, observedPending)
+	if len(pending) > 0 || (len(missing) > 0 && bucket == "") {
+		return false, ErrChecksUnavailable
+	}
+	if len(missing) > 0 {
+		workflow, _, _ := strings.Cut(summary, "\t")
+		slices.Sort(missing)
+		return false, fmt.Errorf("workflow dispatch %q completed, but required checks are missing on current head %s: %s. Verify the workflow publishes these check names on the pull request head, then rerun CI and retry", workflow, expected.HeadRefOID, strings.Join(slices.Compact(missing), ", "))
+	}
+	return false, nil
+}
+
+func resumedRollupPending(checks []prCheckRollupEntry, required []string, observedPending map[string]bool) (missing, pending []string) {
 	reported := make(map[string]bool, len(checks))
 	for _, check := range checks {
 		if check.Name == githubutil.ReviewCheckName || check.Context == githubutil.ReviewCheckName {
@@ -301,27 +321,22 @@ func (h Harness) reconcileResumedDispatchChecks(ctx context.Context, prURL strin
 		}
 		name := stringsx.FirstNonEmpty(check.Name, check.Context)
 		if passed, failed := githubutil.CIStatus([]githubutil.StatusCheck{check.StatusCheck}); !passed && !failed {
-			return false, ErrChecksUnavailable
+			observedPending[name] = true
+			pending = append(pending, name)
 		}
 		reported[name] = reported[name] || check.IsRequired
 	}
-	var missing []string
 	for _, name := range required {
 		if !reported[name] {
 			missing = append(missing, name)
 		}
 	}
-	if len(missing) > 0 {
-		workflow, _, _ := strings.Cut(summary, "\t")
-		slices.Sort(missing)
-		return false, fmt.Errorf("workflow dispatch %q completed, but required checks are missing on current head %s: %s. Verify the workflow publishes these check names on the pull request head, then rerun CI and retry", workflow, expected.HeadRefOID, strings.Join(slices.Compact(missing), ", "))
-	}
 	for name := range observedPending {
 		if _, ok := reported[name]; !ok {
-			return false, ErrChecksUnavailable
+			pending = append(pending, name)
 		}
 	}
-	return false, nil
+	return missing, pending
 }
 
 func checkWatchPending(err error) bool {

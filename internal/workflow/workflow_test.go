@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/githubutil"
@@ -310,6 +311,12 @@ func TestEngineCompletesChecksPendingRunWhenPRAlreadyMerged(t *testing.T) {
 		t.Fatal(err)
 	}
 	tick(t, e)
+	if err := e.transaction(func(state *State) error {
+		state.run(id).GitHubRetryAt = e.now().Add(time.Hour)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := e.Complete(id, Outcome{Status: OutcomeAlreadyMerged, PRURL: pr.URL}); err != nil {
 		t.Fatal(err)
 	}
