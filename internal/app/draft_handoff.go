@@ -17,6 +17,7 @@ import (
 )
 
 var errDraftChecksPending = fmt.Errorf("%w: waiting for checks on the reviewed pull request head", ErrReviewPending)
+var errDraftRestoring = fmt.Errorf("%w: waiting for the pull request to return to draft", ErrReviewPending)
 var errMergedBeforeDraftVerification = fmt.Errorf("pull request merged before draft verification passed: %w", githubutil.ErrReviewInterrupted)
 
 func stoppedDraftReview(repo repoWorkspace) (int, string, error) {
@@ -27,10 +28,11 @@ func stoppedDraftReview(repo repoWorkspace) (int, string, error) {
 }
 
 const (
-	draftHandoffPrefix       = "Draft handoff:"
-	maxPRVerificationLength  = 4096
-	draftHandoffStandard     = "Verify the submitted clean review and configured PR checks on the published head."
-	draftHandoffInstructions = "\n\nFor a claimed issue with changes, complete implementation and all applicable local checks before handing off. " +
+	draftVerificationPollInterval = 10 * time.Second
+	draftHandoffPrefix            = "Draft handoff:"
+	maxPRVerificationLength       = 4096
+	draftHandoffStandard          = "Verify the submitted clean review and configured PR checks on the published head."
+	draftHandoffInstructions      = "\n\nFor a claimed issue with changes, complete implementation and all applicable local checks before handing off. " +
 		"Report the implementation and local results, then end your final response with one plain-text line of the form `Draft handoff: <specific PR evidence to verify and what must pass>`. " +
 		"If local checks cover all implementation criteria, use this exact line: `Draft handoff: " + draftHandoffStandard + "`. " +
 		"The harness will publish the changes as a draft and verify them after GitHub review, before marking the PR ready. " +
@@ -106,27 +108,37 @@ type draftVerificationEvidence struct {
 	commits        draftPatchCommits
 }
 
+type draftVerificationWait struct {
+	observedChecks map[string]bool
+	requiredChecks []string
+	policyLoaded   bool
+	pendingChecks  []string
+	lastRefresh    time.Time
+}
+
 // The coordinator gathers the reviewed head's evidence before starting the
 // credential-isolated verifier.
 func (h Harness) waitForDraftVerificationEvidence(ctx context.Context, repo repoWorkspace) (*draftVerificationEvidence, error) {
 	h.logf("stage=pr_verification status=start")
-	const interval = 10 * time.Second
-	timeout := h.PRChecksWatchTimeout
-	if timeout == 0 {
-		timeout = defaultPRChecksWatchTimeout
-	}
 	sleep := h.Sleep
 	if sleep == nil {
 		sleep = sleepWithContext
 	}
-	observedChecks := make(map[string]bool)
-	for remaining := timeout; ; {
-		evidence, err := h.collectDraftVerificationEvidence(ctx, repo, observedChecks)
+	wait := draftVerificationWait{observedChecks: make(map[string]bool)}
+	confirmRestoredDraft := true
+	for remaining := h.prChecksWatchTimeout(); ; {
+		evidence, err := h.collectDraftVerificationEvidence(ctx, repo, &wait)
+		if errors.Is(err, errDraftRestoring) && confirmRestoredDraft {
+			// When checks have passed, confirm the first restoration immediately,
+			// including when readiness changed on the last scheduled poll.
+			confirmRestoredDraft = false
+			continue
+		}
 		if !errors.Is(err, ErrReviewPending) || remaining <= 0 {
 			return evidence, err
 		}
-		h.logf("stage=pr_verification status=retry action=wait_for_reviewed_head_evidence")
-		delay := min(remaining, interval)
+		h.logDraftVerificationWait(repo, wait.pendingChecks, wait.lastRefresh)
+		delay := min(remaining, draftVerificationPollInterval)
 		if err := sleep(ctx, delay); err != nil {
 			return nil, err
 		}
@@ -134,7 +146,20 @@ func (h Harness) waitForDraftVerificationEvidence(ctx context.Context, repo repo
 	}
 }
 
-func (h Harness) collectDraftVerificationEvidence(ctx context.Context, repo repoWorkspace, observedChecks map[string]bool) (*draftVerificationEvidence, error) {
+func (h Harness) logDraftVerificationWait(repo repoWorkspace, pendingChecks []string, refreshedAt time.Time) {
+	var head, refresh string
+	if repo.ReviewReceipt != nil {
+		head = repo.ReviewReceipt.Head
+	}
+	if !refreshedAt.IsZero() {
+		refresh = refreshedAt.UTC().Format(time.RFC3339)
+	}
+	h.step("pr_verification")
+	h.logf("stage=pr_verification status=waiting action=wait_for_reviewed_head_evidence reviewed_head=%q pending_checks=%q last_github_refresh=%q",
+		head, strings.Join(pendingChecks, ", "), refresh)
+}
+
+func (h Harness) collectDraftVerificationEvidence(ctx context.Context, repo repoWorkspace, wait *draftVerificationWait) (*draftVerificationEvidence, error) {
 	receipt := repo.ReviewReceipt
 	if receipt == nil || !receipt.Clean() {
 		return nil, fmt.Errorf("%w: missing a submitted clean review receipt for draft verification", ErrReviewPending)
@@ -157,12 +182,14 @@ func (h Harness) collectDraftVerificationEvidence(ctx context.Context, repo repo
 	if err := json.Unmarshal([]byte(rawMetadata), state); err != nil {
 		return nil, fmt.Errorf("decode draft pull request evidence: %w", err)
 	}
+	wait.lastRefresh = time.Now()
+	wait.pendingChecks = nil
 	if state.State == "MERGED" {
 		return nil, errMergedBeforeDraftVerification
 	}
-	if state.Number <= 0 || state.State != "OPEN" || !state.IsDraft || state.URL != repo.PRURL || state.URL != receipt.PRURL ||
+	if state.Number <= 0 || state.State != "OPEN" || state.URL != repo.PRURL || state.URL != receipt.PRURL ||
 		state.BaseRefName != repo.BaseBranch || state.HeadRefName != repo.Branch {
-		return nil, fmt.Errorf("cannot verify handoff without the expected open draft and branches")
+		return nil, fmt.Errorf("cannot verify handoff without the expected open pull request and branches")
 	}
 	if state.HeadRefOID == "" {
 		return nil, fmt.Errorf("%w: missing head for the draft pull request", ErrReviewPending)
@@ -170,8 +197,8 @@ func (h Harness) collectDraftVerificationEvidence(ctx context.Context, repo repo
 	if state.HeadRefOID != receipt.Head {
 		return nil, fmt.Errorf("draft head changed after review; collect a clean review and check results on the current head: %w", ErrReviewHeadChanged)
 	}
-	if receipt.Pass > 1 {
-		if err := h.confirmPublishedReviewHead(ctx, repo, receipt.Head); err != nil {
+	if !state.IsDraft {
+		if err := h.ensurePullRequestDraft(ctx, repo, "pr_verification"); err != nil {
 			return nil, err
 		}
 	}
@@ -181,6 +208,7 @@ func (h Harness) collectDraftVerificationEvidence(ctx context.Context, repo repo
 		return nil, fmt.Errorf("%w: missing or invalid check results for the current draft head", ErrReviewPending)
 	}
 	visibleChecks := make(map[string]bool)
+	pendingChecks := make(map[string]bool)
 	for _, check := range checks {
 		if check.Name == githubutil.ReviewCheckName || check.Context == githubutil.ReviewCheckName {
 			continue
@@ -190,50 +218,79 @@ func (h Harness) collectDraftVerificationEvidence(ctx context.Context, repo repo
 			return nil, fmt.Errorf("%w: unnamed check result for the current draft head", ErrReviewPending)
 		}
 		visibleChecks[name] = true
-	}
-	passed, failed := githubutil.CIStatus(checks)
-	if failed {
-		return nil, fmt.Errorf("checks failed on the reviewed pull request head")
-	}
-	for name := range visibleChecks {
-		observedChecks[name] = true
-	}
-	if len(visibleChecks) > 0 && !passed {
-		return nil, errDraftChecksPending
-	}
-
-	targetRepo := githubutil.PullRequestRepository(receipt.PRURL)
-	required, err := h.configuredRequiredStatusChecks(ctx, repo.Dir, targetRepo, repo.BaseBranch, repo.ReviewSanitize, false)
-	if err != nil {
-		return nil, fmt.Errorf("load required checks for draft verification: %w", err)
-	}
-	ruleChecks, err := githubutil.RequiredBranchRuleStatusChecks(ctx, readGH, targetRepo, repo.BaseBranch)
-	if err != nil {
-		return nil, fmt.Errorf("load required ruleset checks for draft verification: %w", err)
-	}
-	required = append(required, ruleChecks...)
-	slices.Sort(required)
-	required = slices.Compact(slices.DeleteFunc(required, func(name string) bool { return name == githubutil.ReviewCheckName }))
-	for _, name := range required {
-		if !visibleChecks[name] {
-			return nil, fmt.Errorf("%w: missing result for configured draft check %q", errDraftChecksPending, name)
+		wait.observedChecks[name] = true
+		passed, failed := githubutil.CIStatus([]githubutil.StatusCheck{check})
+		if failed {
+			return nil, fmt.Errorf("checks failed on the reviewed pull request head")
+		}
+		if !passed {
+			pendingChecks[name] = true
 		}
 	}
+
+	for name := range wait.observedChecks {
+		if !visibleChecks[name] {
+			pendingChecks[name] = true
+		}
+	}
+	targetRepo := githubutil.PullRequestRepository(receipt.PRURL)
+	// Reuse the policy for progress while waiting. Refresh it before accepting
+	// a passing rollup, since base-branch requirements can change.
+	if !wait.policyLoaded || (state.IsDraft && len(pendingChecks) == 0) {
+		required, err := h.configuredRequiredStatusChecks(ctx, repo.Dir, targetRepo, repo.BaseBranch, repo.ReviewSanitize, false)
+		if err != nil {
+			return nil, fmt.Errorf("load required checks for draft verification: %w", err)
+		}
+		ruleChecks, err := githubutil.RequiredBranchRuleStatusChecks(ctx, readGH, targetRepo, repo.BaseBranch)
+		if err != nil {
+			return nil, fmt.Errorf("load required ruleset checks for draft verification: %w", err)
+		}
+		required = append(required, ruleChecks...)
+		slices.Sort(required)
+		wait.requiredChecks = slices.Compact(slices.DeleteFunc(required, func(name string) bool { return name == githubutil.ReviewCheckName }))
+		wait.policyLoaded = true
+	}
+	var missingRequired string
+	for _, name := range wait.requiredChecks {
+		if !visibleChecks[name] {
+			missingRequired = stringsx.FirstNonEmpty(missingRequired, name)
+			pendingChecks[name] = true
+		}
+	}
+	wait.pendingChecks = slices.Sorted(maps.Keys(pendingChecks))
+	if missingRequired != "" {
+		return nil, fmt.Errorf("%w: missing result for configured draft check %q", errDraftChecksPending, missingRequired)
+	}
+	if len(wait.pendingChecks) > 0 {
+		return nil, errDraftChecksPending
+	}
+	if !state.IsDraft {
+		return nil, errDraftRestoring
+	}
+	if receipt.Pass > 1 {
+		if err := h.confirmPublishedReviewHead(ctx, repo, receipt.Head); err != nil {
+			return nil, err
+		}
+	}
+
 	commitChecks, err := githubutil.CommitCheckNames(ctx, readGH, targetRepo, receipt.Head)
 	if err != nil {
 		return nil, fmt.Errorf("load reviewed head check inventory: %w", err)
 	}
 	for _, name := range commitChecks {
 		if name != githubutil.ReviewCheckName {
-			observedChecks[name] = true
+			wait.observedChecks[name] = true
 		}
 	}
 	// A rollup must account for checks already seen on this head, even if the
 	// latest response temporarily omits every result.
-	for _, name := range slices.Sorted(maps.Keys(observedChecks)) {
+	for _, name := range slices.Sorted(maps.Keys(wait.observedChecks)) {
 		if !visibleChecks[name] {
-			return nil, fmt.Errorf("%w: missing result for observed draft check %q", errDraftChecksPending, name)
+			wait.pendingChecks = append(wait.pendingChecks, name)
 		}
+	}
+	if len(wait.pendingChecks) > 0 {
+		return nil, fmt.Errorf("%w: missing result for observed draft check %q", errDraftChecksPending, wait.pendingChecks[0])
 	}
 
 	rawReview, err := readGH(ctx, "api", fmt.Sprintf("%s/%d", githubutil.ReviewEndpoint(receipt.PRURL), receipt.ReviewID))
@@ -256,10 +313,7 @@ func (h Harness) collectDraftVerificationEvidence(ctx context.Context, repo repo
 		}
 		files[file.Path] = true
 	}
-	if required == nil {
-		required = []string{}
-	}
-	evidence.requiredChecks = required
+	evidence.requiredChecks = append([]string{}, wait.requiredChecks...)
 	return &evidence, nil
 }
 

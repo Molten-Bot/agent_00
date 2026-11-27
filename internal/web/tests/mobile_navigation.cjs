@@ -867,3 +867,43 @@ test('Studio keeps issue retries and completion under one task', async t => {
   assert.equal(await cards.count(), 1);
   assert.equal(await task.getByRole('link', { name: 'Open issue on GitHub.' }).getAttribute('href'), first.github_issue_url);
 });
+
+test('Studio shows pending draft verification on the same issue task', async t => {
+  const now = new Date().toISOString();
+  const head = '1234567890abcdef1234567890abcdef12345678';
+  const first = {
+    task_id: 'issue-verification', request_id: 'issue-run', issue_title: 'Update issue implementation',
+    status: 'running', stage: 'pr_verification', stage_status: 'waiting', issue_state: 'running',
+    started_at: now, updated_at: now,
+    pr_url: 'https://github.com/example/project/pull/43',
+    issue_attempts: [{ number: 1, request_id: 'issue-run', status: 'running', stage: 'pr_verification' }],
+  };
+  const waitLog = refreshed => ({
+    stream: 'meta', time: refreshed,
+    text: `task request_id=issue-run stage=pr_verification status=waiting action=wait_for_reviewed_head_evidence reviewed_head="${head}" pending_checks="Web and browser tests" last_github_refresh="${refreshed}"`,
+  });
+  const { page } = await openPage(t, 'current-work', { width: 430, height: 932 }, true, [
+    { ...first, logs: [waitLog('2026-11-26T16:00:00Z')] },
+  ]);
+  const cards = page.locator('#task-list .task');
+  const task = cards.locator('xpath=self::*[@data-task-id="issue-verification"]');
+  const progress = task.locator('.task-progress[data-current-step-id="pr_verification"]');
+  await progress.getByText(/Waiting for GitHub checks: Web and browser tests/).waitFor();
+  await progress.getByText(new RegExp(`Reviewed head: ${head}.*Last GitHub refresh: 2026-11-26T16:00:00Z`)).waitFor();
+
+  const update = changes => page.evaluate(next => {
+    queueStreamSnapshot(JSON.stringify({ ...state.snapshot, tasks: [next] }));
+  }, { ...first, ...changes });
+  await update({ logs: [waitLog('2026-11-26T16:00:00Z'), waitLog('2026-11-26T16:00:10Z')] });
+  await progress.getByText(/Last GitHub refresh: 2026-11-26T16:00:10Z/).waitFor();
+  assert.equal(await cards.count(), 1);
+
+  await update({
+    status: 'merged', stage: 'finalize', stage_status: 'ok', issue_state: 'fulfilled',
+    issue_attempts: [{ ...first.issue_attempts[0], status: 'completed' }],
+  });
+  await page.locator('#task-history-toggle').click();
+  await task.and(page.locator('.task-merged')).waitFor();
+  assert.equal(await task.locator('.task-progress-wait').count(), 0);
+  assert.equal(await cards.count(), 1);
+});

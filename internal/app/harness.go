@@ -1033,7 +1033,7 @@ func (h Harness) finalizePullRequestReview(
 	}
 	findingsRemain := errors.Is(err, errFinalReviewFindingsRemain)
 	if findingsRemain {
-		if draftErr := h.ensurePullRequestDraft(ctx, *repo); draftErr != nil {
+		if draftErr := h.ensurePullRequestDraft(ctx, *repo, "review"); draftErr != nil {
 			return ExitPR, "review", draftErr
 		}
 	} else if err != nil {
@@ -1084,6 +1084,7 @@ func (h Harness) finalizePullRequestReview(
 			evidence.commits, err = h.loadDraftPatchCommits(ctx, *repo)
 		}
 		if err == nil {
+			h.logf("stage=pr_verification status=start action=verify_handoff")
 			err = h.verifyDraftHandoff(ctx, *repo, runtime, codexOpts, evidence)
 		}
 		if err == nil {
@@ -1234,7 +1235,7 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 		repo.PRURL = pr.URL
 		if pr.URL != "" {
 			applyPRMetadata = true
-			if err := h.ensurePullRequestDraft(ctx, *repo); err != nil {
+			if err := h.ensurePullRequestDraft(ctx, *repo, "review"); err != nil {
 				return ExitPR, "pr", err
 			}
 			if h.OnPRTitle != nil {
@@ -1313,7 +1314,7 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 		applyPRMetadata = true
 		if repo.PRVerification != "" {
 			// Creation can also recover an already-open pull request.
-			if err := h.ensurePullRequestDraft(ctx, *repo); err != nil {
+			if err := h.ensurePullRequestDraft(ctx, *repo, "review"); err != nil {
 				return ExitPR, "pr", err
 			}
 		}
@@ -5575,26 +5576,29 @@ func (h Harness) markPullRequestReadyForReview(ctx context.Context, repo repoWor
 	return nil
 }
 
-// ensurePullRequestDraft prevents unresolved post-task review findings from
-// remaining mergeable when the review cycle started against an existing PR.
-func (h Harness) ensurePullRequestDraft(ctx context.Context, repo repoWorkspace) error {
+// ensurePullRequestDraft holds an existing PR in draft until its gates pass.
+func (h Harness) ensurePullRequestDraft(ctx context.Context, repo repoWorkspace, stage string) error {
 	prURL := strings.TrimSpace(repo.PRURL)
 	if prURL == "" {
 		return nil
 	}
-	h.logf("stage=review status=start action=mark_draft pr_url=%s", prURL)
-	if _, err := h.runCommand(ctx, "review", prDraftCommand(repo.Dir, prURL)); err != nil {
+	h.logf("stage=%s status=start action=mark_draft pr_url=%s", stage, prURL)
+	cmd := prDraftCommand(repo.Dir, prURL)
+	if repo.ReviewSanitize {
+		cmd = commandWithoutGitHubTokenEnv(cmd)
+	}
+	if _, err := h.runCommand(ctx, stage, cmd); err != nil {
 		if isPRAlreadyDraftError(err) {
-			h.logf("stage=review status=skip action=mark_draft reason=already_draft pr_url=%s", prURL)
+			h.logf("stage=%s status=skip action=mark_draft reason=already_draft pr_url=%s", stage, prURL)
 			return nil
 		}
 		if isPRClosedOrMergedError(err) {
-			h.logf("stage=review status=skip action=mark_draft reason=pr_not_open pr_url=%s", prURL)
+			h.logf("stage=%s status=skip action=mark_draft reason=pr_not_open pr_url=%s", stage, prURL)
 			return nil
 		}
 		return fmt.Errorf("mark pull request as draft: %w", err)
 	}
-	h.logf("stage=review status=ok action=mark_draft pr_url=%s", prURL)
+	h.logf("stage=%s status=ok action=mark_draft pr_url=%s", stage, prURL)
 	return nil
 }
 

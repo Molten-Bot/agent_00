@@ -146,6 +146,10 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 		headMovedAfterEvidence bool
 		publishedHeadMoved     bool
 		pendingChecks          int
+		earlyReady             bool
+		readyOnPassingPoll     bool
+		readyDuringVerifier    bool
+		keepDraft              bool
 		watchOutages           int
 		evidenceOutage         bool
 		checkRollups           []string
@@ -183,6 +187,10 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 		{name: "configured check has not reported", answer: localSuccess, change: true, checkRollups: []string{"[]", "[]"}, requiredChecks: `{"contexts":["CI"]}`, wantExit: ExitPR,
 			wantEvidenceError: "missing result for configured draft check"},
 		{name: "wait for pending checks on reviewed head", answer: localSuccess, change: true, pendingChecks: 1},
+		{name: "restore early readiness while checks are pending", answer: localSuccess, change: true, earlyReady: true},
+		{name: "keep explicit draft after early readiness", answer: localSuccess, change: true, earlyReady: true, keepDraft: true},
+		{name: "restore readiness on the last check poll", answer: localSuccess, change: true, earlyReady: true, readyOnPassingPoll: true},
+		{name: "restore readiness changed during verification", answer: localSuccess, change: true, readyDuringVerifier: true},
 		{name: "empty rollup cannot erase observed pending checks", answer: localSuccess, change: true, pendingChecks: 1, wantExit: ExitPR, wantChecksPending: true,
 			checkRollups: []string{`[{"name":"CI","status":"IN_PROGRESS"}]`, `[]`}},
 		{name: "empty rollup after pending with required checks", answer: localSuccess, change: true, pendingChecks: 1, wantExit: ExitPR, wantChecksPending: true,
@@ -266,6 +274,8 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			wantRequirement, _ := draftHandoffRequest(tc.answer)
 			var implementations, creates, verifications, ready, evidenceReads, waits int
 			var watchReads, evidenceOutages int
+			var draftRestorations, reviewerRuns, verificationPolicyReads int
+			var lastWait string
 			var draft, accepted, metadataRetry bool
 			savedResume := ""
 			labels := []string{"existing label"}
@@ -287,6 +297,9 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 					cmd.Args = append([]string{"api"}, cmd.Args[2:]...)
 				}
 				args := strings.Join(cmd.Args, " ")
+				if tc.earlyReady && cmd.Name == "gh" && (strings.HasPrefix(args, "pr merge ") || slices.Contains(cmd.Args, "repos/acme/repo/pulls/42/merge")) {
+					t.Fatal("workflow without auto-merge attempted a merge")
+				}
 				if cmd.Name == "gh" && strings.Contains(args, "--method POST repos/acme/repo/issues/42/") && savedResume != prURL {
 					t.Fatal("metadata mutation preceded saved retry target")
 				}
@@ -312,6 +325,9 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 						return execx.Result{Stdout: "codex-cli test"}, nil
 					case strings.Contains(cmd.Stdin, "Verify the requested draft-handoff criteria"):
 						verifications++
+						if tc.earlyReady && (evidenceReads != 3 || draftRestorations != 1) {
+							t.Error("verification must wait for restored draft and passing checks")
+						}
 						if hasGitHubCredential(cmd) || !strings.Contains(args, "network={enabled=false}") || !slices.Contains(cmd.Args, `web_search="disabled"`) {
 							t.Error("private draft verifier must run without GitHub credentials or network access")
 						}
@@ -376,8 +392,12 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 						if tc.publishedHeadMoved {
 							git(remote, "update-ref", "refs/heads/"+branch, base)
 						}
+						if tc.readyDuringVerifier {
+							draft = false
+						}
 						return execx.Result{Stdout: `{"status":"passed","evidence":"The live inventory lists work.txt, its patch shows the change, and CI and the clean review match the draft head."}`}, nil
 					case strings.Contains(cmd.Stdin, "Prepared pull-request review context"):
+						reviewerRuns++
 						if !draft {
 							t.Error("review ran before draft publication")
 						}
@@ -476,10 +496,16 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 							if !draft || verifications == 0 {
 								t.Error("draft released before verification")
 							}
+						} else if !draft {
+							draftRestorations++
 						}
 						draft = slices.Contains(cmd.Args, "--undo")
 						return execx.Result{}, nil
 					case args == "api repos/acme/repo/branches/main/protection/required_status_checks":
+						if tc.earlyReady && api.posts > 0 {
+							verificationPolicyReads++
+							return execx.Result{Stdout: `{"contexts":["CI","Web and browser tests"]}`}, nil
+						}
 						if api.posts == 0 {
 							return execx.Result{Stdout: `{"contexts":["CI"]}`}, nil
 						}
@@ -524,6 +550,10 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 							}
 							evidenceReads++
 							switch {
+							case tc.earlyReady && (evidenceReads == 1 || (!tc.readyOnPassingPoll && evidenceReads == 2)):
+								rollup = `[{"name":"CI","conclusion":"SUCCESS"},{"name":"Web and browser tests","status":"IN_PROGRESS"}]`
+							case tc.earlyReady:
+								rollup = `[{"name":"CI","conclusion":"SUCCESS"},{"name":"Web and browser tests","conclusion":"SUCCESS"}]`
 							case evidenceReads <= len(tc.checkRollups):
 								rollup = tc.checkRollups[evidenceReads-1]
 							case tc.pendingChecks >= evidenceReads:
@@ -562,7 +592,35 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			})
 			h := New(runner)
 			h.PRChecksWatchTimeout = 10 * time.Second
-			h.Sleep = func(context.Context, time.Duration) error { waits++; return nil }
+			if tc.earlyReady && !tc.readyOnPassingPoll {
+				h.PRChecksWatchTimeout = 20 * time.Second
+			}
+			h.Logf = func(format string, args ...any) {
+				if line := fmt.Sprintf(format, args...); strings.Contains(line, "action=wait_for_reviewed_head_evidence") {
+					lastWait = line
+				}
+			}
+			h.Sleep = func(context.Context, time.Duration) error {
+				waits++
+				if tc.earlyReady {
+					if !accepted || !draft || api.posts != 1 || reviewerRuns != 1 || ready != 0 || verifications != 0 {
+						t.Fatal("original claim must keep waiting in draft after one review without release or verification")
+					}
+					if !strings.Contains(lastWait, "stage=pr_verification status=waiting") ||
+						!strings.Contains(lastWait, `pending_checks="Web and browser tests"`) ||
+						!strings.Contains(lastWait, fmt.Sprintf("reviewed_head=%q", api.head)) {
+						t.Fatalf("missing in-place check progress: %s", lastWait)
+					}
+					_, refreshed, _ := strings.Cut(lastWait, "last_github_refresh=")
+					if _, err := time.Parse(time.RFC3339, strings.Trim(refreshed, `"`)); err != nil {
+						t.Fatalf("invalid GitHub refresh in progress: %s", lastWait)
+					}
+					if waits == 1 {
+						draft = false
+					}
+				}
+				return nil
+			}
 			h.SaveWorkflowPRResume = func(url string) error { savedResume = url; return nil }
 			h.Workspace = workspace.Manager{Root: root, NewGUID: func() string { return "issue-workspace" }}
 			if tc.queued {
@@ -577,6 +635,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				return nil
 			}
 			cfg := sampleConfig()
+			cfg.Draft = tc.keepDraft
 			cfg.RepoURL, cfg.TargetSubdir = repoURL, ""
 			cfg.GitHubIssue = &config.GitHubIssueConfig{Repository: "acme/repo", Number: 17, URL: "https://github.com/acme/repo/issues/17",
 				Claim: &config.GitHubIssueClaim{ID: "claim", Branch: branch, BaseBranch: "main", ExclusionLabel: "claimed", Attempt: 1}}
@@ -720,10 +779,20 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				!slices.Equal(assignees, []string{"creator", "maintainer"})) {
 				t.Fatalf("retry did not preserve and add metadata: labels %v, assignees %v", labels, assignees)
 			}
+			wantReady := 1
+			if tc.keepDraft {
+				wantReady = 0
+			}
 			if result.Err != nil || result.PRURL != prURL || !result.ReviewRequired || result.ReviewReceipt == nil || !result.PRVerificationPassed ||
-				implementations != 1 || creates != 1 || api.posts != wantReviews || result.ReviewReceipt.Head != api.head || verifications != wantVerifications || ready != 1 || draft {
+				implementations != 1 || creates != 1 || api.posts != wantReviews || result.ReviewReceipt.Head != api.head || verifications != wantVerifications || ready != wantReady || draft != tc.keepDraft {
 				t.Fatalf("implementation/create/review/verify/ready = %d/%d/%d/%d/%d, draft=%t, result=%+v",
 					implementations, creates, api.posts, verifications, ready, draft, result)
+			}
+			if tc.readyDuringVerifier && (draftRestorations != 1 || reviewerRuns != 1) {
+				t.Fatalf("late readiness triggered %d draft restorations and %d reviewer runs", draftRestorations, reviewerRuns)
+			}
+			if tc.earlyReady && verificationPolicyReads != 2 {
+				t.Fatalf("policy queried %d times, want initial read and final verification refresh", verificationPolicyReads)
 			}
 			if tc.largePatch {
 				if policy := result.ReviewReceipt.Policy; policy.FixPasses != 10 || policy.Complexity != "easy" {
