@@ -1606,21 +1606,35 @@
       }
     }
 
-    function loadTaskMarkers(key) {
-      const legacyIDs = loadStoredTaskIDs(key);
-      const markers = new Map(Array.from(legacyIDs, (id) => [id, "1"]));
-      const prefix = `${key}.`;
+    function loadTaskStorageEntries(prefix) {
+      const entries = new Map();
       try {
         for (const storageKey of Object.keys(localStorage)) {
           if (storageKey.startsWith(prefix) && storageKey.length > prefix.length) {
             const value = localStorage.getItem(storageKey);
-            if (value !== null) markers.set(storageKey.slice(prefix.length), value);
+            if (value !== null) entries.set(storageKey.slice(prefix.length), value);
           }
         }
+      } catch (_err) {
+        // Keep any entries already read if storage is unavailable.
+      }
+      return entries;
+    }
+
+    function loadLegacyTaskMarkers(key) {
+      const legacyIDs = loadStoredTaskIDs(key);
+      const prefix = `${key}.`;
+      const markers = new Map(Array.from(legacyIDs, (id) => [id, "1"]));
+      for (const [id, stored] of loadTaskStorageEntries(prefix)) {
+        markers.set(id, stored);
+      }
+      try {
         // Migrate the old shared list only after its entries have been saved individually.
         if (legacyIDs.size > 0) {
           for (const id of legacyIDs) {
-            if (localStorage.getItem(prefix + id) === null) {
+            const stored = localStorage.getItem(prefix + id);
+            markers.set(id, stored ?? "1");
+            if (stored === null) {
               localStorage.setItem(prefix + id, "1");
             }
           }
@@ -1632,9 +1646,35 @@
       return markers;
     }
 
+    function taskGenerationKey(requestID, generation) {
+      return JSON.stringify([requestID, generation]);
+    }
+
+    function loadTaskGenerationMarkers(key) {
+      const markers = new Set(loadTaskStorageEntries(`${key}:`).keys());
+      for (const [requestID, generation] of loadLegacyTaskMarkers(key)) {
+        markers.add(taskGenerationKey(requestID, generation));
+      }
+      return markers;
+    }
+
     function loadPendingTaskDeletes() {
+      const key = PENDING_TASK_DELETES_KEY;
+      const entries = new Map(Array.from(loadLegacyTaskMarkers(key), ([requestID, stored]) =>
+        [`${key}.${requestID}`, { requestID, stored }]
+      ));
+      for (const [generationKey, stored] of loadTaskStorageEntries(`${key}:`)) {
+        try {
+          const [requestID] = JSON.parse(generationKey);
+          if (typeof requestID === "string" && requestID) {
+            entries.set(`${key}:${generationKey}`, { requestID, stored });
+          }
+        } catch (_err) {
+          // A malformed key cannot identify the request to delete.
+        }
+      }
       const deletes = new Map();
-      for (const [requestID, stored] of loadTaskMarkers(PENDING_TASK_DELETES_KEY)) {
+      for (const [storageKey, { requestID, stored }] of entries) {
         let generations = {};
         try {
           const scope = JSON.parse(stored);
@@ -1644,7 +1684,7 @@
         } catch (_err) {
           // An unreadable scope, like an older ID-only queue, cannot identify a result.
         }
-        deletes.set(requestID, { generations, stored });
+        deletes.set(storageKey, { requestID, generations, stored });
       }
       return deletes;
     }
@@ -1865,8 +1905,8 @@
       customLibraryGeneration: null,
       snapshot: null,
       selectedTaskId: "",
-      dismissedTaskGenerations: loadTaskMarkers(DISMISSED_TASKS_KEY),
-      hiddenRemovedTaskGenerations: loadTaskMarkers(HIDDEN_REMOVED_TASKS_KEY),
+      dismissedTaskGenerations: loadTaskGenerationMarkers(DISMISSED_TASKS_KEY),
+      hiddenRemovedTaskGenerations: loadTaskGenerationMarkers(HIDDEN_REMOVED_TASKS_KEY),
       libraryTasks: [],
       libraryLoadError: "",
       repoHistory: loadRepoHistory(),
@@ -9783,14 +9823,9 @@
       return `Duplicate ignored; existing request ${requestID} (${rawState.replace(/_/g, " ")}).`;
     }
 
-    function persistTaskIDMarker(key, requestID, value = "1") {
+    function persistTaskMarker(storageKey, value = "1") {
       try {
-        const storageKey = `${key}.${requestID}`;
-        if (value !== null) {
-          localStorage.setItem(storageKey, value);
-        } else {
-          localStorage.removeItem(storageKey);
-        }
+        localStorage.setItem(storageKey, value);
       } catch (_err) {
         // Ignore localStorage failures.
       }
@@ -9825,12 +9860,19 @@
     function isTaskDismissed(task) {
       const id = taskRequestID(task);
       const generation = taskDeleteGeneration(task);
-      return state.dismissedTaskGenerations.get(id) === generation ||
-        pendingTaskDeletes.get(id)?.generations?.[id] === generation;
+      return state.dismissedTaskGenerations.has(taskGenerationKey(id, generation)) ||
+        hasPendingTaskDeletion(id, generation);
+    }
+
+    function hasPendingTaskDeletion(requestID, generation) {
+      const key = taskGenerationKey(requestID, generation);
+      const legacy = pendingTaskDeletes.get(`${PENDING_TASK_DELETES_KEY}.${requestID}`);
+      return pendingTaskDeletes.has(`${PENDING_TASK_DELETES_KEY}:${key}`) ||
+        legacy?.generations?.[requestID] === generation;
     }
 
     function isRemovedTaskHidden(task) {
-      return state.hiddenRemovedTaskGenerations.get(taskRequestID(task)) === taskDeleteGeneration(task);
+      return state.hiddenRemovedTaskGenerations.has(taskGenerationKey(taskRequestID(task), taskDeleteGeneration(task)));
     }
 
     function completeTaskDismissal(requestID, immediate = false, observedTask = null) {
@@ -9853,11 +9895,12 @@
           persistTaskHistory();
         }
       }
-      state.dismissedTaskGenerations.set(requestID, generation);
+      const key = taskGenerationKey(requestID, generation);
+      state.dismissedTaskGenerations.add(key);
       if (state.taskHistoryUnseenIDs instanceof Set && state.taskHistoryUnseenIDs.delete(requestID)) {
         persistTaskHistoryUnseenIDs();
       }
-      persistTaskIDMarker(DISMISSED_TASKS_KEY, requestID, generation);
+      persistTaskMarker(`${DISMISSED_TASKS_KEY}:${key}`);
       if (state.selectedTaskId === requestID) {
         state.selectedTaskId = "";
       }
@@ -10654,30 +10697,33 @@
     function dismissTask(requestID, task) {
       if (!requestID) return;
       const generation = taskDeleteGeneration(task);
+      const key = taskGenerationKey(requestID, generation);
       if (task.removed_history) {
-        state.hiddenRemovedTaskGenerations.set(requestID, generation);
-        persistTaskIDMarker(HIDDEN_REMOVED_TASKS_KEY, requestID, generation);
+        state.hiddenRemovedTaskGenerations.add(key);
+        persistTaskMarker(`${HIDDEN_REMOVED_TASKS_KEY}:${key}`);
       } else if (isTaskDismissed(task)) {
         return;
       }
-      if (pendingTaskDeletes.get(requestID)?.generations?.[requestID] === generation) {
+      if (hasPendingTaskDeletion(requestID, generation)) {
         render(state.snapshot, true);
         return;
       }
       trackAnalyticsEvent("task_close_started");
       // Use the rendered card's scope even if a newer snapshot is already waiting to render.
       const generations = task.delete_attempt_generations || {};
-      const pending = { generations, stored: JSON.stringify(generations) };
-      pendingTaskDeletes.set(requestID, pending);
-      persistTaskIDMarker(PENDING_TASK_DELETES_KEY, requestID, pending.stored);
+      const pending = { requestID, generations, stored: JSON.stringify(generations) };
+      const storageKey = `${PENDING_TASK_DELETES_KEY}:${key}`;
+      pendingTaskDeletes.set(storageKey, pending);
+      persistTaskMarker(storageKey, pending.stored);
       completeTaskDismissal(requestID, true, task);
-      void syncTaskDeletion(requestID, pending);
+      void syncTaskDeletion(storageKey, pending);
     }
 
-    async function syncTaskDeletion(requestID, pending) {
+    async function syncTaskDeletion(storageKey, pending) {
+      const { requestID, generations, stored } = pending;
       let retryDelay = 1000;
-      const body = JSON.stringify({ attempt_generations: pending.generations });
-      while (pendingTaskDeletes.get(requestID) === pending) {
+      const body = JSON.stringify({ attempt_generations: generations });
+      while (pendingTaskDeletes.get(storageKey) === pending) {
         try {
           const response = await fetch(`/api/tasks/${encodeURIComponent(requestID)}/delete`, {
             method: "POST",
@@ -10687,12 +10733,11 @@
           });
           // The result may already be gone or have been superseded by a resumed run.
           if (response.ok || response.status === 404) {
-            if (pendingTaskDeletes.get(requestID) === pending) {
-              pendingTaskDeletes.delete(requestID);
+            if (pendingTaskDeletes.get(storageKey) === pending) {
+              pendingTaskDeletes.delete(storageKey);
             }
             try {
-              const key = `${PENDING_TASK_DELETES_KEY}.${requestID}`;
-              if (localStorage.getItem(key) === pending.stored) localStorage.removeItem(key);
+              if (localStorage.getItem(storageKey) === stored) localStorage.removeItem(storageKey);
             } catch (_err) {
               // Ignore localStorage failures.
             }
@@ -12566,6 +12611,7 @@
             canCopyClone: canCopyTaskCloneCommand(task),
             historyOnly: Boolean(task?.history_only),
             removedHistory: Boolean(task?.removed_history),
+            deleteScope: task.delete_attempt_generations,
             controls: {
               pause: Boolean(task?.controls?.pause),
               run: Boolean(task?.controls?.run),
@@ -14848,8 +14894,8 @@
     void refreshSpeechStatus();
     loadInitial();
     startStream();
-    for (const [requestID, pending] of pendingTaskDeletes) {
-      void syncTaskDeletion(requestID, pending);
+    for (const [storageKey, pending] of pendingTaskDeletes) {
+      void syncTaskDeletion(storageKey, pending);
     }
   </script>
 

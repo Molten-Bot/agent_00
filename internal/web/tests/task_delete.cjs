@@ -5,6 +5,97 @@ const { expect } = require('playwright/test');
 
 const baseURL = process.env.HARNESS_TEST_URL || 'http://127.0.0.1:7777';
 
+function pendingDeleteKeys(tab, requestID) {
+  return tab.evaluate(id => Object.keys(localStorage).filter(key => id
+    ? key === `hubui.pendingTaskDeletes.${id}` || key.startsWith(`hubui.pendingTaskDeletes:[${JSON.stringify(id)},`)
+    : key.startsWith('hubui.pendingTaskDeletes')
+  ), requestID);
+}
+
+test('Close updates after a terminal scope change and keeps both generations across tabs', async t => {
+  const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+  t.after(() => browser.close());
+  const context = await browser.newContext();
+  const staleTab = await context.newPage();
+  const freshTab = await context.newPage();
+  const errors = [];
+  context.on('weberror', event => errors.push(event.error().message));
+  t.after(() => assert.deepEqual(errors, []));
+
+  const requests = [];
+  let generation = 'old';
+  let allowDelete = false;
+  const now = new Date().toISOString();
+  const snapshot = () => ({
+    tasks: [{
+      request_id: 'same-result',
+      status: 'completed',
+      started_at: now,
+      updated_at: now,
+      delete_attempt_generations: { 'same-result': generation },
+    }, {
+      request_id: 'still-running',
+      status: 'running',
+      started_at: now,
+    }],
+  });
+  const origin = new URL(baseURL).origin;
+  await context.addInitScript(origin => {
+    if (location.origin === origin) localStorage.setItem('hubui.taskStatusFilter', 'completed');
+  }, origin);
+  await context.route('**/*', route => {
+    const url = new URL(route.request().url());
+    if (url.origin !== origin) return route.abort();
+    switch (url.pathname) {
+      case '/api/status':
+        return route.fulfill({ json: snapshot() });
+      case '/api/stream':
+        return route.fulfill({ contentType: 'text/event-stream', body: '' });
+      case '/api/agent-auth':
+        return route.fulfill({ json: { ok: true, auth: { required: false, ready: true, state: 'ready' } } });
+      case '/api/github/repos':
+        return route.fulfill({ json: { ok: true, repos: [] } });
+      case '/api/tasks/same-result/delete':
+        requests.push(route.request().postDataJSON().attempt_generations['same-result']);
+        return route.fulfill({ status: allowDelete ? 404 : 503 });
+      default:
+        return route.continue();
+    }
+  });
+
+  const card = tab => tab.locator('#task-list .task[data-request-id="same-result"]');
+  const close = tab => card(tab).getByRole('button', { name: 'Delete task' });
+  for (const tab of [staleTab, freshTab]) {
+    await tab.goto(`${baseURL}/#current-work`);
+    await expect(close(tab)).toBeVisible();
+  }
+  generation = 'resumed';
+  // Deliver only the next terminal snapshot, as when the stream coalesces updates.
+  await freshTab.evaluate(next => render(next), snapshot());
+  await close(freshTab).click();
+  await expect.poll(() => requests[0]).toBe('resumed');
+  await expect(card(freshTab)).toHaveCount(0);
+  await close(staleTab).click();
+  await expect(card(staleTab)).toHaveCount(0);
+  await expect.poll(() => requests).toContain('old');
+  await staleTab.close();
+  await freshTab.close();
+
+  requests.length = 0;
+  allowDelete = true;
+  const reloaded = await context.newPage();
+  await reloaded.goto(`${baseURL}/#current-work`);
+  await expect.poll(() => [...new Set(requests)].sort()).toEqual(['old', 'resumed']);
+  await expect.poll(() => pendingDeleteKeys(reloaded)).toEqual([]);
+  // Both dismissal markers survive after the pending requests have been cleared.
+  for (const dismissedGeneration of ['resumed', 'old']) {
+    generation = dismissedGeneration;
+    await reloaded.reload();
+    await expect(reloaded.locator('#task-list .task[data-request-id="still-running"]')).toBeVisible();
+    await expect(card(reloaded)).toHaveCount(0);
+  }
+});
+
 test('Close survives overlapping tab retries and a deferred Removed redraw', async t => {
   const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
   t.after(() => browser.close());
@@ -97,7 +188,7 @@ test('Close survives overlapping tab retries and a deferred Removed redraw', asy
   await expect(card).toHaveCount(0);
   await expect(page.locator(otherCardSelector)).toHaveCount(0);
   await expect(page.locator('#task-list .task[data-request-id="later"]')).toBeVisible();
-  await expect.poll(() => page.evaluate(() => localStorage.getItem('hubui.pendingTaskDeletes.finished'))).toBeNull();
+  await expect.poll(() => pendingDeleteKeys(page, 'finished')).toEqual([]);
 
   await otherTab.close();
   allowOtherDelete = true;
@@ -109,9 +200,7 @@ test('Close survives overlapping tab retries and a deferred Removed redraw', asy
   assert.equal(otherResponse.status(), 200);
   assert.equal(legacyResponse.status(), 404);
   assert.deepEqual(legacyResponse.request().postDataJSON(), { attempt_generations: {} });
-  await expect.poll(() => page.evaluate(() => Object.keys(localStorage).filter(key =>
-    key.startsWith('hubui.pendingTaskDeletes')
-  ))).toEqual([]);
+  await expect.poll(() => pendingDeleteKeys(page)).toEqual([]);
 
   const resumedCard = page.locator('#task-list .task[data-request-id="resumed"]');
   const resumedClose = resumedCard.getByRole('button', { name: 'Delete task' });
@@ -133,7 +222,7 @@ test('Close survives overlapping tab retries and a deferred Removed redraw', asy
   assert.equal(staleDelete.status(), 404);
   assert.deepEqual(staleDelete.request().postDataJSON(), oldScope);
   await expect(resumedClose).toBeVisible();
-  await expect.poll(() => page.evaluate(() => localStorage.getItem('hubui.pendingTaskDeletes.resumed'))).toBeNull();
+  await expect.poll(() => pendingDeleteKeys(page, 'resumed')).toEqual([]);
 
   const freshDelete = page.waitForResponse(response => response.url().endsWith(resumedDeleteURL));
   await resumedClose.click();
@@ -158,7 +247,7 @@ test('Close survives overlapping tab retries and a deferred Removed redraw', asy
   await close.click();
   await expect(card).toHaveCount(0);
   assert.equal((await alreadyDeleted).status(), 404);
-  await expect.poll(() => page.evaluate(() => localStorage.getItem('hubui.pendingTaskDeletes.finished'))).toBeNull();
+  await expect.poll(() => pendingDeleteKeys(page, 'finished')).toEqual([]);
   await filter.click();
   await filter.click();
   await page.reload();
