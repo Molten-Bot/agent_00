@@ -1287,45 +1287,49 @@
       }
     }
 
-    function renderTaskIssueAction(task) {
+    function renderTaskIssueAction(task, text = "") {
       const issueURL = taskIssueURL(task);
       if (!issueURL) return null;
 
       const link = document.createElement("a");
-      link.className = "task-github-link";
+      link.className = text ? "task-issue-action" : "task-github-link";
       link.href = issueURL;
       link.target = "_blank";
       link.rel = "noopener noreferrer";
       link.title = "Open issue on GitHub.";
       link.setAttribute("aria-label", link.title);
-      link.appendChild(createTaskActionIcon("issue"));
+      if (text) link.textContent = text;
+      else link.appendChild(createTaskActionIcon("issue"));
       link.addEventListener("click", (event) => openExternalTaskLink(event, issueURL, () => {
         trackAnalyticsEvent("task_github_step_opened", { progress_step: "entry_github_issue" });
       }));
       return link;
     }
 
-    function renderTaskPullRequestAction(task) {
+    function renderTaskPullRequestAction(task, text = "") {
       const prURL = taskCardPullRequestURL(task);
       if (!prURL || (!task.task_id && !isCompletedTask(task))) {
         return null;
       }
 
       const link = document.createElement("a");
-      link.className = "task-github-link";
+      link.className = text ? "task-issue-action" : "task-github-link";
       link.href = prURL;
       link.target = "_blank";
       link.rel = "noopener noreferrer";
       link.title = "Open pull request on GitHub.";
       link.setAttribute("aria-label", "Open pull request on GitHub.");
 
-      const logo = document.createElement("img");
-      logo.className = "task-github-logo";
-      logo.src = GITHUB_LOGO_URL;
-      logo.alt = "";
-      logo.setAttribute("aria-hidden", "true");
-
-      link.appendChild(logo);
+      if (text) {
+        link.textContent = text;
+      } else {
+        const logo = document.createElement("img");
+        logo.className = "task-github-logo";
+        logo.src = GITHUB_LOGO_URL;
+        logo.alt = "";
+        logo.setAttribute("aria-hidden", "true");
+        link.appendChild(logo);
+      }
       link.addEventListener("click", (event) => {
         openExternalTaskLink(event, prURL, () => {
           trackAnalyticsEvent("task_pull_request_opened");
@@ -11422,7 +11426,7 @@
     function runningTasks(snapshot) {
       const out = currentTasks(snapshot);
       return out.filter((task) => !isCompletedTask(task) ||
-        (task.task_id && ["blocked", "merged_unverified"].includes(task.issue_state)));
+        (task.task_id && task.issue_state === "blocked"));
     }
 
     function taskHistoryDedupeKeys(task) {
@@ -11432,6 +11436,7 @@
     }
 
     function completedTaskHistoryKey(task) {
+      if (task?.task_id) return task.task_id;
       const prompt = String(task?.prompt || "").trim().toLowerCase();
       const repos = Array.isArray(task?.repos)
         ? task.repos.map((repo) => String(repo || "").trim()).filter(Boolean).sort().join(",")
@@ -12286,14 +12291,22 @@
     function clearTaskResult(node) {
       if (!node) return;
       node.className = "task-result";
+      delete node.dataset.requestId;
       node.replaceChildren();
     }
 
     function renderTaskResult(task, node) {
       if (!node) return;
+      const historyOpen = node.dataset.requestId === task?.request_id &&
+        Boolean(node.querySelector(".task-issue-history details[open]"));
       clearTaskResult(node);
 
-      if (!task) {
+      if (!task) return;
+      if (task.issue_attempts?.length) {
+        const action = renderTaskPullRequestAction(task, "View pull request") || renderTaskIssueAction(task, "View issue");
+        node.className = `task-result show ${statusClass(taskDisplayStatus(task))}`;
+        node.dataset.requestId = task.request_id;
+        node.appendChild(renderIssueTaskHistory(task, historyOpen, true, action));
         return;
       }
 
@@ -12586,60 +12599,114 @@
       return (tasks || []).map((task) => task.task_id || taskRequestID(task)).join("|");
     }
 
-    function renderIssueTaskHistory(task, open) {
+    function issueTaskStatusLabel(task) {
+      if (normalizedTaskStatus(task.status) === "merged") return "Merged";
+      switch (task.issue_state) {
+        case "retry_wait": return "Waiting to retry";
+        case "checks_pending": return "Waiting for GitHub checks";
+        case "review_pending": return "Waiting for review on the current head";
+        case "awaiting_review":
+        case "waiting":
+          switch (task.review_gate) {
+            case "Waiting for successful checks": return "Waiting for GitHub checks";
+            case "Waiting for the trusted review policy check on the current pull request head":
+            case "Waiting for unresolved review threads":
+            case "Waiting for human approval":
+            case "Waiting for requested changes":
+            case "Waiting for pull request to leave draft":
+            case "Waiting for pull request head commit": return task.review_gate;
+            default:
+              return task.issue_state === "awaiting_review" ? "Waiting for review on the current head" : "Waiting for merge";
+          }
+        case "blocked": return "Blocked";
+        case "waiting_for_worker": return "Waiting for worker to stop";
+        default: return taskStatusLabel(task.status);
+      }
+    }
+
+    function renderIssueTaskHistory(task, open, showStatus, action) {
       if (!task.issue_attempts?.length) return null;
       const region = document.createElement("div");
       region.className = "task-issue-history";
       region.addEventListener("click", (event) => event.stopPropagation());
 
-      const stateLabels = {
-        retry_wait: "Waiting to retry",
-        checks_pending: "Waiting for GitHub checks",
-        review_pending: "Waiting to resume review",
-        awaiting_review: "Waiting for review",
-        waiting: "Waiting for merge",
-        blocked: "Blocked",
-        merged_unverified: "Merged before verification",
-      };
+      if (showStatus || action) {
+        const current = document.createElement("div");
+        current.className = "task-issue-current";
+        region.appendChild(current);
+        if (showStatus) {
+          const status = document.createElement("div");
+          status.className = "task-issue-status";
+          status.textContent = issueTaskStatusLabel(task);
+          current.appendChild(status);
+        }
+        if (action) current.appendChild(action);
+        if (task.issue_pr_recovery_blocker) {
+          const blocker = document.createElement("div");
+          blocker.className = "task-issue-blocker";
+          blocker.textContent = task.issue_pr_recovery_blocker;
+          current.appendChild(blocker);
+        }
+      }
       const details = document.createElement("details");
       details.open = open;
       const summary = document.createElement("summary");
-      const stateLabel = stateLabels[task.issue_state];
-      const planning = task.issue_planning_status;
-      const heading = [planning, stateLabel, `Attempt history (${task.issue_attempts.length})`].filter(Boolean);
+      summary.textContent = `Attempt history (${task.issue_attempts.length})`;
+      details.appendChild(summary);
+      region.appendChild(details);
+
       if (task.workflow_id && state.reviewSettings?.workflowEnabled) {
         const link = document.createElement("a");
         link.href = `#workflow/${encodeURIComponent(task.workflow_id)}`;
         link.textContent = task.workflow_name || "Workflow";
-        summary.append(link, " · ");
+        details.appendChild(link);
       } else if (task.workflow_name) {
-        heading.unshift(task.workflow_name);
+        const workflow = document.createElement("p");
+        workflow.textContent = task.workflow_name;
+        details.appendChild(workflow);
       }
-      summary.append(heading.join(" · "));
-      details.appendChild(summary);
-      region.appendChild(details);
 
-      const detail = [task.review_gate, stateLabel ? task.error : ""].filter(Boolean);
+      const seenDetails = new Set(showStatus ? [issueTaskStatusLabel(task)] : []);
+      if (task.issue_pr_recovery_blocker) seenDetails.add(task.issue_pr_recovery_blocker);
+      const stages = new Set(["pr_verification"]);
+      for (const attempt of task.issue_attempts) {
+        for (const stage of [...(attempt.stages || []), attempt.stage].filter(Boolean)) stages.add(stage);
+      }
+      const distinctDetails = (...values) => values.map((value) => {
+        let detail = String(value || "").trim();
+        const retrySuffix = detail.match(/([.;]) retry (?:after|at) (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)\.?$/i);
+        // Attempt messages can duplicate the structured retry deadline.
+        if (retrySuffix && Date.parse(retrySuffix[2]) === Math.floor(Date.parse(task.retry_at) / 1000) * 1000) {
+          detail = detail.slice(0, retrySuffix.index + (retrySuffix[1] === "." ? 1 : 0));
+        }
+        const separator = detail.indexOf(": ");
+        return separator > 0 && stages.has(detail.slice(0, separator)) ? detail.slice(separator + 2).trim() : detail;
+      }).filter((detail) => {
+        if (!detail || seenDetails.has(detail)) return false;
+        seenDetails.add(detail);
+        return true;
+      });
+      const list = document.createElement("ul");
+      for (const attempt of task.issue_attempts) {
+        const row = document.createElement("li");
+        const status = taskStatusLabel(attempt.status);
+        const stages = new Set([...(attempt.stages || []), attempt.stage].filter(Boolean).map(taskStatusLabel));
+        const stageHistory = Array.from(stages).join(" → ");
+        const evidence = distinctDetails(attempt.error, attempt.detail, attempt.review_detail);
+        row.textContent = [`Attempt ${attempt.number}`, stages.has(status) ? "" : status, stageHistory, ...evidence].filter(Boolean).join(" · ");
+        list.appendChild(row);
+      }
+      details.appendChild(list);
+
+      const detail = distinctDetails(task.error, task.review_gate, task.warning);
       if (task.retry_at) {
         detail.push(`Retry after ${new Date(task.retry_at).toLocaleString()}`);
       }
       if (detail.length) {
         const message = document.createElement("p");
         message.textContent = detail.join(" · ");
-        region.appendChild(message);
+        details.appendChild(message);
       }
-
-      const list = document.createElement("ul");
-      for (const attempt of task.issue_attempts) {
-        const row = document.createElement("li");
-        const status = stateLabels[attempt.status] || taskStatusLabel(attempt.status);
-        const stages = attempt.stages?.slice() || [];
-        if (attempt.stage && stages.at(-1) !== attempt.stage) stages.push(attempt.stage);
-        const stageHistory = stages.map((stage) => stage.replaceAll("_", " ")).join(" → ");
-        row.textContent = [`Attempt ${attempt.number}`, status, stageHistory, attempt.error].filter(Boolean).join(" · ");
-        list.appendChild(row);
-      }
-      details.appendChild(list);
       return region;
     }
 
@@ -12674,6 +12741,7 @@
             workflowName: task.workflow_name,
             workflowID: task.workflow_id,
             issueState: task.issue_state,
+            issuePRRecoveryBlocker: task.issue_pr_recovery_blocker,
             issuePlanningStatus: task.issue_planning_status,
             issueAttempts: task.issue_attempts,
             issueError: task.task_id ? task.error : undefined,
@@ -12922,7 +12990,15 @@
         if (task.task_id) {
           node.dataset.taskId = task.task_id;
         }
-        const issueHistory = renderIssueTaskHistory(task, openIssueTasks.has(task.task_id));
+        const issueTask = Boolean(task.issue_attempts?.length);
+        const showIssueRetry = issueTask && !promptOnly && canRerunTask(task) && normalizedTaskStatus(task.status) !== "merged";
+        const issuePrimaryAction = issueTask && !showIssueRetry &&
+          (renderTaskPullRequestAction(task, "View pull request") || renderTaskIssueAction(task, "View issue"));
+        const showIssueProgress = issueTask && !collapsed && !promptOnly &&
+          task.issue_state === "running" && normalizedTaskStatus(task.status) === "running";
+        const progress = !collapsed && !promptOnly && (!issueTask || showIssueProgress) ? renderTaskProgress(task) : null;
+        const issueHistory = renderIssueTaskHistory(task, openIssueTasks.has(task.task_id), !progress, issuePrimaryAction);
+        const showIssueLink = !issuePrimaryAction || Boolean(taskCardPullRequestURL(task));
         if (requestID) {
           node.dataset.requestId = requestID;
         }
@@ -12945,7 +13021,7 @@
           id.title = name;
         }
 
-        const badge = renderTaskStatusBadge(task);
+        const badge = issueTask ? null : renderTaskStatusBadge(task);
 
         const topActions = document.createElement("div");
         topActions.className = "task-top-actions";
@@ -12983,9 +13059,9 @@
           }
           const assetAction = renderAssetToggle(task);
           if (assetAction) promptActions.appendChild(assetAction);
-          const issueAction = renderTaskIssueAction(task);
+          const issueAction = showIssueLink && renderTaskIssueAction(task);
           if (issueAction) promptActions.appendChild(issueAction);
-          const githubAction = renderTaskPullRequestAction(task);
+          const githubAction = !issuePrimaryAction && renderTaskPullRequestAction(task);
           if (githubAction) {
             promptActions.appendChild(githubAction);
           }
@@ -12995,7 +13071,7 @@
             promptActions.appendChild(closeAction);
           }
 
-          const compactState = renderTaskCurrentStateBadge(task);
+          const compactState = issueTask ? null : renderTaskCurrentStateBadge(task);
           top.append(id);
           if (promptActions.childElementCount > 0) {
             top.append(promptActions);
@@ -13123,17 +13199,17 @@
           }
         }
 
-        if (canRerunTask(task)) {
+        if (showIssueRetry || (!issueTask && canRerunTask(task))) {
           const rerun = document.createElement("button");
           rerun.type = "button";
-          rerun.className = "task-rerun task-icon-button";
-          rerun.setAttribute("aria-label", "Re-run task");
-          rerun.appendChild(createTaskActionIcon("rerun"));
-          const rerunLabel = document.createElement("span");
-          rerunLabel.className = "sr-only";
-          rerunLabel.textContent = "Re-run";
-          rerun.appendChild(rerunLabel);
-          rerun.title = "Queue this task configuration again";
+          rerun.className = showIssueRetry ? "task-issue-action" : "task-rerun task-icon-button";
+          if (showIssueRetry) {
+            rerun.textContent = "Retry task";
+          } else {
+            rerun.setAttribute("aria-label", "Re-run task");
+            rerun.appendChild(createTaskActionIcon("rerun"));
+            rerun.title = "Queue this task configuration again";
+          }
           rerun.disabled = state.rerunInFlight.has(requestID);
           bindTaskActionButton(rerun, () => {
             rerunTask(requestID);
@@ -13141,9 +13217,9 @@
           topActions.appendChild(rerun);
         }
 
-        const issueAction = renderTaskIssueAction(task);
+        const issueAction = showIssueLink && renderTaskIssueAction(task);
         if (issueAction) topActions.appendChild(issueAction);
-        const githubAction = renderTaskPullRequestAction(task);
+        const githubAction = !issuePrimaryAction && renderTaskPullRequestAction(task);
         if (githubAction) {
           topActions.appendChild(githubAction);
         }
@@ -13160,7 +13236,6 @@
         body.appendChild(top);
 
         if (!collapsed) {
-          const progress = renderTaskProgress(task);
           if (progress) {
             body.appendChild(progress);
           }
@@ -13260,7 +13335,7 @@
         }
 
         node.classList.toggle("task-has-side-actions", showTaskSideActions);
-        if (collapsed) {
+        if (collapsed && !issueTask) {
           const compactState = renderTaskCurrentStateBadge(task);
           if (compactState) {
             node.classList.add("task-compact-state-left");
@@ -13779,21 +13854,31 @@
       const selectedLabel = taskDisplayLabel(selected);
       const logs = Array.isArray(selected.logs) ? selected.logs : [];
       const lastLog = logs.length ? logs[logs.length - 1] : null;
-      const renderSig = [
+      const issueTask = Boolean(selected.issue_attempts?.length);
+      const renderSig = JSON.stringify([
         selected.request_id || "",
         selectedLabel,
         taskPullRequestURL(selected),
+        taskCardPullRequestURL(selected),
+        taskIssueURL(selected),
         selected.review_gate || "",
         selected.review_url || "",
         selected.status || "",
         selected.stage || "",
         selected.stage_status || "",
         selected.warning || "",
+        selected.error,
+        selected.issue_state,
+        selected.issue_attempts,
+        selected.retry_at,
+        selected.workflow_id,
+        selected.workflow_name,
+        Boolean(state.reviewSettings?.workflowEnabled),
         logs.length,
         lastLog?.time || "",
         lastLog?.stream || "",
         lastLog?.text || "",
-      ].join("|");
+      ]);
       if (terminalNode.dataset.renderSig === renderSig) {
         terminalNode.dataset.pendingRenderSig = "";
         return;
@@ -13806,7 +13891,7 @@
       terminalNode.dataset.renderSig = renderSig;
       terminalNode.dataset.pendingRenderSig = "";
 
-      headLabelNode.textContent = `${selectedLabel} | ${selected.status || "pending"} | ${selected.stage || "-"}`;
+      headLabelNode.textContent = issueTask ? selectedLabel : `${selectedLabel} | ${selected.status || "pending"} | ${selected.stage || "-"}`;
       renderTaskResult(selected, resultNode);
       const wasPinnedToBottom = terminalNode.scrollTop + terminalNode.clientHeight >= terminalNode.scrollHeight - 24;
       if (!renderXtermTaskLogs(logs, terminalNode)) {

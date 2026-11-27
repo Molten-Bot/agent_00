@@ -78,6 +78,10 @@ func prepareIssueExecution(store *localruntime.IssueClaimStore, run config.Confi
 		lock.Close()
 		return nil, "", err
 	}
+	if record.PRMerged() {
+		lock.Close()
+		return nil, record.RequestID, nil
+	}
 	if record.Control != "" {
 		lock.Close()
 		return nil, "", fmt.Errorf("issue is %s; explicit resume required", record.Control)
@@ -101,6 +105,9 @@ func prepareIssueExecution(store *localruntime.IssueClaimStore, run config.Confi
 	record.NextAttemptAt = time.Time{}
 	if err := store.BeginExecution(record); err != nil {
 		lock.Close()
+		if errors.Is(err, localruntime.ErrIssuePRMerged) {
+			return nil, record.RequestID, nil
+		}
 		return nil, "", err
 	}
 	return &issueExecution{store: store, record: record, lock: lock, policy: policy.Defaults()}, "", nil
@@ -130,6 +137,10 @@ func latestClaimForTask(records []localruntime.IssueClaimRecord, requestID strin
 }
 
 func (e *issueExecution) finish(ctx context.Context, state string, result app.Result, waitForStorage func() bool) error {
+	return e.finishWithClaimUpdate(ctx, state, result, waitForStorage, e.store.Update)
+}
+
+func (e *issueExecution) finishWithClaimUpdate(ctx context.Context, state string, result app.Result, waitForStorage func() bool, updateClaim func(string, func(*localruntime.IssueClaimRecord) error) error) error {
 	defer e.lock.Close()
 	if state == "" {
 		state = "interrupted"
@@ -144,6 +155,23 @@ func (e *issueExecution) finish(ctx context.Context, state string, result app.Re
 	var journalErr error
 	holdPersisted := false
 	update := func(record *localruntime.IssueClaimRecord) error {
+		if record.PRMerged() {
+			if result.Err != nil {
+				record.RunError = result.Err.Error()
+			}
+			// The workflow can publish its merge receipt before this worker
+			// saves the draft verification that authorized delivery.
+			if record.State == localruntime.IssueStateMergedUnverified && state == "completed" &&
+				result.PRVerificationPassed && result.PRURL != "" && strings.EqualFold(record.PRURL, result.PRURL) {
+				record.State = localruntime.IssueStateMerged
+				record.PRVerification = ""
+				record.VerifiedAt = stoppedAt
+				record.Error = ""
+			}
+			record.StoppedAt = stoppedAt
+			record.ExecutionAgentAttempts = nil
+			return nil
+		}
 		record.Outcome = state
 		record.ExitCode = result.ExitCode
 		record.State = "verifying"
@@ -223,7 +251,11 @@ func (e *issueExecution) finish(ctx context.Context, state string, result app.Re
 				record.Error = fmt.Sprintf("Waiting for GitHub check verification. Retry after %s.", record.NextAttemptAt.UTC().Format(time.RFC3339))
 			}
 		}
-		if journalErr != nil || ((state == "error" || state == "interrupted") &&
+		if result.ReviewInterrupted && record.PRURL != "" {
+			record.State = localruntime.IssueStateMerged
+			record.NextAttemptAt = time.Time{}
+			record.UnlockPending = record.LabelAdded
+		} else if journalErr != nil || ((state == "error" || state == "interrupted") &&
 			(workspace.IsDiskFull(result.Err) || errors.Is(result.Err, workspace.ErrUnsuitableStorage))) {
 			record.Incident = localruntime.IssueIncidentWorkspaceStorage
 			record.State = "blocked"
@@ -240,7 +272,7 @@ func (e *issueExecution) finish(ctx context.Context, state string, result app.Re
 		return nil
 	}
 	for {
-		err := e.store.Update(e.record.ID, update)
+		err := updateClaim(e.record.ID, update)
 		if err == nil {
 			return e.store.ReleaseExecutionReserve(e.record.ID)
 		}
@@ -333,6 +365,9 @@ func (e *issueExecution) configure(ctx context.Context, h *app.Harness) (context
 			return
 		}
 		err := e.store.Update(e.record.ID, func(record *localruntime.IssueClaimRecord) error {
+			if record.PRMerged() {
+				return localruntime.ErrIssuePRMerged
+			}
 			record.State = "running"
 			record.Step = step
 			recordIssueStage(record, step)

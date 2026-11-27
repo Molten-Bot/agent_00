@@ -114,6 +114,13 @@ func (c *localTaskController) Stop(requestID string) error {
 	return err
 }
 
+// CancelMergedTask cancels the worker using the already persisted merge receipt.
+func (c *localTaskController) CancelMergedTask(requestID string) {
+	if handle, err := c.handleFor(requestID); err == nil && handle.cancel != nil {
+		handle.cancel(nil)
+	}
+}
+
 func (c *localTaskController) StopWithCanonical(requestID string) (string, error) {
 	canonical, handle, err := c.handleForWithCanonical(requestID)
 	if err != nil {

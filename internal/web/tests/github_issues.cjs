@@ -41,6 +41,87 @@ let browser;
 before(async () => { browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] }); });
 after(async () => { await browser?.close(); });
 
+test('issue task history shows each verification error and retry deadline once', async t => {
+  const page = await browser.newPage();
+  await page.addInitScript(() => localStorage.setItem('hubui.taskStatusFilter', 'completed'));
+  t.after(() => page.close());
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => {
+    if (message.type() === 'error' && !message.text().startsWith('Failed to load resource:')) errors.push(message.text());
+  });
+  const failure = 'pull request merged before draft verification passed';
+  const reviewDetail = 'Waiting for unresolved review threads';
+  const retryAt = '2026-11-27T12:00:00.123456789Z';
+  const retryDetail = 'Waiting for GitHub check verification. Retry after 2026-11-27T12:00:00Z.';
+  await page.route('**/*', route => {
+    const url = new URL(route.request().url());
+    if (url.origin !== new URL(baseURL).origin) return route.abort();
+    if (!url.pathname.startsWith('/api/')) return route.continue();
+    if (url.pathname === '/api/stream') return route.fulfill({ contentType: 'text/event-stream', body: '' });
+    if (url.pathname === '/api/agent-auth') return route.fulfill({ json: { auth: { required: false, ready: true } } });
+    if (url.pathname !== '/api/status') return route.fulfill({ json: { ok: true } });
+    return route.fulfill({ json: {
+      tasks: [{
+        task_id: 'issue-17', request_id: 'req-17', status: 'merged', issue_state: 'merged',
+        pr_url: 'https://github.com/example/project/pull/17',
+        issue_attempts: [{
+          number: 1, status: 'error', stage: 'pr_verification', stages: ['pr_verification'],
+          error: `pr_verification: ${failure}`, detail: failure, review_detail: reviewDetail,
+        }],
+      }, {
+        task_id: 'issue-18', request_id: 'req-18', status: 'queued', issue_state: 'checks_pending',
+        retry_at: retryAt, error: retryDetail,
+        issue_attempts: [{
+          number: 1, status: 'checks_pending', stage: 'checks_pending',
+          error: `checks_pending: ${retryDetail}`, detail: retryDetail,
+        }],
+      }],
+      events: [], repositories: [], stats: {}, resources: {},
+    } });
+  });
+  await page.goto(`${baseURL}/#current-work`);
+  const card = page.locator('[data-task-id="issue-17"]:visible').first();
+  const summary = card.getByText('Attempt history (1)');
+  await summary.click();
+  const history = await card.locator('details').innerText();
+  assert.equal(history.split(failure).length - 1, 1);
+  assert.equal(history.split('pr verification').length - 1, 1);
+  assert.ok(history.includes(reviewDetail));
+  assert.equal(await card.getByRole('button', { name: 'Retry task' }).count(), 0);
+
+  await card.locator('.task-output-toggle').click();
+  const result = page.locator('#task-fullscreen-result');
+  await result.getByText('Merged', { exact: true }).waitFor();
+  const consoleHistory = result.locator('details');
+  assert.equal(await consoleHistory.getAttribute('open'), null);
+  await consoleHistory.locator('summary').click();
+  assert.equal((await consoleHistory.innerText()).split(failure).length - 1, 1);
+  assert.ok((await consoleHistory.innerText()).includes(reviewDetail));
+  assert.equal(await result.getByRole('link', { name: 'Open pull request on GitHub.' }).getAttribute('href'),
+    'https://github.com/example/project/pull/17');
+
+  const lateDetail = 'Verification evidence arrived after opening the console';
+  await page.evaluate(detail => {
+    const task = state.snapshot.tasks[0];
+    render({ ...state.snapshot, tasks: [{
+      ...task, issue_attempts: [{ ...task.issue_attempts[0], review_detail: detail }],
+    }] });
+  }, lateDetail);
+  await consoleHistory.getByText(lateDetail, { exact: false }).waitFor();
+  assert.notEqual(await consoleHistory.getAttribute('open'), null);
+
+  await page.evaluate(() => localStorage.setItem('hubui.taskStatusFilter', 'running'));
+  await page.reload();
+  const pending = page.locator('[data-task-id="issue-18"]:visible').first();
+  await pending.getByText('Attempt history (1)').click();
+  const pendingHistory = await pending.locator('details').innerText();
+  assert.equal(pendingHistory.split('Waiting for GitHub check verification.').length - 1, 1);
+  assert.equal(pendingHistory.split('Retry after').length - 1, 1);
+  assert.ok(pendingHistory.includes(await page.evaluate(when => new Date(when).toLocaleString(), retryAt)));
+  assert.deepEqual(errors, []);
+});
+
 // openIssue loads the Studio issues panel in a known timezone and opens issue,
 // so every rendered timestamp is the viewer's local time for a fixed instant.
 // Avatars are the one request that leaves the app's origin: serving them is

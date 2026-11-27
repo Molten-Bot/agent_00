@@ -1606,7 +1606,7 @@ func TestMergedTaskCardsUseMutedTreatment(t *testing.T) {
 	if !strings.Contains(html, `node.classList.toggle("task-merged", normalizedTaskStatus(task?.status) === "merged");`) {
 		t.Fatalf("expected merged tasks to receive task-merged class")
 	}
-	if !strings.Contains(html, `["blocked", "merged_unverified"].includes(task.issue_state)`) ||
+	if !strings.Contains(html, `task.task_id && task.issue_state === "blocked"`) ||
 		strings.Contains(html, "|| isMergedTask(task)") {
 		t.Fatalf("expected current work display to omit merged tasks")
 	}
