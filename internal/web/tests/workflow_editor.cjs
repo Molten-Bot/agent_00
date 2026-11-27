@@ -29,6 +29,27 @@ async function openEditor(t,viewport={width:1280,height:900},initialSettings={wo
 async function waitForSaved(page) {
  await page.locator('.wf-save-state:empty').waitFor({state:'attached'});
 }
+test('default execution remains editable with custom workflows disabled', async t => {
+ const {page}=await openEditor(t,undefined,{workflow_enabled:false},undefined,false);
+ const read=async()=>(await page.request.get(baseURL+'/api/workflows')).json();
+ const before=await read();
+ try {
+  await page.getByText('Default execution',{exact:true}).click();
+  await page.getByLabel('Default review fix passes').fill('10');
+  await page.getByLabel('Default reviewer complexity').selectOption('easy');
+  const saved=page.waitForResponse(response=>response.url().endsWith('/api/workflows')&&response.request().method()==='PUT');
+  await page.getByRole('button',{name:'Save default execution'}).click();
+  assert.equal((await saved).status(),200);
+  assert.deepEqual((await read()).defaultExecution,{reviewCycles:10,reviewAgent:{complexity:'easy'}});
+  await page.reload();
+  await page.getByText('Default execution',{exact:true}).click();
+  assert.equal(await page.getByLabel('Default review fix passes').inputValue(),'10');
+  assert.equal(await page.getByLabel('Default reviewer complexity').inputValue(),'easy');
+ } finally {
+  const latest=await read();
+  await page.request.put(baseURL+'/api/workflows',{data:{...latest,defaultExecution:before.defaultExecution}});
+ }
+});
 async function selectRepository(page, repository) {
  const owner = repository.split('/')[0];
  const owners = page.getByRole('group', {name:'Organizations & people',exact:true});
@@ -431,27 +452,27 @@ test('review pass slider supports presets, keyboard, dragging and existing saved
  await page.getByLabel('Review step',{exact:true}).check();
  const slider=page.getByRole('slider',{name:'Review passes',exact:true});
  const presets=page.getByRole('group',{name:'Review pass presets'});
- assert.deepEqual(await presets.getByRole('button').allTextContents(),['','','','','']);
+ assert.deepEqual(await presets.getByRole('button').allTextContents(),['','','','','','']);
  for(const icon of ['signal-zero','signal-low','signal-medium','signal-high','signal']) {
-  assert.equal(await presets.locator(`svg.lucide-${icon}`).count(),1);
+  assert.equal(await presets.locator(`svg.lucide-${icon}`).count(),icon==='signal'?2:1);
  }
  assert.equal(await page.getByText(/A fresh review agent checks the changes/).count(),0);
  assert.equal(await page.getByRole('spinbutton').count(),0);
- for(const count of [0,1,2,4,8]) {
+ for(const count of [0,1,2,4,8,10]) {
   await page.getByRole('button',{name:`${count} ${count===1?'pass':'passes'}`,exact:true}).click();
-  assert.equal(await slider.inputValue(),String([0,1,2,4,8].indexOf(count)));
+  assert.equal(await slider.inputValue(),String([0,1,2,4,8,10].indexOf(count)));
  }
  await slider.focus();await page.keyboard.press('Home');await page.keyboard.press('ArrowRight');
  assert.equal(await slider.getAttribute('aria-valuetext'),'1 pass');
  await slider.scrollIntoViewIfNeeded();const box=await slider.boundingBox();
  await page.mouse.move(box.x+box.width/4,box.y+box.height/2);await page.mouse.down();await page.mouse.move(box.x+box.width-8,box.y+box.height/2,{steps:8});await page.mouse.up();
- assert.equal(await slider.getAttribute('aria-valuetext'),'8 passes');
- await waitForSaved(page);assert.equal(getDocument().workflows[0].reviewCycles,8);
- getDocument().workflows[0].reviewCycles=10;
- await page.reload();await selectRepository(page,'acme/repo');await page.locator('.wf-step').first().click();await page.locator('[data-id="review"]').click();
- assert.equal(await slider.getAttribute('aria-valuetext'),'10 passes, saved value; choose a preset to change');
- assert.equal(await presets.getByRole('button',{pressed:true}).count(),0);
+ assert.equal(await slider.getAttribute('aria-valuetext'),'10 passes');
  await waitForSaved(page);assert.equal(getDocument().workflows[0].reviewCycles,10);
+ getDocument().workflows[0].reviewCycles=9;
+ await page.reload();await selectRepository(page,'acme/repo');await page.locator('.wf-step').first().click();await page.locator('[data-id="review"]').click();
+ assert.equal(await slider.getAttribute('aria-valuetext'),'9 passes, saved value; choose a preset to change');
+ assert.equal(await presets.getByRole('button',{pressed:true}).count(),0);
+ await waitForSaved(page);assert.equal(getDocument().workflows[0].reviewCycles,9);
  await page.getByRole('button',{name:'4 passes',exact:true}).click();await waitForSaved(page);assert.equal(getDocument().workflows[0].reviewCycles,4);
  await page.screenshot({path:join(tmpdir(),'agent00-review-pass-slider.png'),fullPage:true});
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));

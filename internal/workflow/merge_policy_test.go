@@ -31,7 +31,7 @@ func TestPendingMergeRejectsChangedWorkflowPolicy(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := e.Complete(runs[0].ID, Outcome{Status: "succeeded", PRURL: "https://github.com/acme/repo/pull/2"}); err != nil {
+			if err := e.Complete(runs[0].ID, Outcome{Status: "succeeded", PRURL: "https://github.com/acme/repo/pull/2", ReviewReceipt: fixtureRunReviewReceipt(runs[0], "https://github.com/acme/repo/pull/2")}); err != nil {
 				t.Fatal(err)
 			}
 			doc, err := e.Store.Load()
@@ -78,10 +78,10 @@ func TestRetryAfterRetirementUsesOnlyMatchingMergePolicy(t *testing.T) {
 		activation = run.ID
 		return "retry-task", nil
 	}
-	if _, err := e.DispatchRetry(t.Context(), w.ID, "old-policy", "old-activation", item, submit); err != nil || activation != "" {
+	if _, err := e.DispatchRetry(t.Context(), w.ID, "old-policy", "old-activation", item, nil, submit); err != nil || activation != "" {
 		t.Fatalf("retry should use ordinary task execution when policy changed: id=%q err=%v", activation, err)
 	}
-	if _, err := e.DispatchRetry(t.Context(), w.ID, w.ExecutionPolicyHash(), "old-activation", item, submit); err != nil || activation == "" {
+	if _, err := e.DispatchRetry(t.Context(), w.ID, w.ExecutionPolicyHash(), "old-activation", item, nil, submit); err != nil || activation == "" {
 		t.Fatalf("retry should get an active receipt: id=%q err=%v", activation, err)
 	}
 	if err := e.Complete(activation, Outcome{Status: "succeeded", PRURL: "https://github.com/acme/repo/pull/2"}); err != nil {

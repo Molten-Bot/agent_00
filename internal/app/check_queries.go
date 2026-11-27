@@ -231,6 +231,9 @@ func (h Harness) readPRCheckRollup(ctx context.Context, repo repoWorkspace, id, 
 		if cursor != "" {
 			cmd.Args = append(cmd.Args, "-f", "endCursor="+cursor)
 		}
+		if repo.ReviewSanitize {
+			cmd = commandWithoutGitHubTokenEnv(cmd)
+		}
 		res, err := h.runCheckQuery(ctx, "checks", cmd, checkQueryTimeout)
 		if err != nil {
 			return nil, fmt.Errorf("read pull request check rollup: %w", err)
@@ -286,9 +289,35 @@ func (h Harness) readPRCheckRollup(ctx context.Context, repo repoWorkspace, id, 
 }
 
 func (h Harness) confirmCurrentRequiredChecks(ctx context.Context, repo repoWorkspace, expected string) error {
-	state, err := h.readCheckPRState(ctx, prStateViewCommand(repo.Dir, repo.PRURL, "id"))
+	return h.confirmHeadChecks(ctx, repo, expected, false)
+}
+
+func (h Harness) confirmHeadChecks(ctx context.Context, repo repoWorkspace, expected string, ready bool) error {
+	stateCmd := prStateViewCommand(repo.Dir, repo.PRURL, "id")
+	if repo.ReviewSanitize {
+		stateCmd = commandWithoutGitHubTokenEnv(stateCmd)
+	}
+	state, err := h.readCheckPRState(ctx, stateCmd)
 	if err != nil {
 		return err
+	}
+	if ready {
+		if pullRequestStateIsMerged(state) {
+			return githubutil.ErrReviewInterrupted
+		}
+		if state.HeadRefOID != expected {
+			return githubutil.ErrReviewHeadChanged
+		}
+		// Journaled review completion can run after the checkout is removed.
+		if repo.BaseBranch == "" {
+			repo.BaseBranch = state.BaseRefName
+		}
+		if repo.Branch == "" {
+			repo.Branch = state.HeadRefName
+		}
+		if repo.BaseBranch == "" || repo.Branch == "" {
+			return fmt.Errorf("%w: pull request base or head branch was missing", ErrChecksUnavailable)
+		}
 	}
 	if err := checkPRMatches(state, repo, expected); err != nil {
 		return err
@@ -297,12 +326,19 @@ func (h Harness) confirmCurrentRequiredChecks(ctx context.Context, repo repoWork
 		return fmt.Errorf("%w: pull request ID was missing", ErrChecksUnavailable)
 	}
 	target := githubutil.PullRequestRepository(repo.PRURL)
-	required, err := h.configuredRequiredStatusChecks(ctx, repo.Dir, target, repo.BaseBranch, false)
+	required, err := h.configuredRequiredStatusChecks(ctx, repo.Dir, target, repo.BaseBranch, repo.ReviewSanitize, ready)
 	if err != nil {
 		return fmt.Errorf("load required checks: %w", err)
 	}
 	rules, err := githubutil.RequiredBranchRuleStatusChecks(ctx, func(ctx context.Context, args ...string) (string, error) {
-		res, err := h.runCheckQuery(ctx, "checks", ghCommand(repo.Dir, args...), checkQueryTimeout)
+		cmd := ghCommand(repo.Dir, args...)
+		if repo.ReviewSanitize {
+			cmd = commandWithoutGitHubTokenEnv(cmd)
+		}
+		res, err := h.runCheckQuery(ctx, "checks", cmd, checkQueryTimeout)
+		if ready && err == nil && strings.TrimSpace(res.Stdout) == "" {
+			return "", fmt.Errorf("missing active branch rules")
+		}
 		return res.Stdout, err
 	}, target, repo.BaseBranch)
 	if err != nil {
@@ -315,7 +351,10 @@ func (h Harness) confirmCurrentRequiredChecks(ctx context.Context, repo repoWork
 	}
 	passing := make(map[string]bool, len(required))
 	for _, check := range checks {
-		if !check.IsRequired {
+		if check.Name == githubutil.ReviewCheckName || check.Context == githubutil.ReviewCheckName {
+			continue
+		}
+		if !ready && !check.IsRequired {
 			continue
 		}
 		name := check.Name
@@ -325,6 +364,12 @@ func (h Harness) confirmCurrentRequiredChecks(ctx context.Context, repo repoWork
 		passed, failed := githubutil.CIStatus([]githubutil.StatusCheck{check.StatusCheck})
 		if failed {
 			return fmt.Errorf("check %q failed on the current pull request head", name)
+		}
+		if ready && !passed {
+			return fmt.Errorf("%w: check %q is still pending on the reviewed head", ErrChecksUnavailable, name)
+		}
+		if !check.IsRequired {
+			continue
 		}
 		if previous, seen := passing[name]; seen {
 			passed = passed && previous

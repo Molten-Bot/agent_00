@@ -193,19 +193,28 @@ func promptImageFromDataURI(value string) (PromptImage, error) {
 	}, nil
 }
 
-// WorkflowRunConfig records the policy used for an automated run.
+const DefaultExecutionWorkflowID = "default-execution"
+
+// WorkflowRunConfig records the captured execution policy.
 type WorkflowRunConfig struct {
-	Instructions string            `json:"instructions,omitempty"`
-	ID           string            `json:"id"`
-	EventID      string            `json:"eventId"`
-	Name         string            `json:"name"`
-	ReviewCycles int               `json:"reviewCycles"`
-	ReviewAgent  ReviewAgentConfig `json:"reviewAgent,omitzero"`
-	PolicyHash   string            `json:"policyHash,omitempty"`
-	RepairPRURL  string            `json:"repairPrUrl,omitempty"`
-	PRAssignee   string            `json:"prAssignee,omitempty"`
-	PRLabels     []string          `json:"prLabels,omitempty"`
-	ResumePRURL  string            `json:"resumePrUrl,omitempty"`
+	DefaultApplied bool              `json:"defaultApplied,omitempty"`
+	Instructions   string            `json:"instructions,omitempty"`
+	ID             string            `json:"id"`
+	EventID        string            `json:"eventId"`
+	Name           string            `json:"name"`
+	ReviewCycles   int               `json:"reviewCycles"`
+	ReviewAgent    ReviewAgentConfig `json:"reviewAgent,omitzero"`
+	PolicyHash     string            `json:"policyHash,omitempty"`
+	RepairPRURL    string            `json:"repairPrUrl,omitempty"`
+	PRAssignee     string            `json:"prAssignee,omitempty"`
+	PRLabels       []string          `json:"prLabels,omitempty"`
+	ResumePRURL    string            `json:"resumePrUrl,omitempty"`
+	ResumePRURLs   []string          `json:"resumePrUrls,omitempty"`
+	DetachedReview bool              `json:"detachedReview,omitempty"`
+}
+
+func (w *WorkflowRunConfig) IsDefaultExecution() bool {
+	return w != nil && w.ID == DefaultExecutionWorkflowID
 }
 
 type ReviewAgentConfig struct {
@@ -428,11 +437,23 @@ func (c Config) Validate() error {
 		if c.Workflow.ID == "" || c.Workflow.EventID == "" || c.Workflow.ReviewCycles < 0 || c.Workflow.ReviewCycles > 10 {
 			return fmt.Errorf("invalid workflow run snapshot")
 		}
-		if c.Workflow.ResumePRURL != "" && (c.Workflow.RepairPRURL != "" || c.Review != nil) {
+		if (c.Workflow.ResumePRURL != "" || len(c.Workflow.ResumePRURLs) > 0) && (c.Workflow.RepairPRURL != "" || c.Review != nil) {
 			return fmt.Errorf("a workflow PR metadata retry cannot also be a repair or review task")
+		}
+		if c.Workflow.ResumePRURL != "" && len(c.RepoList()) != 1 {
+			return fmt.Errorf("single pull request retry requires one repository")
+		}
+		if len(c.Workflow.ResumePRURLs) > 0 && (!c.Workflow.IsDefaultExecution() || c.Workflow.ResumePRURL != "" || c.GitHubIssue != nil || len(c.RepoList()) < 2) {
+			return fmt.Errorf("multi-repository review retry requires a default execution policy and its published targets")
+		}
+		if c.Workflow.DetachedReview && (!c.Workflow.DefaultApplied || c.Workflow.ResumePRURL == "" || c.GitHubIssue != nil) {
+			return fmt.Errorf("detached workflow review requires a captured policy and its original pull request")
 		}
 		if err := c.Workflow.ReviewAgent.Validate(); err != nil {
 			return err
+		}
+		if c.Workflow.DefaultApplied && (c.Workflow.ReviewCycles == 0 || c.Workflow.ReviewAgent.Complexity == "") {
+			return fmt.Errorf("invalid default execution policy snapshot")
 		}
 	}
 	if strings.TrimSpace(c.Version) == "" {
