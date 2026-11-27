@@ -71,6 +71,26 @@ func TestRetainMergedReviewLogs(t *testing.T) {
 	}
 }
 
+func TestArchiveFailedReviewOnlyOutcomeForMergeCleanup(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	const requestID = "pr-workflow"
+	outcome := workflow.Outcome{
+		Status: "failed", PRURL: "https://github.com/acme/repo/pull/42",
+		Reason: "review agent returned no valid structured outcome",
+	}
+	if err := archiveTaskReviewOutcome(root, requestID, true, outcome); err != nil {
+		t.Fatal(err)
+	}
+	got, err := workflow.LoadReviewOutcome(root, requestID)
+	if err != nil || got.Status != outcome.Status || got.PRURL != outcome.PRURL || got.Reason != "" {
+		t.Fatalf("archived review = %+v, %v", got, err)
+	}
+	if retain, err := retainMergedReviewLogs(root, requestID); err != nil || !retain {
+		t.Fatalf("merge cleanup should retain failed review logs: %t, %v", retain, err)
+	}
+}
+
 func TestIssueOwnershipCheckPublishesOperatorStop(t *testing.T) {
 	t.Parallel()
 

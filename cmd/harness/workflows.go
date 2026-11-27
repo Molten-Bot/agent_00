@@ -243,6 +243,15 @@ func configureWorkflows(ctx context.Context, cfg localruntime.InitConfig, runner
 	return nil
 }
 
+func archiveTaskReviewOutcome(root, requestID string, reviewOnly bool, outcome workflow.Outcome) error {
+	if outcome.ReviewReceipt != nil || outcome.ReviewInterrupted || outcome.ReviewRequired ||
+		outcome.PendingReviewGate != nil || outcome.Status == workflow.OutcomeReviewPending ||
+		(reviewOnly && outcome.Status == "failed") {
+		return workflow.SaveReviewOutcome(root, requestID, outcome)
+	}
+	return nil
+}
+
 func retainMergedReviewLogs(root, requestID string) (bool, error) {
 	outcome, err := workflow.LoadReviewOutcome(root, requestID)
 	if errors.Is(err, os.ErrNotExist) {

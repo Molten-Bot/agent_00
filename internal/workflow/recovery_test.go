@@ -257,11 +257,14 @@ func TestPendingReviewUsesGitHubMergeTimeAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	state := `{"state":"OPEN","mergedAt":null}`
+	state := `{"state":"OPEN","mergedAt":null,"autoMergeRequest":null,"mergeQueueEntry":null}`
 	calls := 0
 	gh := GitHub{Runner: fakeRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
 		calls++
-		if want := []string{"pr", "view", prURL, "--repo", w.Repository, "--json", "state,mergedAt"}; cmd.Name != "gh" || !slices.Equal(cmd.Args, want) {
+		want := []string{"api", "graphql", "-f",
+			"query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){state mergedAt autoMergeRequest{enabledAt} mergeQueueEntry{id}}}}",
+			"-f", "owner=acme", "-f", "name=repo", "-F", "number=12", "--jq", ".data.repository.pullRequest"}
+		if cmd.Name != "gh" || !slices.Equal(cmd.Args, want) {
 			t.Fatalf("unexpected GitHub command: %s %v", cmd.Name, cmd.Args)
 		}
 		return execx.Result{Stdout: state}, nil
@@ -408,6 +411,70 @@ func TestAcceptedMergeRequestIsReconciledWithoutResubmission(t *testing.T) {
 				t.Fatalf("queue did not settle once: %+v, %v, submissions=%d, receipts=%d", runs, err, merges, recorded)
 			}
 		})
+	}
+}
+
+func TestCanceledMergeRequestRechecksEligibility(t *testing.T) {
+	t.Parallel()
+	w := definition("canceled-merge")
+	w.Merge.Enabled, w.Merge.RequireApproval = true, false
+	e, _, _ := testEngine(t, w)
+	const prURL = "https://github.com/acme/repo/pull/42"
+	if err := e.transaction(func(s *State) error {
+		s.Runs = []Run{{ID: "activation", Workflow: w, Item: Item{Repository: w.Repository},
+			Status: "waiting", PRURL: prURL, MergeHead: "abc", MergeRequested: true}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	state := `{"state":"OPEN","autoMergeRequest":null,"mergeQueueEntry":{"id":"entry"}}`
+	gh := GitHub{Runner: fakeRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		args := strings.Join(cmd.Args, " ")
+		if !strings.HasPrefix(args, "api graphql ") || !strings.Contains(args, "autoMergeRequest{enabledAt} mergeQueueEntry{id}") ||
+			!slices.Contains(cmd.Args, "number=42") {
+			t.Fatalf("unexpected merge status query: %v", cmd.Args)
+		}
+		return execx.Result{Stdout: state}, nil
+	})}
+	e.InspectPRState = gh.InspectState
+	checksPassed := false
+	inspections, merges := 0, 0
+	e.InspectPR = func(context.Context, string, string) (Item, error) {
+		inspections++
+		return Item{Open: true, HeadSHA: "abc", ChecksPassed: checksPassed}, nil
+	}
+	e.Merge = func(context.Context, Run) error {
+		merges++
+		return errMergePending
+	}
+	checkRequested := func(want bool) {
+		t.Helper()
+		runs, err := e.Runs()
+		if err != nil || len(runs) != 1 || runs[0].MergeRequested != want {
+			t.Fatalf("merge requested should be %t: %+v, %v", want, runs, err)
+		}
+	}
+
+	tick(t, e)
+	checkRequested(true)
+	state = `{"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-01-01T00:00:00Z"},"mergeQueueEntry":null}`
+	tick(t, e)
+	checkRequested(true)
+	state = `{"state":"OPEN","autoMergeRequest":null,"mergeQueueEntry":null}`
+	tick(t, e)
+	checkRequested(false)
+	if inspections != 0 || merges != 0 {
+		t.Fatalf("inspected or resubmitted while polling: inspections=%d merges=%d", inspections, merges)
+	}
+	tick(t, e)
+	if inspections != 1 || merges != 0 {
+		t.Fatalf("resubmitted before checks passed: inspections=%d merges=%d", inspections, merges)
+	}
+	checksPassed = true
+	tick(t, e)
+	checkRequested(true)
+	if inspections != 2 || merges != 1 {
+		t.Fatalf("did not resubmit through normal eligibility: inspections=%d merges=%d", inspections, merges)
 	}
 }
 
@@ -633,6 +700,7 @@ func TestWorkflowReviewCooldownRetainsActivationAndRechecksHeadAfterRestart(t *t
 			e, _, submissions := testEngine(t, w)
 			prURL := "https://github.com/acme/repo/pull/42"
 			now := time.Now()
+			workerFinished := now.Add(-time.Minute)
 			reset := now.Add(time.Minute)
 			e.Now = func() time.Time { return now }
 			receipt := fixtureReviewReceipt(w, prURL)
@@ -642,7 +710,8 @@ func TestWorkflowReviewCooldownRetainsActivationAndRechecksHeadAfterRestart(t *t
 			}
 			state.Runs = []Run{{ID: "activation", RequestID: "task", Workflow: w,
 				Item: Item{Repository: w.Repository, Kind: "pr", Number: 42}, Status: awaitingReview, PRURL: prURL,
-				Outcome: &Outcome{Status: "succeeded", ReviewReceipt: receipt, PendingReviewGate: &githubutil.PendingReviewGate{MarkReady: true}}}}
+				StartedAt: &workerFinished, Outcome: &Outcome{Status: "succeeded", CompletedAt: workerFinished,
+					ReviewReceipt: receipt, PendingReviewGate: &githubutil.PendingReviewGate{MarkReady: true}}}}
 			if err := e.save(state); err != nil {
 				t.Fatal(err)
 			}
@@ -661,11 +730,14 @@ func TestWorkflowReviewCooldownRetainsActivationAndRechecksHeadAfterRestart(t *t
 				if !gate.ThreadsReconciled {
 					t.Fatal("lost review writeback checkpoint")
 				}
+				now = now.Add(3 * time.Second)
 				return nil
 			}
 			tick(t, e)
+			var transitions []string
 			restarted := &Engine{Store: e.Store, StatePath: e.StatePath, Enabled: e.Enabled, Allowed: e.Allowed,
-				Now: e.Now, Fetch: e.Fetch, Submit: e.Submit, Status: e.Status, InspectPR: e.InspectPR, FinishReview: e.FinishReview}
+				Now: e.Now, Fetch: e.Fetch, Submit: e.Submit, Status: e.Status, InspectPR: e.InspectPR, FinishReview: e.FinishReview,
+				Logf: func(format string, args ...any) { transitions = append(transitions, fmt.Sprintf(format, args...)) }}
 			tick(t, restarted)
 			pending, err := restarted.load()
 			if err != nil || len(pending.Runs) != 1 {
@@ -686,6 +758,9 @@ func TestWorkflowReviewCooldownRetainsActivationAndRechecksHeadAfterRestart(t *t
 			if head == receipt.Head {
 				if writes != 2 || len(state.Runs) != 0 {
 					t.Fatalf("current head did not finish: %+v writes=%d", state.Runs, writes)
+				}
+				if len(transitions) != 1 || !strings.HasSuffix(transitions[0], "status=succeeded reason=succeeded duration_ms=123000") {
+					t.Fatalf("completion timing omitted deferred writeback: %v", transitions)
 				}
 			} else if writes != 1 || len(state.Runs) != 1 || state.Runs[0].ID != waiting.ID ||
 				state.Runs[0].Status != awaitingReview || !strings.Contains(state.Runs[0].Reason, "Head changed") {

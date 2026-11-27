@@ -760,13 +760,9 @@ func runServer(args []string) int {
 					}
 				}
 
-				var reviewArchiveErr error
-				if reviewOutcome.ReviewReceipt != nil || reviewOutcome.ReviewInterrupted || reviewOutcome.ReviewRequired ||
-					reviewOutcome.PendingReviewGate != nil || reviewOutcome.Status == workflow.OutcomeReviewPending {
-					reviewArchiveErr = workflow.SaveReviewOutcome(filepath.Dir(cfg.RuntimeConfigPath), requestID, reviewOutcome)
-					if reviewArchiveErr != nil {
-						daemonLogger("task status=warn action=save_review_outcome request_id=%s err=%q", requestID, reviewArchiveErr)
-					}
+				reviewArchiveErr := archiveTaskReviewOutcome(filepath.Dir(cfg.RuntimeConfigPath), requestID, runCfg.Review != nil, reviewOutcome)
+				if reviewArchiveErr != nil {
+					daemonLogger("task status=warn action=save_review_outcome request_id=%s err=%q", requestID, reviewArchiveErr)
 				}
 				if runCfg.Workflow != nil && !runCfg.Workflow.IsDefaultExecution() && !runCfg.Workflow.DetachedReview && workflowEngine != nil {
 					if err := workflowEngine.Complete(runCfg.Workflow.EventID, reviewOutcome); err != nil && !(source == rerunSource && errors.Is(err, workflow.ErrActivationNotFound)) {

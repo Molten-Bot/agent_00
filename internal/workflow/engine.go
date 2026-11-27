@@ -45,7 +45,8 @@ type Item struct {
 	ChecksPassed   bool     `json:"checksPassed"`
 	Open           bool     `json:"open"`
 
-	MergedAt time.Time `json:"mergedAt,omitzero"`
+	MergedAt             time.Time `json:"mergedAt,omitzero"`
+	MergeRequestInactive bool      `json:"-"`
 
 	ActionRunID      int64 `json:"actionRunId,omitempty"`
 	ActionRunAttempt int   `json:"actionRunAttempt,omitempty"`
@@ -362,6 +363,8 @@ func (e *Engine) logRun(r Run, event string, mergedAt time.Time) {
 		reason = "review_not_clean"
 	case "Waiting for GitHub to confirm the pull request merged":
 		reason = "merge_pending"
+	case "GitHub merge request is no longer active":
+		reason = "merge_request_inactive"
 	case "Waiting for the trusted review policy check on the current pull request head":
 		reason = "review_check_pending"
 	case "Review writeback paused: workflow changed or was disabled":
@@ -818,6 +821,10 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 			r.Status, r.Reason = "merged", "Pull request merged"
 		} else if !state.Open {
 			r.Status, r.Reason = "completed", "Pull request closed"
+		} else if state.MergeRequestInactive {
+			// Resume normal eligibility checks on the next tick.
+			r.MergeRequested = false
+			r.Reason = "GitHub merge request is no longer active"
 		}
 		return finish()
 	}
@@ -1047,6 +1054,7 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 			r.Reason = "Review writeback pending: " + err.Error()
 		default:
 			outcome.PendingReviewGate = nil
+			outcome.CompletedAt = e.now()
 			if r.Workflow.Merge.Enabled && w.Merge.Enabled {
 				r.Status, r.Reason = "waiting", "Waiting for checks and merge requirements"
 			} else {

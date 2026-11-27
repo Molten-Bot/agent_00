@@ -274,18 +274,33 @@ func (g GitHub) InspectState(ctx context.Context, repo, selector string) (Item, 
 		return Item{}, fmt.Errorf("invalid repository")
 	}
 	ctx = githubutil.WithCaller(ctx, "workflow_inspect")
-	raw, err := g.command(ctx, "pr", "view", selector, "--repo", repo, "--json", "state,mergedAt")
+	owner, name, _ := strings.Cut(repo, "/")
+	const query = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){state mergedAt autoMergeRequest{enabledAt} mergeQueueEntry{id}}}}`
+	raw, err := g.command(ctx, "api", "graphql", "-f", "query="+query, "-f", "owner="+owner, "-f", "name="+name,
+		"-F", "number="+githubutil.PullRequestSelector(selector), "--jq", ".data.repository.pullRequest")
 	if err != nil {
 		return Item{}, err
 	}
 	var pr struct {
-		State    string
-		MergedAt time.Time
+		State            string
+		MergedAt         time.Time
+		AutoMergeRequest json.RawMessage
+		MergeQueueEntry  json.RawMessage
 	}
 	if err := json.Unmarshal([]byte(raw), &pr); err != nil {
 		return Item{}, fmt.Errorf("decode pull request state: %w", err)
 	}
-	return Item{Open: pr.State == "OPEN", Merged: pr.State == "MERGED", MergedAt: pr.MergedAt}, nil
+	switch pr.State {
+	case "OPEN":
+		if len(pr.AutoMergeRequest) == 0 || len(pr.MergeQueueEntry) == 0 {
+			return Item{}, fmt.Errorf("pull request state response is missing merge request fields")
+		}
+		return Item{Open: true, MergeRequestInactive: string(pr.AutoMergeRequest) == "null" && string(pr.MergeQueueEntry) == "null"}, nil
+	case "MERGED", "CLOSED":
+		return Item{Merged: pr.State == "MERGED", MergedAt: pr.MergedAt}, nil
+	default:
+		return Item{}, fmt.Errorf("unexpected pull request state %q", pr.State)
+	}
 }
 
 func (g GitHub) inspect(ctx context.Context, repo, selector string, needs ScanNeeds) (Item, error) {

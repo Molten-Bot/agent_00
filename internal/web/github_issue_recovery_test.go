@@ -2548,6 +2548,52 @@ func TestIssuePRMetadataFailureBlocksFulfillmentAndRetriesOriginalPR(t *testing.
 	}
 }
 
+func TestIssuePRMetadataFailureSettlesOperatorMerge(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	reconcileOrAdmitTestIssue(t.Context(), s)
+	record := completeRecoveryRecord(t, s, "error", 1)
+	const prURL = "https://github.com/acme/repo/pull/42"
+	const failure = "pr: workflow PR metadata update failed: GitHub did not apply assignee"
+	record.PRURL, record.RunError = prURL, failure
+	doc, err := s.Workflows.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := doc.Workflows[0]
+	const eventID = "metadata-failure-activation"
+	record.Run.Workflow = &config.WorkflowRunConfig{ID: w.ID, EventID: eventID, PolicyHash: w.ExecutionPolicyHash()}
+	s.Workflows.Now = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+	item := workflow.Item{Kind: "issue", Repository: w.Repository, Number: record.Run.GitHubIssue.Number}
+	if err := s.Workflows.PrepareIssueRecovery(w.ID, w.ExecutionPolicyHash(), eventID, "", item, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	f.pendingPR = `{"state":"MERGED","mergedAt":"2026-01-01T00:02:00Z","title":"Published PR"}`
+	for range 2 {
+		if err := s.ReconcileIssueWork(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := latestRecoveryRecord(t, s)
+	if !got.Fulfilled() || got.Outcome != "merged" || got.Error != "" || got.FailureDetail() != failure ||
+		got.UnlockPending || !got.NextAttemptAt.IsZero() || len(f.submissions) != 1 {
+		t.Fatalf("merge did not settle metadata failure: %+v, submissions=%d", got, len(f.submissions))
+	}
+	response := httptest.NewRecorder()
+	s.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/status", nil))
+	var dashboard Snapshot
+	if err := json.Unmarshal(response.Body.Bytes(), &dashboard); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusOK || dashboard.Stats.TotalSavedSeconds != 120 ||
+		len(dashboard.Tasks) != 1 || dashboard.Tasks[0].Status != "merged" {
+		t.Fatalf("dashboard missed recovered workflow time: %s", response.Body.String())
+	}
+}
+
 func TestIssuePRMetadataTaskRerunWithRoutingCorrection(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)

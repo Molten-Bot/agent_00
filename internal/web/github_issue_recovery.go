@@ -537,8 +537,20 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	if app.IsWorkflowPRMetadataFailure(record.FailureDetail()) ||
 		(record.PRVerification == "" && record.Outcome != "" && record.Outcome != "completed" && record.Outcome != workflow.OutcomeReviewPending &&
 			record.Run.Workflow != nil && record.Run.Workflow.ResumePRURL != "") {
+		failure := record.FailureDetail()
+		if record.PRURL != "" {
+			pr, err := s.findIssueRecoveryPR(ctx, issue, record.PRURL)
+			if err != nil {
+				record.RunError, record.Error, record.State = failure, failure, "blocked"
+				s.scheduleIssueRetry(&record, err)
+				return errors.Join(err, s.IssueClaims.Save(record))
+			}
+			if pr.Merged {
+				return s.recordRecoveredIssueMerge(record, pr)
+			}
+		}
 		record.State = "blocked"
-		record.Error = record.FailureDetail()
+		record.Error = failure
 		record.NextAttemptAt = time.Time{}
 		return s.IssueClaims.Save(record)
 	}

@@ -573,6 +573,8 @@ func TestImplementationMergeRequiresPersistedReceiptOnCurrentHead(t *testing.T) 
 				reply := func(raw string) (execx.Result, error) { return execx.Result{Stdout: raw}, nil }
 				args := strings.Join(cmd.Args, " ")
 				switch {
+				case strings.Contains(args, "autoMergeRequest{enabledAt} mergeQueueEntry{id}"):
+					return reply(fmt.Sprintf(`{"state":%q,"autoMergeRequest":null,"mergeQueueEntry":null}`, prState))
 				case strings.HasPrefix(args, "pr view "):
 					ci := "SUCCESS"
 					if tc.checksPending {
