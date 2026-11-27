@@ -845,6 +845,18 @@ func runServer(args []string) int {
 		}
 		workflowEngine = uiServer.Workflows
 		workflowEngine.MemoryPressure = memoryPressure
+		workflowEngine.IssueTaskStopped = func(eventID string) bool {
+			records, _ := issueClaims.List()
+			var latest localruntime.IssueClaimRecord
+			for _, record := range records {
+				if run := record.Run.Workflow; run != nil && run.EventID == eventID &&
+					(latest.ID == "" || record.Run.GitHubIssue.Claim.Attempt > latest.Run.GitHubIssue.Claim.Attempt ||
+						(record.Run.GitHubIssue.Claim.Attempt == latest.Run.GitHubIssue.Claim.Attempt && record.UpdatedAt.After(latest.UpdatedAt))) {
+					latest = record
+				}
+			}
+			return latest.Outcome == "stopped"
+		}
 		brokerStatus := workflowEngine.Status
 		workflowEngine.Status = func(requestID string) workflow.Outcome {
 			// The worker can emit a terminal task log just before saving its
