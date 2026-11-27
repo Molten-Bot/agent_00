@@ -121,7 +121,7 @@ func (s Server) syncIssuePlanning(ctx context.Context, record localruntime.Issue
 	if err != nil {
 		return err
 	}
-	if current.State != "open" && current.Status.Name != status {
+	if current.State != "open" && status != issueDone && current.Status.Name != status {
 		return nil
 	}
 	if current.Status.Name != status {

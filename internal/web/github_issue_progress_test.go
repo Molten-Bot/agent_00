@@ -19,6 +19,7 @@ import (
 func TestIssuePlanningFollowsVerifiedDelivery(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)
+	state := "open"
 	status := issueTodo
 	var updates []string
 	s.GitHubIssueRunner = githubIssueRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
@@ -29,10 +30,6 @@ func TestIssuePlanningFollowsVerifiedDelivery(t *testing.T) {
 			updates = append(updates, status)
 			fallthrough
 		case strings.HasPrefix(args, "api repos/acme/repo/issues/17 -H"):
-			state := "open"
-			if status == issueDone {
-				state = "closed"
-			}
 			return execx.Result{Stdout: fmt.Sprintf(`{"state":%q,"status":{"name":%q}}`, state, status)}, nil
 		default:
 			res, err := f.Run(ctx, cmd)
@@ -79,6 +76,7 @@ func TestIssuePlanningFollowsVerifiedDelivery(t *testing.T) {
 		t.Fatalf("reference-only PR closed issue: %s %v", status, err)
 	}
 	record.Run.GitHubIssue.LinkMode = config.GitHubIssueLinkClose
+	state = "closed"
 	if err := s.IssueClaims.Save(record); err != nil {
 		t.Fatal(err)
 	}
