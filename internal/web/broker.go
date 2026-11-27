@@ -1031,6 +1031,17 @@ func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON [
 		b.recordTaskAttemptLocked(b.taskAttemptRootLocked(requestID), requestID, "", t.Status, t.Error, t.Workflow, t.AgentHarness, t.Source, t.Repos, t.PRURL, now)
 		changed = true
 	}
+	if issueRoot != "" && identity.GitHubIssue.Claim.ID != "" {
+		// Issue history is rebuilt from the claim journal after a restart.
+		attempts := b.attempts[issueRoot]
+		for i := range attempts {
+			if attempts[i].RequestID == requestID && attempts[i].Generation != identity.GitHubIssue.Claim.ID {
+				attempts[i].Generation = identity.GitHubIssue.Claim.ID
+				changed = true
+				break
+			}
+		}
+	}
 	if t != nil && t.WorkflowTriggered != workflowTriggered {
 		t.WorkflowTriggered = workflowTriggered
 		changed = true

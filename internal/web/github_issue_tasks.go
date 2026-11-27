@@ -148,6 +148,10 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 		}
 		if !live && isCompletedTaskStatus(task.Status) {
 			task.DeleteScope = s.Broker.completedAttemptGenerations(requestID)
+			if task.DeleteScope[requestID] == "" {
+				// The claim ID is also the broker generation assigned at dispatch.
+				task.DeleteScope[requestID] = issue.Claim.ID
+			}
 		}
 
 		for i, attempt := range attempts {
