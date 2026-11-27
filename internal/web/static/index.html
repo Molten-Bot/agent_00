@@ -13013,8 +13013,10 @@
         const showIssueRetry = issueTask && !promptOnly && canRerunTask(task) && normalizedTaskStatus(task.status) !== "merged";
         const issuePrimaryAction = issueTask && !showIssueRetry &&
           (renderTaskPullRequestAction(task, "View pull request") || renderTaskIssueAction(task, "View issue"));
+        const taskStatus = normalizedTaskStatus(task.status);
         const showIssueProgress = issueTask && !collapsed && !promptOnly &&
-          task.issue_state === "running" && normalizedTaskStatus(task.status) === "running";
+          task.issue_state === "running" &&
+          (taskStatus === "running" || (taskStatus === "pending" && task.stage_status === "waiting_workspace"));
         const progress = !collapsed && !promptOnly && (!issueTask || showIssueProgress) ? renderTaskProgress(task) : null;
         const issueHistory = renderIssueTaskHistory(task, openIssueTasks.has(task.task_id), !progress, issuePrimaryAction);
         const showIssueLink = !issuePrimaryAction || Boolean(taskCardPullRequestURL(task));
