@@ -123,6 +123,7 @@ type Task struct {
 	UpdatedAt         string                 `json:"updated_at"`
 	DurationSeconds   float64                `json:"duration_seconds,omitempty"`
 	CanRerun          bool                   `json:"can_rerun,omitempty"`
+	DeleteAttemptIDs  []string               `json:"delete_attempt_ids,omitempty"`
 	Controls          TaskControls           `json:"controls,omitempty"`
 	Logs              []TaskLog              `json:"logs"`
 
@@ -623,10 +624,21 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 	})
 
 	snapshot.Tasks = make([]Task, 0, len(tasks))
+	completedAttemptsByRoot := make(map[string][]string)
 	for _, t := range tasks {
 		_, canRerun := b.runConfigs[t.RequestID]
 		status := normalizeTaskTerminalStatus(t.Status)
 		prTitle, prTitleURL := taskPRTitle(t)
+		var deleteAttemptIDs []string
+		if isCompletedTaskStatus(status) {
+			root := stringsx.FirstNonEmpty(b.attemptRoots[t.RequestID], t.RequestID)
+			var cached bool
+			deleteAttemptIDs, cached = completedAttemptsByRoot[root]
+			if !cached {
+				deleteAttemptIDs = b.completedAttemptIDsLocked(root)
+				completedAttemptsByRoot[root] = deleteAttemptIDs
+			}
+		}
 		snapshot.Tasks = append(snapshot.Tasks, Task{
 			ReviewPolicy:      t.ReviewPolicy,
 			RequestID:         t.RequestID,
@@ -671,6 +683,7 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 			UpdatedAt:         t.UpdatedAt.UTC().Format(time.RFC3339Nano),
 			DurationSeconds:   taskDuration(t.StartedAt, t.UpdatedAt, now, status).Seconds(),
 			CanRerun:          canRerun,
+			DeleteAttemptIDs:  deleteAttemptIDs,
 			Logs:              snapshotTaskLogs(t.Logs, opts.logs),
 		})
 	}
@@ -2104,6 +2117,11 @@ func (b *Broker) CloseTask(requestID string) error {
 // ForgetTask deletes a terminal task (including closed history) and its completed
 // attempt chain from dashboard metrics. Active sibling attempts are retained.
 func (b *Broker) ForgetTask(requestID string) error {
+	return b.forgetTask(requestID, nil)
+}
+
+// A non-nil attemptIDs restricts deletion to the supplied sibling attempts and requestID.
+func (b *Broker) forgetTask(requestID string, attemptIDs map[string]struct{}) error {
 	if b == nil {
 		return ErrTaskNotFound
 	}
@@ -2122,9 +2140,25 @@ func (b *Broker) ForgetTask(requestID string) error {
 	} else if _, ok := b.attemptRoots[requestID]; !ok {
 		return ErrTaskNotFound
 	}
-	b.forgetTaskAttemptsLocked(requestID)
+	b.forgetTaskAttemptsLocked(requestID, attemptIDs)
 	b.notifySubscribersLocked()
 	return nil
+}
+
+func (b *Broker) completedAttemptIDs(requestID string) []string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.completedAttemptIDsLocked(stringsx.FirstNonEmpty(b.attemptRoots[requestID], requestID))
+}
+
+func (b *Broker) completedAttemptIDsLocked(root string) []string {
+	var ids []string
+	for _, attempt := range b.attempts[root] {
+		if isCompletedTaskStatus(attempt.Status) {
+			ids = append(ids, attempt.RequestID)
+		}
+	}
+	return ids
 }
 
 func (b *Broker) closeTaskLocked(requestID string) error {
@@ -2141,12 +2175,8 @@ func (b *Broker) closeTaskLocked(requestID string) error {
 	return nil
 }
 
-// forgetTaskAttemptsLocked removes requestID's attempt chain (the original
-// run plus any reruns) so a deleted task is no longer counted in dashboard
-// metrics. A sibling attempt that is still live (queued/running/paused) is
-// kept so forgetting one attempt in a chain does not erase the bookkeeping
-// for a rerun that is still in flight.
-func (b *Broker) forgetTaskAttemptsLocked(requestID string) {
+// Keep active siblings and any siblings outside the requested deletion scope.
+func (b *Broker) forgetTaskAttemptsLocked(requestID string, attemptIDs map[string]struct{}) {
 	root := strings.TrimSpace(b.attemptRoots[requestID])
 	if root == "" {
 		root = requestID
@@ -2154,6 +2184,13 @@ func (b *Broker) forgetTaskAttemptsLocked(requestID string) {
 	attempts := b.attempts[root]
 	kept := make([]taskAttemptState, 0, len(attempts))
 	for _, attempt := range attempts {
+		if attemptIDs != nil && attempt.RequestID != requestID {
+			_, included := attemptIDs[attempt.RequestID]
+			if !included || !isCompletedTaskStatus(attempt.Status) {
+				kept = append(kept, attempt)
+				continue
+			}
+		}
 		if task, ok := b.tasks[attempt.RequestID]; ok && task != nil && isActiveTaskStatus(task.Status) {
 			kept = append(kept, attempt)
 			continue

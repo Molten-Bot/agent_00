@@ -146,6 +146,9 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 			task.Status = "error"
 			task.Error = stringsx.FirstNonEmpty(latest.Error, latest.RunError, task.Error)
 		}
+		if !live && isCompletedTaskStatus(task.Status) {
+			task.DeleteAttemptIDs = s.Broker.completedAttemptIDs(requestID)
+		}
 
 		for i, attempt := range attempts {
 			stage := attempt.Step

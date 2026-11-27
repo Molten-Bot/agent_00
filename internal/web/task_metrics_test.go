@@ -11,18 +11,31 @@ func TestTaskDeleteDismissesImmediatelyAndRetriesInBrowser(t *testing.T) {
 	requireBrowserTooling(t, "task deletion checks")
 
 	b := NewBroker()
+	b.IngestLog("task status=completed request_id=earlier")
+	b.RecordTaskRerunAttempt("earlier", "finished")
 	b.IngestLog("task status=start request_id=finished")
 	b.IngestLog("task status=completed request_id=finished")
 	b.IngestLog("task status=start request_id=other")
 	b.IngestLog("task status=completed request_id=other")
 	b.IngestLog("task status=start request_id=running")
 	srv := NewServer("", b)
-	ts := httptest.NewServer(srv.Handler())
+	mux := http.NewServeMux()
+	mux.Handle("/", srv.Handler())
+	mux.HandleFunc("POST /test/rerun", func(w http.ResponseWriter, r *http.Request) {
+		b.RecordTaskRerunAttempt("finished", "later")
+		b.IngestLog("task status=start request_id=later")
+		b.IngestLog("task status=completed request_id=later")
+		w.WriteHeader(http.StatusNoContent)
+	})
+	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
 	runBrowserSuite(t, ts.URL, time.Minute, "task deletion checks", "tests/task_delete.cjs")
-	if snap := b.Snapshot(); len(snap.Tasks) != 1 || snap.Tasks[0].RequestID != "running" || snap.Stats.TotalTasks != 1 {
-		t.Fatalf("expected only the running task after retry: %#v", snap)
+	if snap := b.Snapshot(); len(snap.Tasks) != 2 || snap.Stats.CompletedTasks != 1 || snap.Stats.ActiveTasks != 1 || snap.Stats.TotalTasks != 2 {
+		t.Fatalf("expected the newer rerun and running task after retry: %#v", snap)
+	}
+	if attempts := b.TaskAttempts("later"); len(attempts) != 1 || attempts[0].RequestID != "later" {
+		t.Fatalf("expected only the newer rerun in the attempt chain: %#v", attempts)
 	}
 }
 

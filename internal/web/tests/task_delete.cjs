@@ -84,12 +84,14 @@ test('Close survives overlapping tab retries and a deferred Removed redraw', asy
   await expect(card).toHaveCount(0);
   await expect(page.locator('#local-prompt-status')).not.toContainText('Delete failed');
 
+  assert.equal((await otherTab.request.post(`${baseURL}/test/rerun`)).status(), 204);
   allowDelete = true;
   const deleted = page.waitForResponse(response => response.url().endsWith('/api/tasks/finished/delete') && response.ok());
   await page.reload();
   assert.equal((await deleted).status(), 200);
   await expect(card).toHaveCount(0);
   await expect(page.locator(otherCardSelector)).toHaveCount(0);
+  await expect(page.locator('#task-list .task[data-request-id="later"]')).toBeVisible();
   await expect.poll(() => page.evaluate(() => localStorage.getItem('hubui.pendingTaskDeletes.finished'))).toBeNull();
 
   await otherTab.close();
@@ -101,6 +103,7 @@ test('Close survives overlapping tab retries and a deferred Removed redraw', asy
   const [otherResponse, legacyResponse] = await Promise.all([otherDeleted, legacyDeleted]);
   assert.equal(otherResponse.status(), 200);
   assert.equal(legacyResponse.status(), 404);
+  assert.deepEqual(legacyResponse.request().postDataJSON(), { attempt_ids: [] });
   await expect.poll(() => page.evaluate(() => Object.keys(localStorage).filter(key =>
     key.startsWith('hubui.pendingTaskDeletes')
   ))).toEqual([]);
