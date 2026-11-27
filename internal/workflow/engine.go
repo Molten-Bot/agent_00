@@ -200,6 +200,12 @@ func (r Run) LinkedPRURL() string {
 	return ""
 }
 
+// PRMergeConfirmed includes checkpoints written before the issue claim receipt.
+func (r Run) PRMergeConfirmed() bool {
+	return r.Status == "merged" || r.ObservedMerge != nil ||
+		(r.AppMerge != nil && !r.AppMerge.PendingVerification)
+}
+
 func (r Run) ReviewPolicy() ExecutionPolicy {
 	if r.Execution != nil {
 		return *r.Execution

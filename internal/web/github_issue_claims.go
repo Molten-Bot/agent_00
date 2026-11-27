@@ -24,10 +24,11 @@ import (
 )
 
 type issueAutomationState struct {
-	mu         sync.Mutex
-	admission  sync.Mutex
-	status     issueAutomationStatus
-	instanceID string
+	mu                sync.Mutex
+	admission         sync.Mutex
+	status            issueAutomationStatus
+	instanceID        string
+	linkedPRPollAfter map[string]time.Time
 }
 
 type issueAutomationStatus struct {

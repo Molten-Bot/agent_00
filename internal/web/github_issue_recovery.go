@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -52,6 +53,9 @@ func (s Server) WakeIssueRecovery() {
 var errIssueRecoveryDeferred = errors.New("issue recovery deferred during memory pressure")
 
 const mergedUnverifiedIssueError = "pull request merged before draft verification passed"
+
+// Retained claims share the GitHub quota with active delivery and review.
+const retainedIssuePRPollInterval = 5 * time.Minute
 
 func (s Server) runIssueRecovery(ctx context.Context) {
 	ticker := time.NewTicker(time.Minute)
@@ -249,6 +253,12 @@ func (s Server) ReconcileIssueWork(ctx context.Context) error {
 	if s.MemoryPressure != nil && s.MemoryPressure() {
 		return errIssueRecoveryDeferred
 	}
+	now := s.Broker.now()
+	s.issueAutomation.mu.Lock()
+	maps.DeleteFunc(s.issueAutomation.linkedPRPollAfter, func(_ string, next time.Time) bool {
+		return !now.Before(next)
+	})
+	s.issueAutomation.mu.Unlock()
 	ctx, cancel := context.WithTimeout(githubutil.WithCaller(ctx, "issue_recovery"), 30*time.Second)
 	defer cancel()
 	records, listErr := s.IssueClaims.List()
@@ -302,20 +312,6 @@ func (s Server) ReconcileIssueWork(ctx context.Context) error {
 }
 
 func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.IssueClaimRecord) error {
-	knownPR, err := s.resolveIssuePR(record)
-	if err != nil {
-		return err
-	}
-	if record.Incident == workflowIssueRecoveryIncident && !record.PRMerged() && knownPR == "" {
-		return nil
-	}
-	if record.Fulfilled() && !record.UnlockPending && knownPR == "" {
-		s.publishVerifiedIssuePR(record)
-		return nil
-	}
-	if record.State == "blocked" && record.Incident == localruntime.IssueIncidentBranchRecovery && !record.UnlockPending && knownPR == "" {
-		return nil
-	}
 	lock, err := s.IssueClaims.TryControlLock(localruntime.IssueExecutionKey(record.Run.GitHubIssue))
 	if err != nil {
 		return err
@@ -329,8 +325,12 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		if record.PRMerged() {
 			return s.stopMergedIssueWorker(ctx, record.RequestID)
 		}
-		if record.State != "queued" || knownPR == "" {
+		if record.State != "queued" {
 			return nil
+		}
+		knownPR, err := s.resolveIssuePR(record)
+		if err != nil || knownPR == "" {
+			return err
 		}
 		allowed, err := s.RepositoryAllowed(ctx, record.Run.GitHubIssue.Repository)
 		if err != nil || !allowed {
@@ -359,6 +359,16 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	if record.PRMerged() {
 		return s.finishMergedIssue(ctx, record)
 	}
+	workerRecorded := record.Phase == "submitted" || record.Outcome != "" || !record.StartedAt.IsZero()
+	cleanupPending := record.UnlockPending ||
+		(record.LabelAdded && workerRecorded && record.Outcome != localruntime.IssueChecksPending)
+	checkLinkedPR := true
+	if (record.Fulfilled() || record.State == "blocked") && s.issueTaskHistoryHidden(record, record.RequestID) {
+		_, checkLinkedPR = s.Broker.Task(record.RequestID)
+	}
+	if !checkLinkedPR && !cleanupPending {
+		return nil
+	}
 	allowed, err := s.RepositoryAllowed(ctx, record.Run.GitHubIssue.Repository)
 	if err != nil {
 		return err
@@ -370,53 +380,49 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	// applying recovery holds. A sibling PR on the branch cannot settle it.
 	var linkedPR issuePullRequest
 	var linkedPRErr error
-	knownPR, err = s.resolveIssuePR(record)
-	if err != nil {
-		return err
+	var knownPR string
+	linkedPRDeferred := !checkLinkedPR
+	if allowed && checkLinkedPR {
+		knownPR, linkedPRErr = s.resolveIssuePR(record)
+		if knownPR != "" {
+			linkedPRDeferred = s.linkedIssuePRDeferred(record.ID, knownPR)
+		}
 	}
-	if allowed && knownPR != "" {
+	if allowed && knownPR != "" && !linkedPRDeferred {
 		linkedPR, linkedPRErr = s.linkedIssuePR(ctx, record.Run.GitHubIssue.Repository, knownPR)
-		if linkedPRErr != nil {
-			if !record.UnlockPending {
-				if time.Now().Before(record.NextAttemptAt) {
-					return nil
-				}
-				if record.Outcome == localruntime.IssueChecksPending {
-					return s.deferIssueRecord(record, linkedPRErr)
-				}
-				return linkedPRErr
-			}
-			// Label cleanup must remain possible during a PR lookup failure.
-		} else {
+		if linkedPRErr == nil {
 			if linkedPR.Merged {
 				return s.recordMergedIssuePR(ctx, record, linkedPR)
 			}
 			if record.PRURL == "" && strings.EqualFold(linkedPR.URL, knownPR) {
 				record.PRURL = linkedPR.URL
 			}
-			blocker := ""
-			if err := linkedPR.recoveryBlocker(record.Run.GitHubIssue); err != nil {
-				blocker = err.Error()
-			}
-			if record.PRRecoveryBlocker != blocker {
-				record.PRRecoveryBlocker = blocker
-				if err := s.IssueClaims.Update(record.ID, func(current *localruntime.IssueClaimRecord) error {
-					if !current.PRMerged() {
-						current.PRRecoveryBlocker = blocker
-					}
-					return nil
-				}); err != nil {
-					return err
-				}
+			if err := s.recordIssuePRBlocker(&record, linkedPR, linkedPR.recoveryBlocker(record.Run.GitHubIssue)); err != nil {
+				return err
 			}
 		}
+		if record.Fulfilled() || record.State == "blocked" || record.PRRecoveryBlocker != "" {
+			s.deferLinkedIssuePRPoll(record.ID, knownPR)
+		}
 	}
-	if record.Fulfilled() && !record.UnlockPending {
+	if linkedPRErr != nil && !cleanupPending {
+		if knownPR != "" {
+			if time.Now().Before(record.NextAttemptAt) {
+				return nil
+			}
+			if record.Outcome == localruntime.IssueChecksPending {
+				return s.deferIssueRecord(record, linkedPRErr)
+			}
+		}
+		return linkedPRErr
+	}
+	if record.Fulfilled() && !cleanupPending {
 		s.publishVerifiedIssuePR(record)
 		return nil
 	}
-	if record.Incident == workflowIssueRecoveryIncident ||
-		(record.State == "blocked" && record.Incident == localruntime.IssueIncidentBranchRecovery && !record.UnlockPending) {
+	requiresExplicitRecovery := record.Incident == workflowIssueRecoveryIncident ||
+		(record.State == "blocked" && record.Incident == localruntime.IssueIncidentBranchRecovery)
+	if !cleanupPending && (linkedPRDeferred || requiresExplicitRecovery) {
 		return nil
 	}
 
@@ -541,10 +547,10 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 
 	cooling := now.Before(record.NextAttemptAt)
 	// Failed admission can leave a label to clean up while dispatch cools down.
-	if cooling && (record.Outcome != "" || !record.UnlockPending) {
+	if cooling && (record.Outcome != "" || !record.UnlockPending) && !(linkedPRErr != nil && cleanupPending) {
 		return nil
 	}
-	if record.Outcome == localruntime.IssueChecksPending && linkedPRErr == nil {
+	if record.Outcome == localruntime.IssueChecksPending && linkedPRErr == nil && !linkedPRDeferred {
 		if staleOwner || record.Control != "" || record.State == "blocked" || record.PRRecoveryBlocker != "" {
 			return nil
 		}
@@ -578,7 +584,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		record.Error = "remote ownership record is missing; explicit recovery required"
 		return s.IssueClaims.Save(record)
 	}
-	if record.Phase == "submitted" || record.Outcome != "" || !record.StartedAt.IsZero() {
+	if workerRecorded {
 		if record.StoppedAt.IsZero() {
 			record.StoppedAt = time.Now().UTC()
 			record.Outcome = "interrupted"
@@ -609,7 +615,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	if linkedPRErr != nil {
 		return linkedPRErr
 	}
-	if cooling || record.Fulfilled() || record.PRRecoveryBlocker != "" {
+	if linkedPRDeferred || cooling || record.Fulfilled() || record.PRRecoveryBlocker != "" || requiresExplicitRecovery {
 		return nil
 	}
 	if app.IsWorkflowPRMetadataFailure(record.FailureDetail()) ||
@@ -631,10 +637,15 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 				return s.deferIssueRecord(record, err)
 			}
 		}
-		if record.Outcome == "" {
-			if err := pr.recoveryBlocker(issue); err != nil {
+		if err := pr.recoveryBlocker(issue); err != nil {
+			if record.Outcome == "" {
 				return s.deferIssueRecord(record, err)
 			}
+			if err := s.recordIssuePRBlocker(&record, pr, err); err != nil {
+				return err
+			}
+			s.deferLinkedIssuePRPoll(record.ID, pr.URL)
+			return nil
 		}
 		if ownsBranch && pr.URL != "" && !pr.Closed && pr.BaseBranch == issue.Claim.BaseBranch && !pr.resumesVerification(record) {
 			if pr.Merged {
@@ -840,6 +851,41 @@ func (s Server) knownIssuePR(record localruntime.IssueClaimRecord) string {
 		return record.Run.Workflow.ResumePRURL
 	}
 	return ""
+}
+
+func (s Server) linkedIssuePRDeferred(claimID, prURL string) bool {
+	s.issueAutomation.mu.Lock()
+	defer s.issueAutomation.mu.Unlock()
+	return s.Broker.now().Before(s.issueAutomation.linkedPRPollAfter[claimID+" "+strings.ToLower(prURL)])
+}
+
+func (s Server) deferLinkedIssuePRPoll(claimID, prURL string) {
+	s.issueAutomation.mu.Lock()
+	defer s.issueAutomation.mu.Unlock()
+	if s.issueAutomation.linkedPRPollAfter == nil {
+		s.issueAutomation.linkedPRPollAfter = make(map[string]time.Time)
+	}
+	s.issueAutomation.linkedPRPollAfter[claimID+" "+strings.ToLower(prURL)] = s.Broker.now().Add(retainedIssuePRPollInterval)
+}
+
+func (s Server) recordIssuePRBlocker(record *localruntime.IssueClaimRecord, pr issuePullRequest, cause error) error {
+	blocker := ""
+	if cause != nil {
+		blocker = cause.Error()
+	}
+	if record.PRRecoveryBlocker == blocker {
+		return nil
+	}
+	record.PRRecoveryBlocker = blocker
+	return s.IssueClaims.Update(record.ID, func(current *localruntime.IssueClaimRecord) error {
+		if !current.PRMerged() {
+			current.PRRecoveryBlocker = blocker
+			if blocker != "" && current.PRURL == "" {
+				current.PRURL = pr.URL
+			}
+		}
+		return nil
+	})
 }
 
 // Resolve the workflow journal outside claim updates. Workflow merge callbacks

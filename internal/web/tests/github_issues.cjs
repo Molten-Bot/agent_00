@@ -41,7 +41,7 @@ let browser;
 before(async () => { browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] }); });
 after(async () => { await browser?.close(); });
 
-test('issue task history shows each verification error once', async t => {
+test('issue task history shows each verification error and retry deadline once', async t => {
   const page = await browser.newPage();
   await page.addInitScript(() => localStorage.setItem('hubui.taskStatusFilter', 'completed'));
   t.after(() => page.close());
@@ -52,6 +52,8 @@ test('issue task history shows each verification error once', async t => {
   });
   const failure = 'pull request merged before draft verification passed';
   const reviewDetail = 'Waiting for unresolved review threads';
+  const retryAt = '2026-11-27T12:00:00.123456789Z';
+  const retryDetail = 'Waiting for GitHub check verification. Retry after 2026-11-27T12:00:00Z.';
   await page.route('**/*', route => {
     const url = new URL(route.request().url());
     if (url.origin !== new URL(baseURL).origin) return route.abort();
@@ -66,6 +68,13 @@ test('issue task history shows each verification error once', async t => {
         issue_attempts: [{
           number: 1, status: 'error', stage: 'pr_verification', stages: ['pr_verification'],
           error: `pr_verification: ${failure}`, detail: failure, review_detail: reviewDetail,
+        }],
+      }, {
+        task_id: 'issue-18', request_id: 'req-18', status: 'queued', issue_state: 'checks_pending',
+        retry_at: retryAt, error: retryDetail,
+        issue_attempts: [{
+          number: 1, status: 'checks_pending', stage: 'checks_pending',
+          error: `checks_pending: ${retryDetail}`, detail: retryDetail,
         }],
       }],
       events: [], repositories: [], stats: {}, resources: {},
@@ -101,6 +110,15 @@ test('issue task history shows each verification error once', async t => {
   }, lateDetail);
   await consoleHistory.getByText(lateDetail, { exact: false }).waitFor();
   assert.notEqual(await consoleHistory.getAttribute('open'), null);
+
+  await page.evaluate(() => localStorage.setItem('hubui.taskStatusFilter', 'running'));
+  await page.reload();
+  const pending = page.locator('[data-task-id="issue-18"]:visible').first();
+  await pending.getByText('Attempt history (1)').click();
+  const pendingHistory = await pending.locator('details').innerText();
+  assert.equal(pendingHistory.split('Waiting for GitHub check verification.').length - 1, 1);
+  assert.equal(pendingHistory.split('Retry after').length - 1, 1);
+  assert.ok(pendingHistory.includes(await page.evaluate(when => new Date(when).toLocaleString(), retryAt)));
   assert.deepEqual(errors, []);
 });
 

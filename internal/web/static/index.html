@@ -12458,7 +12458,12 @@
         for (const stage of [...(attempt.stages || []), attempt.stage].filter(Boolean)) stages.add(stage);
       }
       const distinctDetails = (...values) => values.map((value) => {
-        const detail = String(value || "").trim();
+        let detail = String(value || "").trim();
+        const retrySuffix = detail.match(/([.;]) retry (?:after|at) (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)\.?$/i);
+        // Attempt messages can duplicate the structured retry deadline.
+        if (retrySuffix && Date.parse(retrySuffix[2]) === Math.floor(Date.parse(task.retry_at) / 1000) * 1000) {
+          detail = detail.slice(0, retrySuffix.index + (retrySuffix[1] === "." ? 1 : 0));
+        }
         const separator = detail.indexOf(": ");
         return separator > 0 && stages.has(detail.slice(0, separator)) ? detail.slice(separator + 2).trim() : detail;
       }).filter((detail) => {

@@ -133,9 +133,7 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 		requestID := stringsx.FirstNonEmpty(latest.RequestID, "issue-"+latest.ID)
 		task, live := byRequest[requestID]
 		task.CanRerun = task.CanRerun && isCompletedTaskStatus(task.Status)
-		if !live && (latest.Version != 2 || s.Broker.issueTaskClosed(requestID) ||
-			((latest.PRMerged() || isCompletedTaskStatus(latest.Outcome)) && latest.State != "blocked" &&
-				latest.State != "retry_wait" && time.Since(latest.UpdatedAt) >= defaultClosedTaskRetention)) {
+		if !live && s.issueTaskHistoryHidden(latest, requestID) {
 			continue
 		}
 		issue := latest.Run.GitHubIssue
@@ -169,9 +167,14 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 			task.WorkflowID, task.WorkflowName = latest.Run.Workflow.ID, latest.Run.Workflow.Name
 			task.WorkflowTriggered = true
 			if run := delivery[latest.Run.Workflow.EventID]; run.ID != "" && run.RequestID == latest.RequestID {
-				if run.Status == "merged" && run.PRURL != "" && (task.PRURL == "" || strings.EqualFold(task.PRURL, run.PRURL)) {
+				knownPR := stringsx.FirstNonEmpty(task.PRURL, latest.Run.Workflow.ResumePRURL)
+				if prURL := run.LinkedPRURL(); run.PRMergeConfirmed() && prURL != "" &&
+					(knownPR == "" || strings.EqualFold(knownPR, prURL)) {
 					merged = true
-					task.PRURL = stringsx.FirstNonEmpty(task.PRURL, run.PRURL)
+					task.PRURL = stringsx.FirstNonEmpty(task.PRURL, prURL)
+					if run.Status != "merged" {
+						latest.ReviewDetail = stringsx.FirstNonEmpty(latest.ReviewDetail, run.Reason)
+					}
 				}
 				switch run.Status {
 				case "waiting", "awaiting_review":
@@ -224,6 +227,9 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 				stage = stringsx.FirstNonEmpty(stage, task.Stage)
 				status = stringsx.FirstNonEmpty(attempt.Outcome, task.Status, status)
 			}
+			if i == len(attempts)-1 {
+				attempt.ReviewDetail = latest.ReviewDetail
+			}
 			task.IssueAttempts = append(task.IssueAttempts, issueTaskAttempt{
 				Number: attempt.Run.GitHubIssue.Claim.Attempt, RequestID: attempt.RequestID,
 				Status: status, Stage: stage, Stages: attempt.Stages, Error: attempt.FailureDetail(), Detail: attempt.Error,
@@ -253,6 +259,12 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 	})
 	snapshot.Tasks = tasks
 	return snapshot
+}
+
+func (s Server) issueTaskHistoryHidden(record localruntime.IssueClaimRecord, requestID string) bool {
+	return record.Version != 2 || s.Broker.issueTaskClosed(requestID) ||
+		((record.PRMerged() || isCompletedTaskStatus(record.Outcome)) && record.State != "blocked" &&
+			record.State != "retry_wait" && s.Broker.now().Sub(record.UpdatedAt) >= defaultClosedTaskRetention)
 }
 
 func (b *Broker) issueTaskClosed(requestID string) bool {

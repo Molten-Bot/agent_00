@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -339,6 +340,54 @@ func testWorkflowMergeSurvivesRestartWithoutPRLookup(t *testing.T, mergedByApp b
 	}
 	engine.Fetch = func(context.Context, string, workflow.ScanNeeds) ([]workflow.Item, error) {
 		return nil, nil
+	}
+	claimWriteErr := errors.New("claim receipt write failed")
+	engine.RecordIssueMerge = func(workflow.Run, workflow.Item, bool) error {
+		return claimWriteErr
+	}
+	if err := engine.Tick(t.Context()); !errors.Is(err, claimWriteErr) {
+		t.Fatalf("merge checkpoint did not survive failed claim write: %v", err)
+	}
+	restarted := s
+	restarted.Broker = NewBroker()
+	restarted.Workflows = &workflow.Engine{StatePath: engine.StatePath}
+	checkpoint := restarted.snapshot().Tasks
+	if len(checkpoint) != 1 || checkpoint[0].Status != "merged" || checkpoint[0].CanRerun ||
+		checkpoint[0].PRURL != record.PRURL || checkpoint[0].RetryAt != "" || checkpoint[0].ReviewGate != "" ||
+		checkpoint[0].IssueAttempts[0].ReviewDetail != run.Reason {
+		t.Fatalf("task did not honor the confirmed merge checkpoint: %+v", checkpoint)
+	}
+	if mergedByApp {
+		pendingRun := run
+		if err := json.Unmarshal([]byte(`{"appMerge":{"pendingVerification":true}}`), &pendingRun); err != nil {
+			t.Fatal(err)
+		}
+		pendingJournal, err := json.Marshal(map[string]any{"version": 2, "runs": []workflow.Run{pendingRun}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		pending := restarted
+		pending.Workflows = &workflow.Engine{StatePath: filepath.Join(t.TempDir(), "state.json")}
+		if err := os.WriteFile(pending.Workflows.StatePath, pendingJournal, 0600); err != nil {
+			t.Fatal(err)
+		}
+		tasks := pending.snapshot().Tasks
+		if len(tasks) != 1 || tasks[0].Status != "queued" || tasks[0].IssueState != "waiting" {
+			t.Fatalf("unconfirmed app merge settled the task: %+v", tasks)
+		}
+	}
+	// A checkpoint about another PR must not override the claim's linked PR.
+	if err := s.IssueClaims.Update(record.ID, func(r *localruntime.IssueClaimRecord) error {
+		r.PRURL = "https://github.com/acme/repo/pull/43"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if task := restarted.snapshot().Tasks[0]; task.Status == "merged" || !strings.HasSuffix(task.PRURL, "/43") {
+		t.Fatalf("unrelated merge checkpoint settled the task: %+v", task)
+	}
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
 	}
 	engine.RecordIssueMerge = s.RecordIssueMerge
 	// List must still return the readable claim when a neighboring receipt
