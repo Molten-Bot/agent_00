@@ -155,6 +155,49 @@ type diskSample struct {
 type diskReservation struct {
 	total             big.Int
 	cleanupWorkspaces int
+	holders           map[*taskWaiter]struct{}
+}
+
+type diskReclaim struct {
+	path, device string
+	targetFree   uint64
+}
+
+func (c *AdaptiveScheduler) reclaimDiskLocked(request diskReclaim) {
+	// Zero progress (including a cleanup error) should not rescan the journal
+	// on every scheduler tick. The zero deadline marks an in-flight cleanup.
+	if deadline, ok := c.reclaims[request.device]; ok && (deadline.IsZero() || time.Now().Before(deadline)) {
+		return
+	}
+	c.reclaims[request.device] = time.Time{}
+	go func() {
+		c.reclaimDisk(request.path, request.device, request.targetFree)
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.reclaims[request.device] = time.Now().Add(30 * time.Second)
+		c.tryGrantLocked(0)
+	}()
+}
+
+func (w *taskWaiter) explainDiskBlock(path string, sample diskSample, minimum uint64, reservation *diskReservation) {
+	if w.diskBlock != "" {
+		return
+	}
+	var reserved string
+	var holders []string
+	if reservation != nil {
+		reserved = reservation.total.String()
+		for holder := range reservation.holders {
+			if holder.diskBytes > 0 && holder.requestID != "" {
+				holders = append(holders, holder.requestID)
+			}
+		}
+		sort.Strings(holders)
+	} else {
+		reserved = "0"
+	}
+	w.diskBlock = fmt.Sprintf("path=%q device=%q free_bytes=%d required_bytes=%d reserved_bytes=%s blocking_request_ids=%q",
+		path, sample.device, sample.free, minimum, reserved, strings.Join(holders, ","))
 }
 
 // IsWorkspaceDiskFull reports whether workspace allocation ran out of space.
@@ -167,7 +210,9 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 		return true, nil
 	}
 	waiter.drainDevices = waiter.drainDevices[:0]
+	waiter.diskBlock = ""
 	if !force && time.Now().Before(waiter.disk.RetryAfter) {
+		waiter.diskBlock = fmt.Sprintf("retry_at=%s", waiter.disk.RetryAfter.UTC().Format(time.RFC3339Nano))
 		return false, nil
 	}
 	required := uint64(workspace.MinimumFreeBytes)
@@ -178,6 +223,7 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 	var fallbackRoot, fallbackDevice string
 	var setupErr error
 	var blocked, tooSmall bool
+	var reclaims []diskReclaim
 	manager := waiter.disk.Workspace
 	checkPersistent := waiter.disk.CheckPersistentStorage
 	if !force || checkPersistent != nil {
@@ -209,6 +255,9 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 		if err != nil {
 			if !force && IsWorkspaceDiskFull(err) {
 				blocked = true
+				if waiter.diskBlock == "" {
+					waiter.diskBlock = fmt.Sprintf("path=%q err=%q", root, err)
+				}
 			} else {
 				setupErr = err
 			}
@@ -257,27 +306,38 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 				tooSmall = true
 			} else {
 				blocked = true
+				waiter.explainDiskBlock(path, sample, minimum, c.reserved[sample.device])
 			}
 			continue
 		}
 		// Reserve each running task's full allowance. Free space may already
 		// reflect some of its writes, so this is deliberately conservative.
 		device, available := sample.device, sample.free
-		if !force && c.draining[device] != nil {
+		reservation := c.reserved[device]
+		if draining := c.draining[device]; !force && draining != nil {
 			blocked = true
+			if waiter.diskBlock == "" {
+				waiter.explainDiskBlock(path, sample, minimum, reservation)
+				waiter.diskBlock += fmt.Sprintf(" draining_for=%q", draining.requestID)
+			}
 			continue
 		}
-		reservation := c.reserved[device]
+		var reserved uint64
 		if reservation != nil {
 			if reservation.total.IsUint64() {
-				available -= min(available, reservation.total.Uint64())
+				reserved = reservation.total.Uint64()
 			} else {
-				available = 0
+				reserved = ^uint64(0)
 			}
+			available -= min(available, reserved)
 		}
 		fits := available >= minimum
 		if !fits && !force {
 			blocked = true
+			waiter.explainDiskBlock(path, sample, minimum, reservation)
+			if c.reclaimDisk != nil && reserved <= sample.total-minimum {
+				reclaims = append(reclaims, diskReclaim{path, device, minimum + reserved})
+			}
 			// Active workspaces may have written past their reservations.
 			// Drain until cleanup reveals how much space the pool can recover.
 			if sample.free >= minimum || (reservation != nil && reservation.cleanupWorkspaces > 0) {
@@ -298,6 +358,9 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 		return true, nil
 	}
 	if blocked {
+		for _, request := range reclaims {
+			c.reclaimDiskLocked(request)
+		}
 		return false, nil
 	}
 	if setupErr == nil && tooSmall {
@@ -311,11 +374,12 @@ func (c *AdaptiveScheduler) setDiskReservation(waiter *taskWaiter, root, device 
 	if size > 0 || waiter.disk.CleanupOnCompletion {
 		reservation := c.reserved[device]
 		if reservation == nil {
-			reservation = &diskReservation{}
+			reservation = &diskReservation{holders: make(map[*taskWaiter]struct{})}
 			c.reserved[device] = reservation
 		}
 		bytes := new(big.Int).SetUint64(size)
 		reservation.total.Add(&reservation.total, bytes)
+		reservation.holders[waiter] = struct{}{}
 		if waiter.disk.CleanupOnCompletion {
 			reservation.cleanupWorkspaces++
 		}

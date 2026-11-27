@@ -473,12 +473,15 @@ func TestAdaptiveSchedulerDrainsReservationsForOlderDiskWaiter(t *testing.T) {
 	large.Workspace.Root = t.TempDir()
 	large.RequiredBytes = func() uint64 { return 3 * unit }
 	unrelated := TaskDiskRequest{Workspace: workspace.Manager{Root: otherDevice}}
-	running := &taskWaiter{disk: &small}
+	running := &taskWaiter{disk: &small, requestID: "active-task"}
 	older := &taskWaiter{disk: &large}
 	controller.waiters = []*taskWaiter{running, older}
 	controller.tryGrantLocked(0)
-	if !running.granted || !older.diskBlocked {
-		t.Fatalf("running admitted = %v, older disk blocked = %v", running.granted, older.diskBlocked)
+	if !running.granted || older.diskBlock == "" {
+		t.Fatalf("running admitted = %v, older disk blocked = %v", running.granted, older.diskBlock != "")
+	}
+	if !strings.Contains(older.diskBlock, `reserved_bytes=536870912 blocking_request_ids="active-task"`) {
+		t.Fatalf("queue reason does not identify the active reservation: %s", older.diskBlock)
 	}
 
 	var younger []*taskWaiter
@@ -487,7 +490,7 @@ func TestAdaptiveSchedulerDrainsReservationsForOlderDiskWaiter(t *testing.T) {
 		younger = append(younger, waiter)
 		controller.waiters = append(controller.waiters, waiter)
 		controller.tryGrantLocked(len(controller.waiters) - 1)
-		if waiter.granted || !waiter.diskBlocked {
+		if waiter.granted || waiter.diskBlock == "" {
 			t.Fatal("younger job was not queued behind the older job on shared storage")
 		}
 	}
@@ -646,8 +649,8 @@ func TestAdaptiveSchedulerAdmitsSmallerTaskBehindOversizedWaiter(t *testing.T) {
 	older := &taskWaiter{disk: &large}
 	controller.waiters = []*taskWaiter{running, older}
 	controller.tryGrantLocked(0)
-	if !running.granted || !older.diskBlocked {
-		t.Fatalf("running admitted = %v, oversized task disk blocked = %v", running.granted, older.diskBlocked)
+	if !running.granted || older.diskBlock == "" {
+		t.Fatalf("running admitted = %v, oversized task disk blocked = %v", running.granted, older.diskBlock != "")
 	}
 	younger := &taskWaiter{disk: &small}
 	controller.waiters = append(controller.waiters, younger)
@@ -674,7 +677,7 @@ func TestAdaptiveSchedulerWaitsBeforeReadmittingFailedAllocation(t *testing.T) {
 	waiter := &taskWaiter{disk: &request}
 	controller.waiters = []*taskWaiter{waiter}
 	controller.tryGrantLocked(0)
-	if waiter.granted || !waiter.diskBlocked {
+	if waiter.granted || waiter.diskBlock == "" {
 		t.Fatal("disk-full retry was not queued while waiting to retry")
 	}
 	request.RetryAfter = time.Now().Add(-time.Second)
@@ -745,8 +748,8 @@ func TestAdaptiveSchedulerKeepsOversizedPreferredRootForceStartable(t *testing.T
 		waiter := &taskWaiter{disk: &request}
 		controller.waiters = []*taskWaiter{waiter}
 		controller.tryGrantLocked(0)
-		if waiter.err != nil || !waiter.diskBlocked || waiter.granted {
-			t.Fatalf("capacity %d: error = %v, blocked = %v, granted = %v", total, waiter.err, waiter.diskBlocked, waiter.granted)
+		if waiter.err != nil || waiter.diskBlock == "" || waiter.granted {
+			t.Fatalf("capacity %d: error = %v, blocked = %v, granted = %v", total, waiter.err, waiter.diskBlock != "", waiter.granted)
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -874,9 +877,9 @@ func TestAdaptiveSchedulerSharesDiskSamplesWithinAdmissionPass(t *testing.T) {
 	if preparations != 1 {
 		t.Fatalf("first pass: root preparations = %d, want 1", preparations)
 	}
-	if probes != 1 || !first.granted || !second.granted || !third.diskBlocked || third.granted {
+	if probes != 1 || !first.granted || !second.granted || third.diskBlock == "" || third.granted {
 		t.Fatalf("first pass: probes = %d, admitted = %v/%v/%v, third disk blocked = %v",
-			probes, first.granted, second.granted, third.granted, third.diskBlocked)
+			probes, first.granted, second.granted, third.granted, third.diskBlock != "")
 	}
 
 	free = 3 * unit

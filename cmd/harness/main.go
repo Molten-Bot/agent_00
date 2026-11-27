@@ -327,7 +327,15 @@ func runServer(args []string) int {
 	}
 
 	memoryPressure := localruntime.NewMemoryPressureCheck(daemonLogger)
-	scheduler := localruntime.NewAdaptiveScheduler(cfg.Scheduler, daemonLogger, localruntime.WithSchedulerMemoryPressure(memoryPressure))
+	cacheReclaimer := issueCacheReclaimer{
+		claims: issueClaims, diskSpace: workspace.DiskSpace, remove: (*os.Root).RemoveAll, logf: daemonLogger,
+	}
+	scheduler := localruntime.NewAdaptiveScheduler(cfg.Scheduler, daemonLogger,
+		localruntime.WithSchedulerMemoryPressure(memoryPressure),
+		localruntime.WithSchedulerDiskReclaim(func(path, device string, targetFree uint64) {
+			cacheReclaimer.reclaim(ctx, path, device, targetFree)
+		}),
+	)
 	diskHistory, err := openLocalTaskDiskHistory(cfg.RuntimeConfigPath)
 	if err != nil {
 		daemonLogger("scheduler status=warn action=load_task_disk_history err=%q", err)
