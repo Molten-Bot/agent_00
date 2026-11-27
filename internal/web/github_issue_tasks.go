@@ -79,7 +79,7 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 		latest := attempts[len(attempts)-1]
 		requestID := stringsx.FirstNonEmpty(latest.RequestID, "issue-"+latest.ID)
 		task, live := byRequest[requestID]
-		if !live && (latest.Version != 2 || s.Broker.issueTaskClosed(requestID) ||
+		if !live && (latest.Version != 2 || s.Broker.issueTaskClosed(requestID, latest.ID) ||
 			(isCompletedTaskStatus(latest.Outcome) && latest.State != "blocked" &&
 				latest.State != "retry_wait" && time.Since(latest.UpdatedAt) >= defaultClosedTaskRetention)) {
 			continue
@@ -146,6 +146,13 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 			task.Status = "error"
 			task.Error = stringsx.FirstNonEmpty(latest.Error, latest.RunError, task.Error)
 		}
+		if !live && isCompletedTaskStatus(task.Status) {
+			task.DeleteScope = s.Broker.completedAttemptGenerations(requestID)
+			if task.DeleteScope[requestID] == "" {
+				// The claim ID is also the broker generation assigned at dispatch.
+				task.DeleteScope[requestID] = issue.Claim.ID
+			}
+		}
 
 		for i, attempt := range attempts {
 			stage := attempt.Step
@@ -174,10 +181,47 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 	return snapshot
 }
 
-func (b *Broker) issueTaskClosed(requestID string) bool {
+func (s Server) forgetRestoredIssueTask(requestID string, generations map[string]string) (bool, error) {
+	generation := generations[requestID]
+	if generation == "" || s.IssueClaims == nil {
+		return false, ErrTaskNotFound
+	}
+	// Use the same projection as status, including its workflow and retry state.
+	snapshot := s.withIssueTasks(Snapshot{Tasks: s.Broker.TaskList()})
+	for _, task := range snapshot.Tasks {
+		if task.RequestID == requestID && task.HistoryOnly && task.DeleteScope[requestID] == generation {
+			return s.Broker.forgetRestoredIssueTask(task, generations)
+		}
+	}
+	return false, ErrTaskNotFound
+}
+
+func (b *Broker) forgetRestoredIssueTask(task Task, generations map[string]string) (bool, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.isClosedTaskLocked(requestID, b.now())
+	result := taskResult{task.RequestID, generations[task.RequestID]}
+	// A worker may have registered this request since status was projected.
+	if b.tasks[task.RequestID] != nil || b.attemptRoots[task.RequestID] != "" ||
+		!b.closedIssueTasks[result].IsZero() {
+		return false, ErrTaskNotFound
+	}
+	b.forgetTaskAttemptsLocked(task.TaskID, generations)
+	b.closedIssueTasks[result] = b.now().UTC()
+	// A wider overlapping retry can still remove matching siblings.
+	if len(b.attempts[task.TaskID]) > 0 {
+		b.forgottenAttempts[result] = task.TaskID
+	}
+	b.notifySubscribersLocked()
+	return true, nil
+}
+
+func (b *Broker) issueTaskClosed(requestID, generation string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	now := b.now()
+	closedAt := b.closedIssueTasks[taskResult{requestID, generation}]
+	return (!closedAt.IsZero() && now.Sub(closedAt) < defaultClosedTaskRetention) ||
+		b.isClosedTaskLocked(requestID, now)
 }
 
 func (b *Broker) notifyIssueTaskUpdate() {
