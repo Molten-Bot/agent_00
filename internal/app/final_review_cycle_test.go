@@ -495,7 +495,7 @@ func (r *finalFindingReviewCycleRunner) Run(_ context.Context, cmd execx.Command
 			if slices.Contains(cmd.Args, "state,headRefOid,statusCheckRollup") {
 				return execx.Result{Stdout: fmt.Sprintf(`{"state":"OPEN","headRefOid":%q,"statusCheckRollup":[{"name":"CI","conclusion":"SUCCESS"}]}`, head)}, nil
 			}
-			return execx.Result{Stdout: fmt.Sprintf(`{"number":7,"title":"Change","url":"https://github.com/acme/repo/pull/7","state":"OPEN","mergeable":"MERGEABLE","baseRefName":"main","headRefName":"feature","headRefOid":%q,"author":{"login":"dev"}}`, head)}, nil
+			return execx.Result{Stdout: fmt.Sprintf(`{"id":"PR_id","number":7,"title":"Change","url":"https://github.com/acme/repo/pull/7","state":"OPEN","mergeable":"MERGEABLE","baseRefName":"main","headRefName":"feature","headRefOid":%q,"author":{"login":"dev"}}`, head)}, nil
 		}
 		if len(cmd.Args) >= 2 && cmd.Args[0] == "pr" && cmd.Args[1] == "list" {
 			return execx.Result{Stdout: `[{"url":"https://github.com/acme/repo/pull/7"}]`}, nil
@@ -513,6 +513,14 @@ func (r *finalFindingReviewCycleRunner) Run(_ context.Context, cmd execx.Command
 			return execx.Result{}, nil
 		}
 		if len(cmd.Args) >= 1 && cmd.Args[0] == "api" {
+			args := strings.Join(cmd.Args, " ")
+			switch {
+			case strings.Contains(args, "/protection/required_status_checks"):
+				return execx.Result{Stdout: `{"contexts":["CI"]}`}, nil
+			case strings.Contains(args, "isRequired(pullRequestId: $id)"):
+				return execx.Result{Stdout: checkRollupPageJSON("feature", r.api.head, r.api.head,
+					`[{"name":"CI","conclusion":"SUCCESS","isRequired":true}]`, false, "")}, nil
+			}
 			return execx.Result{Stdout: "[]"}, nil
 		}
 	}
@@ -689,6 +697,27 @@ func TestRunFinalReviewCycleReportsRemainingFindingsAfterFinalConfirmation(t *te
 	}
 	if runner.reviews != 2 || runner.fixes != 1 {
 		t.Fatalf("review/fix calls = %d/%d, want 2/1", runner.reviews, runner.fixes)
+	}
+}
+
+func TestManagedFinalReviewKeepsExhaustedDraftPending(t *testing.T) {
+	runner := &finalFindingReviewCycleRunner{t: t, neverClean: true}
+	h := New(runner)
+	h.FinalReviewPasses = 1
+	h.PRChecksWatchTimeout = -1
+	dir := t.TempDir()
+	repo := &repoWorkspace{
+		URL: "https://github.com/acme/repo", Dir: dir, RelDir: "repo",
+		Branch: "feature", BaseBranch: "main", PRURL: "https://github.com/acme/repo/pull/7",
+		Changed: true, ResumeWorkflowPR: true, WriteAccessChecked: true, WriteAccessAllowed: true,
+	}
+	cfg := config.Config{Prompt: "Implement the requested behavior.", CommitMessage: "fix review",
+		Workflow: &config.WorkflowRunConfig{DefaultApplied: true, ReviewCycles: 1}}
+	code, stage, err := h.finalizePullRequestReview(t.Context(), cfg, repo, agentruntime.Default(), dir,
+		codexRunOptions{}, "", "", "repo", "codex", false)
+	if code != ExitPR || stage != "review" || !errors.Is(err, ErrReviewPending) ||
+		!errors.Is(err, errFinalReviewFindingsRemain) || runner.drafted != 1 || runner.released != 0 {
+		t.Fatalf("review = (%d, %q, %v), draft/ready = %d/%d", code, stage, err, runner.drafted, runner.released)
 	}
 }
 
@@ -1085,6 +1114,42 @@ func TestProcessChangedRepoRejectsEmptyNetDiffWhenFinalReviewFindingsRemain(t *t
 	}
 	if runner.drafted != 1 {
 		t.Fatalf("drafted count = %d, want 1 before rejecting empty net diff", runner.drafted)
+	}
+}
+
+func TestCheckoutPublishedPRsKeepsEachOriginalBranch(t *testing.T) {
+	t.Parallel()
+	a := "https://github.com/acme/repo-a"
+	b := "https://github.com/acme/repo-b"
+	c := "https://github.com/acme/unchanged"
+	prA, prB := a+"/pull/10", b+"/pull/20"
+	dir := t.TempDir()
+	repos := []repoWorkspace{
+		{URL: a, Dir: filepath.Join(dir, "repo-a")},
+		{URL: b, Dir: filepath.Join(dir, "repo-b")},
+		{URL: c, Dir: filepath.Join(dir, "unchanged")},
+	}
+	runner := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: prStateViewCommand("", prA), res: execx.Result{Stdout: fmt.Sprintf(
+			`{"url":%q,"state":"OPEN","baseRefName":"main","headRefName":"branch-a","headRefOid":"head-a"}`, prA)}},
+		{cmd: cloneRepoCommand(a, "branch-a", repos[0].Dir)},
+		{cmd: fetchBaseBranchCommand(repos[0].Dir, "branch-a")},
+		{cmd: prStateViewCommand("", prB), res: execx.Result{Stdout: fmt.Sprintf(
+			`{"url":%q,"state":"OPEN","baseRefName":"release","headRefName":"branch-b","headRefOid":"head-b"}`, prB)}},
+		{cmd: cloneRepoCommand(b, "branch-b", repos[1].Dir)},
+		{cmd: fetchBaseBranchCommand(repos[1].Dir, "branch-b")},
+	}}
+	h := New(runner)
+	got, code, stage, err := h.checkoutPublishedPRs(t.Context(), config.Config{}, repos, []string{prA, prB})
+	if err != nil || len(runner.exps) != 0 || len(got) != 2 {
+		t.Fatalf("checkout = (%+v, %d, %q, %v), commands left = %d", got, code, stage, err, len(runner.exps))
+	}
+	for i, repo := range got {
+		if !repo.RequireExistingPR || !repo.ResumeWorkflowPR || repo.CreateWorkBranch ||
+			repo.PRURL != []string{prA, prB}[i] || repo.Branch != []string{"branch-a", "branch-b"}[i] ||
+			repo.BaseBranch != []string{"main", "release"}[i] || repo.Dir != repos[i].Dir {
+			t.Fatalf("checkout changed target %d: %+v", i, repo)
+		}
 	}
 }
 

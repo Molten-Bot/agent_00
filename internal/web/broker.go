@@ -30,6 +30,7 @@ const (
 	defaultClosedTaskRetention = 24 * time.Hour
 	verifiedTaskPRRetention    = time.Hour
 	defaultMaxReleases         = 100
+	reviewFindingsWarning      = "Post-task review findings remain. Pull request left in draft for human review."
 )
 
 var (
@@ -115,6 +116,10 @@ type Task struct {
 	CanRerun          bool                   `json:"can_rerun,omitempty"`
 	Controls          TaskControls           `json:"controls,omitempty"`
 	Logs              []TaskLog              `json:"logs"`
+
+	PublishedPRURLs      []string `json:"-"`
+	ReviewFindingsRemain bool     `json:"-"`
+	ReviewStarted        bool     `json:"-"`
 }
 
 type TaskReviewPolicy struct {
@@ -356,6 +361,8 @@ type taskState struct {
 	Branch            string
 	GitHubIssueURL    string
 	PRURL             string
+	PublishedPRs      map[string]string
+	ReviewStarted     bool
 	PRTitles          map[string]taskPRTitleMetadata
 	CreatedPRURLs     map[string]bool
 	TitledPRURLs      []string
@@ -768,6 +775,10 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 		DurationSeconds:   taskDuration(t.StartedAt, t.UpdatedAt, now, status).Seconds(),
 		CanRerun:          canRerun,
 		Logs:              append([]TaskLog(nil), t.Logs...),
+
+		PublishedPRURLs:      slices.Sorted(maps.Values(t.PublishedPRs)),
+		ReviewFindingsRemain: t.Warning == reviewFindingsWarning,
+		ReviewStarted:        t.ReviewStarted,
 	}, true
 }
 
@@ -2269,6 +2280,11 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 
 	t.UpdatedAt = now
 	t.LiveAppURL = stringsx.FirstNonEmpty(taskLiveAppURLFromFields(fields), t.LiveAppURL)
+	if isFinalTaskLifecycleLine(fields) {
+		for _, target := range splitCommaSeparatedNonEmpty(fields["pr_urls"]) {
+			t.recordPublishedPR(target)
+		}
+	}
 
 	// Recovery reuses the task ID. Clear the previous terminal state before
 	// the new workflow activation starts polling the queued task.
@@ -2289,6 +2305,7 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 
 	if strings.HasPrefix(line, "task status=start") {
 		t.Status = "running"
+		t.ReviewStarted = false
 		t.explicitTerminal = fields["explicit_terminal"] == "true"
 		t.Warning = ""
 		t.ReviewURL = ""
@@ -2424,6 +2441,13 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 		}
 		t.Branch = stringsx.FirstNonEmpty(fields["branch"], t.Branch)
 		t.PRURL = stringsx.FirstNonEmpty(taskPRURLFromFields(fields), t.PRURL)
+		reviewPass := fields["stage"] == "review" && fields["action"] == "pass"
+		if reviewPass || (fields["stage"] == "review" && fields["action"] == "review_published") {
+			t.ReviewStarted = true
+		}
+		if (fields["stage"] == "pr" && fields["status"] == "ok") || reviewPass {
+			t.recordPublishedPR(fields["pr_url"])
+		}
 		if fields["stage"] == "pr" && fields["status"] == "ok" && fields["action"] == "recreate_closed_pr" {
 			oldPRURL := fields["old_pr_url"]
 			delete(t.PRTitles, oldPRURL)
@@ -2446,7 +2470,7 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 			t.ReviewGate = "Waiting for a submitted clean review on the current pull request head."
 		}
 		if fields["stage"] == "review" && fields["status"] == "warn" && fields["action"] == "leave_draft" && fields["reason"] == "fix_passes_exhausted" {
-			t.Warning = "Post-task review findings remain. Pull request left in draft for human review."
+			t.Warning = reviewFindingsWarning
 		}
 		if fields["stage"] == "review" && fields["status"] == "warn" && fields["action"] == "stop" && fields["reason"] == "pr_merged" {
 			t.Warning = "Pull request merged externally during review. Review interrupted."
@@ -2483,6 +2507,15 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 			Stream: "meta",
 			Text:   line,
 		})
+	}
+}
+
+func (t *taskState) recordPublishedPR(target string) {
+	if repo := strings.ToLower(githubutil.PullRequestRepository(target)); repo != "" {
+		if t.PublishedPRs == nil {
+			t.PublishedPRs = make(map[string]string)
+		}
+		t.PublishedPRs[repo] = target
 	}
 }
 

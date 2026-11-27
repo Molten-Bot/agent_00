@@ -19,7 +19,7 @@ func testReviewReceipt() ReviewReceipt {
 	}
 }
 
-func TestVerifyReadyHeadCIBindsChecksToReviewedHead(t *testing.T) {
+func TestVerifyReviewedHeadCIBindsChecksToReviewedHead(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name, head, checks string
@@ -29,10 +29,10 @@ func TestVerifyReadyHeadCIBindsChecksToReviewedHead(t *testing.T) {
 		{"stale head", "bbb", `[{"name":"CI","conclusion":"SUCCESS"}]`, "head changed"},
 		{"queued", "aaa", `[{"name":"CI","state":"QUEUED"}]`, "waiting for successful checks"},
 		{"missing rollup", "aaa", "null", "waiting for successful checks"},
-		{"no configured checks", "aaa", "[]", ""},
+		{"empty rollup", "aaa", "[]", "waiting for successful checks"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := VerifyReadyHeadCI(t.Context(), func(context.Context, ...string) (string, error) {
+			err := VerifyReviewedHeadCI(t.Context(), func(context.Context, ...string) (string, error) {
 				return fmt.Sprintf(`{"state":"OPEN","headRefOid":%q,"statusCheckRollup":%s}`, tc.head, tc.checks), nil
 			}, testReviewReceipt())
 			if (tc.want == "" && err != nil) || (tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want))) {

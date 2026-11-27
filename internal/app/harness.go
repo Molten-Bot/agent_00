@@ -184,6 +184,7 @@ type repoWorkspace struct {
 	BaselineHead                string
 	CreateWorkBranch            bool
 	ResumeWorkflowPR            bool
+	ResumeHead                  string
 	IssueClaimBranch            bool
 	Changed                     bool
 	BranchCollisionSuffix       string
@@ -425,32 +426,16 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	if resumeURL == "" && runCfg.Workflow != nil {
 		resumeURL = runCfg.Workflow.ResumePRURL
 	}
-	resumePR := resumeURL != ""
-	var resumeState prStateView
-	var resumeFork string
+	resumeTargets := []string(nil)
+	if resumeURL != "" {
+		resumeTargets = []string{resumeURL}
+	} else if runCfg.Workflow != nil {
+		resumeTargets = runCfg.Workflow.ResumePRURLs
+	}
+	resumePR := len(resumeTargets) > 0
 	if resumePR {
-		var err error
-		resumeState, err = h.loadWorkflowPRToResume(ctx, runCfg, resumeURL)
-		if err != nil {
-			return h.failWithRepos(ExitPR, "pr", err, runDir, []repoWorkspace{{PRURL: resumeURL}})
-		}
-		feedbackPRURL = resumeState.URL
-		// The exact PR head now pins publication. Fork retries first clone the
-		// upstream base, which is allowed to be the default branch.
+		// The existing PR pins publication, including when its head is a fork.
 		runCfg.RequiresNonDefaultBranch = false
-		resumeFork = workflowPRFork(resumeState)
-		runCfg.BaseBranch = resumeState.HeadRefName
-		if resumeFork != "" {
-			runCfg.BaseBranch = resumeState.BaseRefName
-		}
-		if h.OnPRTitle != nil {
-			h.OnPRTitle(resumeState.URL, resumeState.Title)
-		}
-		if h.IssueChecksPRURL == "" {
-			if err := h.applyWorkflowPRMetadata(ctx, repoWorkspace{PRURL: feedbackPRURL}, runCfg.Workflow); err != nil {
-				return h.failWithRepos(ExitPR, "pr", err, runDir, []repoWorkspace{{PRURL: feedbackPRURL}})
-			}
-		}
 	} else if workflowRepair || isFreeTextPRFeedbackRun(runCfg) {
 		var err error
 		feedbackPRURL, err = h.preparePRFeedbackTarget(ctx, &runCfg)
@@ -494,7 +479,13 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		})
 	}
 	h.step("clone")
-	if err := h.cloneRepositories(ctx, repos, cloneBaseBranch); err != nil {
+	if resumePR {
+		published, code, stage, err := h.checkoutPublishedPRs(ctx, runCfg, repos, resumeTargets)
+		if err != nil {
+			return h.failWithRepos(code, stage, err, runDir, published)
+		}
+		repos = published
+	} else if err := h.cloneRepositories(ctx, repos, cloneBaseBranch); err != nil {
 		if feedbackPRURL != "" {
 			err = errors.Join(ErrPRFeedbackTarget, err)
 		}
@@ -521,31 +512,17 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 			}
 			return h.fail(ExitGit, "git", err, runDir)
 		}
+		if resumePR {
+			repos[0].CreateWorkBranch = false
+		}
+	}
+	if h.IssueChecksPRURL != "" {
+		if err := h.syncChecksResumeHead(ctx, repos[0], repos[0].ResumeHead); err != nil {
+			return h.failWithRepos(ExitPR, "checks", err, runDir, repos)
+		}
 	}
 	if len(repos) > 0 {
 		runCfg.BaseBranch = repos[0].BaseBranch
-	}
-
-	if resumePR {
-		repo := &repos[0]
-		repo.Branch = resumeState.HeadRefName
-		repo.RequiredBranch = normalizeBranchRef(resumeState.HeadRefName)
-		repo.BaseBranch = resumeState.BaseRefName
-		runCfg.BaseBranch = repo.BaseBranch
-		repo.CreateWorkBranch = false
-		repo.ResumeWorkflowPR = true
-		repo.PRVerification = h.IssuePRVerification
-		repo.ReviewRequired = repo.PRVerification != ""
-		if resumeFork != "" {
-			if err := h.checkoutWorkflowPRFork(ctx, repo, resumeState, resumeFork); err != nil {
-				return h.failWithRepos(ExitGit, "git", err, runDir, repos)
-			}
-		}
-		if h.IssueChecksPRURL != "" {
-			if err := h.syncChecksResumeHead(ctx, *repo, resumeState.HeadRefOID); err != nil {
-				return h.failWithRepos(ExitPR, "checks", err, runDir, repos)
-			}
-		}
 	}
 
 	targetDir, err := resolveTargetDir(repos[0].Dir, cfg.TargetSubdir)
@@ -599,7 +576,7 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	}
 	if !reviewRun {
 		for i := range repos {
-			if h.IssueChecksPRURL != "" || (resumePR && resumeFork != "") {
+			if h.IssueChecksPRURL != "" || (resumePR && repos[i].PushRemote == publishRemoteFork) {
 				continue
 			}
 			if err := h.preparePublishWorkflow(ctx, &repos[i]); err != nil {
@@ -740,13 +717,15 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	}
 	codexTargetLabel := codexTargetLabel(cfg.TargetSubdir, len(repos) > 1)
 	if resumePR {
-		repo := &repos[0]
-		repo.Changed = true
-		if code, stage, err := h.checkPublishedPullRequest(ctx, runCfg, repo, runtime, codexDir, codexOpts, codexBasePrompt, agentsPath, codexTargetLabel, agentStage, false); err != nil {
-			return h.failWithRepos(code, stage, err, runDir, repos)
-		}
-		if code, stage, err := h.finishPublishedPullRequest(ctx, runCfg, repo, runtime, codexDir, codexOpts, codexBasePrompt, agentsPath, codexTargetLabel, agentStage, false); err != nil {
-			return h.failWithRepos(code, stage, err, runDir, repos)
+		for i := range repos {
+			repo := &repos[i]
+			repo.Changed = true
+			if code, stage, err := h.checkPublishedPullRequest(ctx, runCfg, repo, runtime, codexDir, codexOpts, codexBasePrompt, agentsPath, codexTargetLabel, agentStage, len(repos) > 1); err != nil {
+				return h.failWithRepos(code, stage, err, runDir, repos)
+			}
+			if code, stage, err := h.finishPublishedPullRequest(ctx, runCfg, repo, runtime, codexDir, codexOpts, codexBasePrompt, agentsPath, codexTargetLabel, agentStage, len(repos) > 1); err != nil {
+				return h.failWithRepos(code, stage, err, runDir, repos)
+			}
 		}
 		return buildResult(runDir, repos, false)
 	}
@@ -917,11 +896,18 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		return res
 	}
 
+	// Publish every changed repository before review can park a managed
+	// multi-repository task. A retry can then resume from published heads.
+	process := h.processChangedRepo
+	deferReviews := len(repos) > 1 && runCfg.Workflow.IsDefaultExecution()
+	if deferReviews {
+		process = h.processChangedRepoWithoutFinalReviews
+	}
 	for i := range repos {
 		if !repos[i].Changed {
 			continue
 		}
-		if exitCode, stage, err := h.processChangedRepo(
+		if exitCode, stage, err := process(
 			ctx,
 			runCfg,
 			&repos[i],
@@ -935,6 +921,18 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 			len(repos) > 1,
 		); err != nil {
 			return h.failWithRepos(exitCode, stage, err, runDir, repos)
+		}
+	}
+	if deferReviews {
+		h.logf("stage=review status=start action=review_published")
+		for i := range repos {
+			repo := &repos[i]
+			if !repo.Changed || repo.PRURL == "" {
+				continue
+			}
+			if exitCode, stage, err := h.finishPublishedPullRequest(ctx, runCfg, repo, runtime, codexDir, codexOpts, codexBasePrompt, agentsPath, codexTargetLabel, agentStage, true); err != nil {
+				return h.failWithRepos(exitCode, stage, err, runDir, repos)
+			}
 		}
 	}
 
@@ -1068,6 +1066,9 @@ func (h Harness) finalizePullRequestReview(
 		)
 		if repo.PRVerification != "" {
 			return ExitPR, "review", err
+		}
+		if cfg.Workflow != nil && cfg.Workflow.DefaultApplied {
+			return ExitPR, "review", errors.Join(ErrReviewPending, err)
 		}
 		return ExitSuccess, "", nil
 	}
@@ -10195,7 +10196,7 @@ func (h Harness) reconcileNoChecksWithRequiredStatusChecks(ctx context.Context, 
 		return false, "", nil
 	}
 
-	names, err := h.configuredRequiredStatusChecks(ctx, repo.Dir, targetRepo, baseBranch, false)
+	names, err := h.configuredRequiredStatusChecks(ctx, repo.Dir, targetRepo, baseBranch, false, false)
 	if err != nil {
 		return false, "", err
 	}
@@ -10205,7 +10206,7 @@ func (h Harness) reconcileNoChecksWithRequiredStatusChecks(ctx context.Context, 
 	return false, strings.Join(names, "\n"), nil
 }
 
-func (h Harness) configuredRequiredStatusChecks(ctx context.Context, repoDir, targetRepo, baseBranch string, sanitized bool) ([]string, error) {
+func (h Harness) configuredRequiredStatusChecks(ctx context.Context, repoDir, targetRepo, baseBranch string, sanitized, requireEvidence bool) ([]string, error) {
 	cmd := requiredStatusChecksCommand(repoDir, targetRepo, baseBranch)
 	if sanitized {
 		cmd = commandWithoutGitHubTokenEnv(cmd)
@@ -10214,11 +10215,21 @@ func (h Harness) configuredRequiredStatusChecks(ctx context.Context, repoDir, ta
 	if errors.Is(err, ErrChecksUnavailable) {
 		return nil, err
 	}
+	if err != nil && requireEvidence {
+		// A generic 404 can also hide branch protection from this credential.
+		if explicitNoRequiredStatusChecks(requiredStatusChecksErrorText(res, err)) {
+			return nil, nil
+		}
+		return nil, err
+	}
 	if isRequiredStatusChecksNotConfigured(res, err) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
+	}
+	if requireEvidence && strings.TrimSpace(res.Stdout) == "" {
+		return nil, fmt.Errorf("missing branch protection check configuration")
 	}
 	return parseRequiredStatusCheckNames(res.Stdout)
 }
@@ -10320,14 +10331,20 @@ func isRequiredStatusChecksNotConfigured(res execx.Result, err error) bool {
 	if err == nil {
 		return false
 	}
-	text := strings.ToLower(strings.Join([]string{res.Stdout, res.Stderr, err.Error()}, "\n"))
-	if strings.Contains(text, "branch not protected") ||
-		strings.Contains(text, "required status checks are not enabled") ||
+	text := requiredStatusChecksErrorText(res, err)
+	return explicitNoRequiredStatusChecks(text) ||
 		strings.Contains(text, "required_status_checks not found") ||
-		strings.Contains(text, "upgrade to github pro") {
-		return true
-	}
-	return strings.Contains(text, "http 404") && strings.Contains(text, "required_status_checks")
+		(strings.Contains(text, "http 404") && strings.Contains(text, "required_status_checks"))
+}
+
+func requiredStatusChecksErrorText(res execx.Result, err error) string {
+	return strings.ToLower(strings.Join([]string{res.Stdout, res.Stderr, err.Error()}, "\n"))
+}
+
+func explicitNoRequiredStatusChecks(text string) bool {
+	return strings.Contains(text, "branch not protected") ||
+		strings.Contains(text, "required status checks are not enabled") ||
+		strings.Contains(text, "upgrade to github pro")
 }
 
 func workflowDispatchConclusionBucket(status, conclusion string) string {

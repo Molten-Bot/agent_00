@@ -21,19 +21,91 @@ func TestResumePublishedTaskKeepsDefaultPolicyAndOriginalPR(t *testing.T) {
 	policy := workflow.ExecutionPolicy{ReviewCycles: 10, ReviewAgent: config.ReviewAgentConfig{Complexity: "easy"}}
 	captured := policy.Snapshot()
 	cfg := config.Config{RepoURL: "https://github.com/acme/repo", Workflow: captured}
-	task := web.Task{Status: "error", PRURL: "https://github.com/acme/repo/pull/7"}
+	task := web.Task{Status: "completed", ReviewFindingsRemain: true, PRURL: "https://github.com/acme/repo/pull/7"}
 	if !resumePublishedTask(task, &cfg) {
 		t.Fatal("published draft was not eligible for in-place review retry")
 	}
-	_, err := retryWorkflowTask(t.Context(), nil, task, cfg, func(run config.Config) (string, error) {
+	id, err := retryWorkflowTask(t.Context(), nil, task, cfg, func(run config.Config) (string, error) {
 		if run.Workflow.ResumePRURL != task.PRURL || run.Workflow.ReviewCycles != 10 ||
 			run.Workflow.ReviewAgent.Complexity != "easy" || run.Workflow.PolicyHash != captured.PolicyHash {
 			t.Fatalf("retry changed the published target or captured policy: %+v", run.Workflow)
 		}
 		return "existing-task", nil
 	})
-	if err != nil || captured.ResumePRURL != "" {
-		t.Fatalf("retry error = %v, original policy = %+v", err, captured)
+	if err != nil || id != "existing-task" || captured.ResumePRURL != "" {
+		t.Fatalf("retry = %q, %v, original policy = %+v", id, err, captured)
+	}
+}
+
+func TestResumePublishedMultiRepositoryTaskFromLogs(t *testing.T) {
+	t.Parallel()
+	const first = "https://github.com/acme/one/pull/1"
+	const second = "https://github.com/acme/two/pull/2"
+	broker := web.NewBroker()
+	broker.IngestLog("task status=start request_id=existing-task explicit_terminal=true")
+	broker.IngestLog("task request_id=existing-task stage=pr status=ok pr_url=" + first)
+	broker.IngestLog("task request_id=existing-task stage=pr status=ok pr_url=" + second)
+	broker.IngestLog("task request_id=existing-task stage=review status=start action=pass pr_url=" + first)
+	broker.IngestLog("task status=error request_id=existing-task pr_url=" + first)
+	task, ok := broker.Task("existing-task")
+	policy := workflow.ExecutionPolicy{ReviewCycles: 10, ReviewAgent: config.ReviewAgentConfig{Complexity: "easy"}}
+	cfg := config.Config{Repos: []string{"git@github.com:acme/one.git", "https://github.com/acme/two", "https://github.com/acme/unchanged"}, Workflow: policy.Snapshot()}
+	if !ok || !resumePublishedTask(task, &cfg) || !slices.Equal(cfg.Workflow.ResumePRURLs, []string{first, second}) {
+		t.Fatalf("retry lost published PR targets: task=%+v policy=%+v", task, cfg.Workflow)
+	}
+}
+
+func TestReviewRetryRetainsCapturedCustomPolicyWithoutLiveActivation(t *testing.T) {
+	t.Parallel()
+	captured := workflow.ExecutionPolicy{ReviewCycles: 10, ReviewAgent: config.ReviewAgentConfig{Complexity: "easy"}}
+	original := workflow.Definition{ID: "input", Name: "Input", Repository: "acme/repo", Enabled: true,
+		Trigger: workflow.Trigger{Event: "app.prompt"}, Filters: workflow.Filters{Mode: "all"},
+		Task: workflow.Task{Kind: "implement", IssueLinkMode: "reference"}, Merge: workflow.Merge{Enabled: true, Method: "squash"}}
+	for _, change := range []string{"edited", "removed", "paused"} {
+		t.Run(change, func(t *testing.T) {
+			doc := workflow.Document{Version: workflow.Version}
+			current := original
+			switch change {
+			case "edited":
+				current.Task.Instructions = "New instructions"
+			case "paused":
+				current.Enabled = false
+			}
+			if change != "removed" {
+				doc.Workflows = []workflow.Definition{current}
+			}
+			root := t.TempDir()
+			store := &workflow.Store{Path: filepath.Join(root, "workflows.json")}
+			if err := store.Initialize(doc); err != nil {
+				t.Fatal(err)
+			}
+			engine := &workflow.Engine{Store: store, StatePath: filepath.Join(root, "state.json"),
+				Enabled: func() bool { return true }, Allowed: func(string) bool { return true }}
+			policy := captured.Snapshot()
+			policy.ID, policy.EventID, policy.Name = original.ID, "original", original.Name
+			policy.PolicyHash = original.ExecutionPolicyHash()
+			cfg := config.Config{RepoURL: "https://github.com/acme/repo", Workflow: policy}
+			task := web.Task{Status: "error", PRURL: "https://github.com/acme/repo/pull/7"}
+			if !resumePublishedTask(task, &cfg) {
+				t.Fatal("published task was not eligible for repair")
+			}
+			want := *cfg.Workflow
+			want.DetachedReview = true
+			id, err := retryWorkflowTask(t.Context(), engine, task, cfg, func(run config.Config) (string, error) {
+				if run.Workflow == nil || run.Workflow.ID != want.ID || run.Workflow.EventID != want.EventID ||
+					run.Workflow.PolicyHash != want.PolicyHash || run.Workflow.ResumePRURL != want.ResumePRURL ||
+					run.Workflow.ReviewCycles != want.ReviewCycles || run.Workflow.ReviewAgent != want.ReviewAgent || !run.Workflow.DetachedReview {
+					t.Fatalf("captured review retry = %+v", run.Workflow)
+				}
+				return "existing-task", nil
+			})
+			if err != nil || id != "existing-task" {
+				t.Fatalf("retry = %q, %v", id, err)
+			}
+			if runs, err := engine.Runs(); err != nil || len(runs) != 0 {
+				t.Fatalf("detached retry scheduled workflow actions: %v, %v", runs, err)
+			}
+		})
 	}
 }
 

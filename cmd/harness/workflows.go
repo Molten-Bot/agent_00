@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/Molten-Bot/agent_00/internal/app"
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/githubutil"
 	"github.com/Molten-Bot/agent_00/internal/library"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/web"
@@ -242,14 +244,41 @@ func parseWorkflowOrSelection(body []byte) (config.Config, error) {
 type reviewResumeTaskKey struct{}
 
 func resumePublishedTask(task web.Task, cfg *config.Config) bool {
-	if (task.Status != "error" && task.Status != "stopped") || cfg.GitHubIssue != nil || cfg.Review != nil ||
+	retryable := task.Status == "error" || task.Status == "stopped" || (task.Status == "completed" && task.ReviewFindingsRemain)
+	if !retryable || cfg.GitHubIssue != nil || cfg.Review != nil ||
 		strings.EqualFold(strings.TrimSpace(cfg.LibraryTaskName), "code-review") ||
-		cfg.Workflow == nil || !cfg.Workflow.DefaultApplied || cfg.Workflow.RepairPRURL != "" ||
-		len(cfg.RepoList()) != 1 || task.PRURL == "" {
+		cfg.Workflow == nil || !cfg.Workflow.DefaultApplied || cfg.Workflow.RepairPRURL != "" {
 		return false
 	}
 	policy := *cfg.Workflow
-	policy.ResumePRURL = task.PRURL
+	repos := cfg.RepoList()
+	if len(repos) == 1 {
+		if task.PRURL == "" {
+			return false
+		}
+		policy.ResumePRURL = task.PRURL
+	} else {
+		if !task.ReviewStarted && len(policy.ResumePRURLs) == 0 {
+			return false
+		}
+		targets := make(map[string]string)
+		for _, target := range slices.Concat(policy.ResumePRURLs, []string{task.PRURL}, task.PublishedPRURLs) {
+			if repo := strings.ToLower(githubutil.PullRequestRepository(target)); repo != "" {
+				targets[repo] = target
+			}
+		}
+		policy.ResumePRURLs = nil
+		for _, repo := range repos {
+			key := workflow.CanonicalRepository(repo)
+			if target := targets[key]; target != "" {
+				policy.ResumePRURLs = append(policy.ResumePRURLs, target)
+				delete(targets, key)
+			}
+		}
+		if len(policy.ResumePRURLs) == 0 {
+			return false
+		}
+	}
 	cfg.Workflow = &policy
 	return true
 }
@@ -260,6 +289,10 @@ func retryWorkflowTask(ctx context.Context, engine *workflow.Engine, task web.Ta
 	}
 	switch task.Status {
 	case "error", "invalid", "stopped", "duplicate":
+	case "completed":
+		if !task.ReviewFindingsRemain || cfg.Workflow.ResumePRURL == "" {
+			return submit(cfg)
+		}
 	default:
 		return submit(cfg)
 	}
@@ -289,14 +322,16 @@ func retryWorkflowTask(ctx context.Context, engine *workflow.Engine, task web.Ta
 		item.URL = task.PRURL
 	}
 	return engine.DispatchRetry(ctx, cfg.Workflow.ID, cfg.Workflow.PolicyHash, cfg.Workflow.EventID, item, workflow.CapturedExecution(cfg.Workflow), func(run workflow.Run) (string, error) {
-		if run.ID == "" && cfg.Workflow.DefaultApplied && cfg.Workflow.ResumePRURL != "" && cfg.GitHubIssue == nil {
-			return "", fmt.Errorf("review retry requires the originating workflow and its captured policy")
-		}
+		policy := *cfg.Workflow
 		if run.ID != "" {
-			policy := *cfg.Workflow
 			policy.EventID = run.ID
-			cfg.Workflow = &policy
+			policy.DetachedReview = false
+		} else if policy.DefaultApplied && policy.ResumePRURL != "" && cfg.GitHubIssue == nil {
+			// Continue review locally with the saved policy. There is no current
+			// workflow activation to authorize an automatic merge.
+			policy.DetachedReview = true
 		}
+		cfg.Workflow = &policy
 		return submit(cfg)
 	})
 }

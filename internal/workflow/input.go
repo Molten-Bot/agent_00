@@ -65,6 +65,9 @@ func (e *Engine) DispatchRetry(ctx context.Context, id, policy, priorEvent strin
 	}
 	for _, w := range doc.Workflows {
 		if w.ID == id && (w.Merge.Enabled || execution != nil) && w.ExecutionPolicyHash() == policy && CanonicalRepository(w.Repository) == CanonicalRepository(item.Repository) {
+			if execution != nil && e.Enabled != nil && e.Allowed != nil && !e.StillEnabled(w) {
+				break
+			}
 			w.Enabled = true
 			return e.dispatch(w, execution, item, "Workflow retry", priorEvent, submit)
 		}

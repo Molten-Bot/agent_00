@@ -77,16 +77,6 @@ func CIStatus(checks []StatusCheck) (passed, failed bool) {
 }
 
 func VerifyReviewedHeadCI(ctx context.Context, gh ReviewCommand, receipt ReviewReceipt) error {
-	return verifyReviewedHeadCI(ctx, gh, receipt, false)
-}
-
-// VerifyReadyHeadCI verifies reported checks on the reviewed head. Repositories
-// without checks can still mark a PR ready after the publication check stage.
-func VerifyReadyHeadCI(ctx context.Context, gh ReviewCommand, receipt ReviewReceipt) error {
-	return verifyReviewedHeadCI(ctx, gh, receipt, true)
-}
-
-func verifyReviewedHeadCI(ctx context.Context, gh ReviewCommand, receipt ReviewReceipt, allowEmpty bool) error {
 	raw, err := gh(ctx, "pr", "view", PullRequestSelector(receipt.PRURL), "--repo", PullRequestRepository(receipt.PRURL),
 		"--json", "state,headRefOid,statusCheckRollup")
 	if err != nil {
@@ -107,16 +97,6 @@ func verifyReviewedHeadCI(ctx context.Context, gh ReviewCommand, receipt ReviewR
 	}
 	if pr.HeadRefOID != receipt.Head {
 		return ErrReviewHeadChanged
-	}
-	if allowEmpty && pr.StatusCheckRollup != nil {
-		// The trusted review check is handled by the review gate itself.
-		reported := false
-		for _, check := range pr.StatusCheckRollup {
-			reported = reported || (check.Name != ReviewCheckName && check.Context != ReviewCheckName)
-		}
-		if !reported {
-			return nil
-		}
 	}
 	if passed, _ := CIStatus(pr.StatusCheckRollup); !passed {
 		return fmt.Errorf("waiting for successful checks on the reviewed head")

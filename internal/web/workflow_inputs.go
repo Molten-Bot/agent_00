@@ -69,9 +69,7 @@ func (s Server) submitInputWorkflow(ctx context.Context, body []byte, source str
 	if w.Task.Reviewers != nil {
 		c.Reviewers = append([]string{}, (*w.Task.Reviewers)...)
 	}
-	if w.Task.AssignCreator {
-		c.AssignCreator = &w.Task.AssignCreator
-	}
+	c.AssignCreator = &w.Task.AssignCreator
 	if w.Task.Complexity != "" {
 		c.Complexity = w.Task.Complexity
 	}

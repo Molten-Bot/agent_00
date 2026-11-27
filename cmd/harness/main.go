@@ -758,7 +758,7 @@ func runServer(args []string) int {
 						daemonLogger("task status=warn action=save_review_outcome request_id=%s err=%q", requestID, reviewArchiveErr)
 					}
 				}
-				if runCfg.Workflow != nil && !runCfg.Workflow.IsDefaultExecution() && workflowEngine != nil {
+				if runCfg.Workflow != nil && !runCfg.Workflow.IsDefaultExecution() && !runCfg.Workflow.DetachedReview && workflowEngine != nil {
 					if err := workflowEngine.Complete(runCfg.Workflow.EventID, reviewOutcome); err != nil && !(source == rerunSource && errors.Is(err, workflow.ErrActivationNotFound)) {
 						daemonLogger("workflow status=error action=complete err=%q", err)
 					}
@@ -1510,12 +1510,13 @@ func runLocalTask(
 			res.Err = stopErr
 		}
 		logf(
-			"task status=stopped request_id=%s exit_code=%d workspace=%s branch=%s pr_url=%s err=%q",
+			"task status=stopped request_id=%s exit_code=%d workspace=%s branch=%s pr_url=%s pr_urls=%s err=%q",
 			requestID,
 			res.ExitCode,
 			res.WorkspaceDir,
 			res.Branch,
 			res.PRURL,
+			joinAllPRURLs(res.RepoResults),
 			stopErr,
 		)
 		return localTaskOutcome{State: "stopped", Result: res}
@@ -1535,12 +1536,13 @@ func runLocalTask(
 	}
 	if res.Err != nil {
 		logf(
-			"task status=error request_id=%s exit_code=%d workspace=%s branch=%s pr_url=%s err=%q",
+			"task status=error request_id=%s exit_code=%d workspace=%s branch=%s pr_url=%s pr_urls=%s err=%q",
 			requestID,
 			res.ExitCode,
 			res.WorkspaceDir,
 			res.Branch,
 			res.PRURL,
+			joinAllPRURLs(res.RepoResults),
 			res.Err,
 		)
 		return localTaskOutcome{State: "error", Result: res}

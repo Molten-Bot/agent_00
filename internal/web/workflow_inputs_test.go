@@ -83,7 +83,7 @@ func TestCustomInputCannotLowerDefaultReviewPolicy(t *testing.T) {
 	if _, err := s.Workflows.Store.Save(doc); err != nil {
 		t.Fatal(err)
 	}
-	body := []byte(`{"repoUrl":"https://github.com/acme/repo","prompt":"Implement feature"}`)
+	body := []byte(`{"repoUrl":"https://github.com/acme/repo","prompt":"Implement feature","assignCreator":true}`)
 	_, err = s.submitInputWorkflow(t.Context(), body, "prompt", func(_ context.Context, raw []byte) (string, error) {
 		var run config.Config
 		if err := json.Unmarshal(raw, &run); err != nil {
@@ -94,6 +94,9 @@ func TestCustomInputCannotLowerDefaultReviewPolicy(t *testing.T) {
 			policy.ReviewAgent.Instructions != "Verify tests.\n\nCheck for regressions" ||
 			policy.PRAssignee != "maintainer" || !strings.Contains(run.Prompt, "Run focused tests") {
 			t.Fatalf("lost default policy or custom constraints: %+v", run)
+		}
+		if run.AssignCreator == nil || run.AssignCreatorEnabled() {
+			t.Fatal("custom workflow's explicit assignment setting was lost")
 		}
 		return "task", nil
 	})

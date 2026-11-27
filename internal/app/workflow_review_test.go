@@ -378,6 +378,15 @@ func testWorkflowRepairConfirmation(t *testing.T, threadID string) {
 				}
 			case strings.Contains(args, "closingIssuesReferences"):
 				return reply("1")
+			case strings.Contains(args, "/protection/required_status_checks"):
+				return reply(`{"contexts":["CI"]}`)
+			case strings.Contains(args, "isRequired(pullRequestId: $id)"):
+				conclusion := "PENDING"
+				if ciPassed {
+					conclusion = "SUCCESS"
+				}
+				return reply(checkRollupPageJSON("feature", api.head, api.head,
+					fmt.Sprintf(`[{"name":"CI","conclusion":%q,"isRequired":true}]`, conclusion), false, ""))
 			case strings.Contains(args, "/pulls/42/merge"):
 				if (threadID != "" && !resolved) || draft || !ciPassed || !slices.Contains(cmd.Args, "sha="+api.head) {
 					t.Fatalf("merge attempted before resolution, readiness, and current-head CI")
@@ -393,7 +402,7 @@ func testWorkflowRepairConfirmation(t *testing.T, threadID string) {
 				if ciPassed {
 					conclusion = "SUCCESS"
 				}
-				return reply(fmt.Sprintf(`{"number":42,"url":%q,"state":%q,"baseRefName":"main","headRefName":"feature","headRefOid":%q,"reviewDecision":"","isDraft":%t,"mergeable":"MERGEABLE","statusCheckRollup":[{"name":"CI","conclusion":%q}]}`, prURL, state, api.head, draft, conclusion))
+				return reply(fmt.Sprintf(`{"id":"PR_id","number":42,"url":%q,"state":%q,"baseRefName":"main","headRefName":"feature","headRefOid":%q,"reviewDecision":"","isDraft":%t,"mergeable":"MERGEABLE","statusCheckRollup":[{"name":"CI","conclusion":%q}]}`, prURL, state, api.head, draft, conclusion))
 			case strings.HasPrefix(args, "pr checks "):
 				return reply("CI\tpass\n")
 			case strings.HasPrefix(args, "pr ready "):

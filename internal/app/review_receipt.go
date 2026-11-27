@@ -318,7 +318,7 @@ func withFindingVerification(prompt string, findings map[string]githubutil.Nativ
 
 func (h Harness) completeCleanReviewGate(ctx context.Context, cfg config.Config, repo *repoWorkspace, markReady bool) error {
 	managed := cfg.Workflow != nil && cfg.Workflow.DefaultApplied
-	journaled := cfg.Workflow != nil && !cfg.Workflow.IsDefaultExecution()
+	journaled := cfg.Workflow != nil && !cfg.Workflow.IsDefaultExecution() && !cfg.Workflow.DetachedReview
 	gate := githubutil.PendingReviewGate{MarkReady: markReady, Sanitize: repo.ReviewSanitize, VerifyHeadChecks: managed && markReady}
 	receipt := *repo.ReviewReceipt
 	if journaled && len(receipt.VerifiedThreads) > 0 {
@@ -369,7 +369,7 @@ func (h Harness) resumeReviewGate(ctx context.Context, repo repoWorkspace, recei
 	}
 	if gate.MarkReady {
 		if gate.VerifyHeadChecks {
-			if err := githubutil.VerifyReadyHeadCI(ctx, h.reviewGH(repo.Dir, gate.Sanitize), receipt); err != nil {
+			if err := h.confirmHeadChecks(ctx, repo, receipt.Head, true); err != nil {
 				return errors.Join(ErrReviewPending, err)
 			}
 		}
