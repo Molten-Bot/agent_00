@@ -555,6 +555,8 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 							return execx.Result{Stdout: tc.commitStatuses}, nil
 						}
 						return execx.Result{Stdout: `{"statuses":[]}`}, nil
+					case slices.Equal(cmd.Args, append(workflowDispatchRunsCommand("", branch).Args, "--repo", "acme/repo", "--commit", api.head)):
+						return execx.Result{Stdout: "[]"}, nil
 					case strings.HasPrefix(args, "pr checks "):
 						watchReads++
 						if watchReads <= tc.watchOutages {

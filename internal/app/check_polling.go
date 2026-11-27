@@ -127,23 +127,32 @@ func (h Harness) requireWorkspace(ctx context.Context) error {
 func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) (merged bool, err error) {
 	poll := newCheckPoll("checks", prURL)
 	timeout := h.prChecksWatchTimeout()
-	deadline := poll.started.Add(timeout)
-	parent := ctx
+	resumeDeadline := poll.started.Add(timeout)
+	resumeCtx, pollCtx := ctx, ctx
+	var reconcileAt time.Time
 	var incompleteRollupHead prStateView
 	var observedHead string
 	observedPending := make(map[string]bool)
 	if timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithDeadlineCause(ctx, deadline, ErrChecksUnavailable)
+		resumeCtx, cancel = context.WithDeadlineCause(ctx, resumeDeadline, ErrChecksUnavailable)
+		defer cancel()
+		// Leave time for paginated reconciliation when the CLI rollup is incomplete.
+		deadline, _ := resumeCtx.Deadline()
+		reserve := min(checkQueryTimeout, deadline.Sub(poll.started)/5)
+		reconcileAt = deadline.Add(-reserve)
+		pollCtx, cancel = context.WithDeadlineCause(resumeCtx, reconcileAt, ErrChecksUnavailable)
 		defer cancel()
 	}
+	ctx = resumeCtx
 	defer func() {
 		if err != nil && errors.Is(context.Cause(ctx), ErrChecksUnavailable) {
 			err = ErrChecksUnavailable
 		}
-		if errors.Is(err, ErrChecksUnavailable) && time.Until(deadline) <= 0 && incompleteRollupHead.HeadRefOID != "" && parent.Err() == nil {
-			merged, err = h.reconcileResumedChecks(parent, prURL, incompleteRollupHead, observedPending)
-			if errors.Is(err, context.DeadlineExceeded) && parent.Err() == nil {
+		if errors.Is(err, ErrChecksUnavailable) && timeout > 0 && incompleteRollupHead.HeadRefOID != "" &&
+			!time.Now().Before(reconcileAt) && resumeCtx.Err() == nil {
+			merged, err = h.reconcileResumedChecks(resumeCtx, prURL, incompleteRollupHead, observedPending)
+			if err != nil && errors.Is(context.Cause(resumeCtx), ErrChecksUnavailable) {
 				err = errors.Join(ErrChecksUnavailable, err)
 			}
 		}
@@ -151,7 +160,8 @@ func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) (merged
 	var policyBase string
 	var required []string
 	for {
-		if timeout > 0 && time.Until(deadline) <= 0 && ctx.Err() == nil {
+		if timeout > 0 && (incompleteRollupHead.HeadRefOID != "" && !time.Now().Before(reconcileAt) ||
+			!time.Now().Before(resumeDeadline)) {
 			return false, ErrChecksUnavailable
 		}
 		res, err := h.runCheckQuery(ctx, "checks", prStateViewCommand("", prURL, "statusCheckRollup", "id"), checkQueryTimeout)
@@ -174,9 +184,14 @@ func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) (merged
 		if !pullRequestStateIsOpen(pr.prStateView) {
 			return false, nil
 		}
-		incompleteRollupHead = prStateView{}
 		if pr.BaseRefName == "" || pr.HeadRefName == "" || pr.HeadRefOID == "" {
+			incompleteRollupHead = prStateView{}
 			return false, fmt.Errorf("%w: resumed pull request branches or head were missing", ErrChecksUnavailable)
+		}
+		if incompleteRollupHead.HeadRefOID != pr.HeadRefOID ||
+			incompleteRollupHead.BaseRefName != pr.BaseRefName || incompleteRollupHead.HeadRefName != pr.HeadRefName {
+			incompleteRollupHead = prStateView{}
+			ctx = resumeCtx
 		}
 		if observedHead != pr.HeadRefOID {
 			clear(observedPending)
@@ -228,33 +243,36 @@ func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) (merged
 					}
 				}
 			}
-			settled := len(names) == 0
-			if !settled {
+			incompleteRollupHead = prStateView{}
+			ctx = resumeCtx
+			if len(names) > 0 {
 				incompleteRollupHead = pr.prStateView
+				ctx = pollCtx
 			}
-			if len(visible) == 0 {
-				bucket, summary, err := h.readWorkflowDispatchResult(ctx, repo, pr.HeadRefOID)
-				if err != nil {
-					return false, err
-				}
-				if bucket == "fail" {
-					settled = true // Let the normal check path handle the dispatch failure.
-				}
-				if bucket == "pending" {
-					settled = false
-					workflow, _, _ := strings.Cut(summary, "\t")
-					names = append(names, workflow)
-				}
+			bucket, summary, err := h.readWorkflowDispatchResult(ctx, repo, pr.HeadRefOID)
+			if err != nil {
+				return false, err
 			}
-			if settled {
+			if (len(names) == 0 && bucket != "pending") || (len(visible) == 0 && bucket == "fail") {
+				// Let the normal check path handle a dispatch failure with no checks.
 				if poll.waited {
 					poll.finish(h, false)
 				}
 				return false, nil
 			}
+			if bucket == "pending" {
+				workflow, _, _ := strings.Cut(summary, "\t")
+				names = append(names, workflow)
+			}
+		} else {
+			incompleteRollupHead = prStateView{}
+			ctx = resumeCtx
 		}
 		if timeout == 0 {
 			return false, ErrChecksUnavailable
+		}
+		if ctx.Err() != nil {
+			return false, ctx.Err()
 		}
 		poll.waited = true
 		slices.Sort(names)
@@ -270,8 +288,6 @@ func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) (merged
 // After the propagation wait, reconcile missing results with the paginated PR
 // rollup and current branch policy before deciding whether to retry.
 func (h Harness) reconcileResumedChecks(ctx context.Context, prURL string, expected prStateView, observedPending map[string]bool) (bool, error) {
-	ctx, cancel := context.WithTimeout(ctx, checkQueryTimeout)
-	defer cancel()
 	repo := repoWorkspace{PRURL: prURL, BaseBranch: expected.BaseRefName, Branch: expected.HeadRefName}
 	state, err := h.readCheckPRState(ctx, prStateViewCommand("", prURL, "id"))
 	if err != nil {

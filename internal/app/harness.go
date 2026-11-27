@@ -156,7 +156,7 @@ type Result struct {
 
 	// PRVerificationPassed records that the draft verifier completed successfully.
 	PRVerificationPassed bool
-	// PRAlreadyMerged records a merge observed on GitHub.
+	// PRAlreadyMerged records a merge observed on GitHub for a successful run.
 	PRAlreadyMerged bool
 }
 
@@ -1738,10 +1738,7 @@ func (h Harness) checkPublishedPullRequest(
 						requiredErr,
 					)
 				}
-				if err := h.requireWorkspace(ctx); err != nil {
-					return ExitWorkspace, "workspace", err
-				}
-				if reconciled, workflowSummary, reconcileErr := h.reconcileNoChecksWithWorkflowDispatch(ctx, *repo); reconcileErr == nil {
+				if reconciled, workflowSummary, reconcileErr := h.reconcileNoChecksWithWorkflowDispatch(ctx, *repo, checkHead); reconcileErr == nil {
 					if workflowSummary != "" {
 						checkSummary = workflowSummary
 					}
@@ -4682,6 +4679,7 @@ func buildFailureResult(exitCode int, stage string, err error, runDir string, re
 	res := buildResult(runDir, repos, false)
 	res.ExitCode = exitCode
 	res.Err = fmt.Errorf("%s: %w", stage, err)
+	res.PRAlreadyMerged = false
 	return res
 }
 
@@ -10402,17 +10400,20 @@ func (h Harness) configuredRequiredStatusChecks(ctx context.Context, repoDir, ta
 	return parseRequiredStatusCheckNames(res.Stdout)
 }
 
-func (h Harness) reconcileNoChecksWithWorkflowDispatch(ctx context.Context, repo repoWorkspace) (bool, string, error) {
-	headRes, headErr := h.runCommand(ctx, "checks", headCommitSHACommand(repo.Dir))
-	if headErr != nil {
-		return false, "", headErr
+func (h Harness) reconcileNoChecksWithWorkflowDispatch(ctx context.Context, repo repoWorkspace, headSHA string) (bool, string, error) {
+	h.suspendWorkspace()
+	if headSHA == "" {
+		state, err := h.loadCheckPRState(ctx, "", repo.PRURL)
+		if err != nil {
+			return false, "", err
+		}
+		headSHA = state.HeadRefOID
 	}
-	headSHA := strings.ToLower(strings.TrimSpace(headRes.Stdout))
+	headSHA = strings.ToLower(strings.TrimSpace(headSHA))
 	if headSHA == "" {
 		return false, "", nil
 	}
 
-	h.suspendWorkspace()
 	bucket, summary, err := h.readWorkflowDispatchResult(ctx, repoWorkspace{Dir: repo.Dir, Branch: repo.Branch}, headSHA)
 	return bucket == "pass" || bucket == "skipping", summary, err
 }

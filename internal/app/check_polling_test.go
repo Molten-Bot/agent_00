@@ -136,9 +136,13 @@ func TestResumedCheckWaitUsesOnlyGitHubUntilChecksSettle(t *testing.T) {
 		{name: "pending then passing", initial: `[{"name":"CI","status":"IN_PROGRESS"}]`, final: open + passing + "}", classic: `["CI"]`, rules: "[]"},
 		{name: "empty then passing", initial: "[]", final: open + passing + "}", classic: `["CI"]`, rules: "[]", run: "[]"},
 		{name: "optional pass with missing classic check", initial: `[{"name":"optional","conclusion":"SUCCESS"}]`,
-			final: open + passing + "}", classic: `["CI"]`, rules: "[]"},
+			final: open + passing + "}", classic: `["CI"]`, rules: "[]", run: "[]"},
 		{name: "optional pass with missing ruleset check", initial: `[{"name":"optional","conclusion":"SUCCESS"}]`,
-			final: open + passing + "}", classic: "[]", rules: `[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"CI"}]}}]`},
+			final: open + passing + "}", classic: "[]", rules: `[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"CI"}]}}]`, run: "[]"},
+		{name: "optional pass with no required checks and pending dispatch",
+			initial: `[{"name":"optional","conclusion":"SUCCESS"}]`, classic: "[]", rules: "[]",
+			final: `{"state":"MERGED"}`, merged: true,
+			run: `[{"headSha":"current","status":"in_progress"}]`},
 		{name: "no required CI and no dispatch", initial: "[]", classic: "[]", rules: "[]", run: "[]"},
 		{name: "completed dispatch without rollup and no required CI", initial: "[]", classic: "[]", rules: "[]",
 			run: `[{"headSha":"current","status":"completed","conclusion":"success"}]`},
@@ -175,6 +179,7 @@ func TestResumedCheckWaitUsesOnlyGitHubUntilChecksSettle(t *testing.T) {
 			if strings.Contains(tc.final, passing) {
 				runner.exps = append(runner.exps, expectedRun{cmd: ghCommand("", "api", "graphql", "-f", "id=PR_id", "-f", "query="+prCheckRollupQuery),
 					res: execx.Result{Stdout: checkRollupPageJSON("task", "current", "current", `[{"name":"CI","conclusion":"SUCCESS","isRequired":true}]`, false, "")}})
+				runner.exps = append(runner.exps, expectedRun{cmd: dispatch, res: execx.Result{Stdout: "[]"}})
 			}
 			h := New(runner)
 			h.CheckTimings = &CheckTimings{}
@@ -415,9 +420,12 @@ func TestRunReturnsSuccessWhenResumedChecksFindPRMerged(t *testing.T) {
 			runner.exps = append(runner.exps, expectedRun{cmd: authCommand()},
 				expectedRun{cmd: prStateViewCommand("", url, "statusCheckRollup", "id"), res: execx.Result{Stdout: initial}})
 			if duringAdmission {
+				dispatch := workflowDispatchRunsCommand("", "task")
+				dispatch.Args = append(dispatch.Args, "--repo", "acme/repo", "--commit", "current")
 				runner.exps = append(runner.exps,
 					expectedRun{cmd: requiredStatusChecksCommand("", "acme/repo", "main"), res: execx.Result{Stdout: `{"contexts":[]}`}},
 					expectedRun{cmd: ghCommand("", "api", "--paginate", "repos/acme/repo/rules/branches/main?per_page=100"), res: execx.Result{Stdout: "[]"}},
+					expectedRun{cmd: dispatch, res: execx.Result{Stdout: "[]"}},
 					expectedRun{cmd: prStateViewCommand("", url), res: execx.Result{Stdout: merged}},
 				)
 			}
@@ -449,6 +457,45 @@ func TestRunReturnsSuccessWhenResumedChecksFindPRMerged(t *testing.T) {
 	}
 }
 
+func TestResumedCheckReconciliationUsesRemainingDeadline(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		const url = "https://github.com/example/repo/pull/42"
+		const state = `{"id":"PR_id","state":"OPEN","baseRefName":"main","headRefName":"task","headRefOid":"current"}`
+		const timeout = 5 * time.Second
+		start := time.Now()
+		finalView := prStateViewCommand("", url, "id")
+		dispatch := workflowDispatchRunsCommand("", "task")
+		dispatch.Args = append(dispatch.Args, "--repo", "example/repo", "--commit", "current")
+		runner := &fakeRunner{t: t, exps: []expectedRun{
+			{cmd: prStateViewCommand("", url, "statusCheckRollup", "id"), res: execx.Result{Stdout: state}},
+			{cmd: requiredStatusChecksCommand("", "example/repo", "main"), res: execx.Result{Stdout: `{"contexts":["CI"]}`}},
+			{cmd: ghCommand("", "api", "--paginate", "repos/example/repo/rules/branches/main?per_page=100"), res: execx.Result{Stdout: "[]"}},
+			{cmd: dispatch, res: execx.Result{Stdout: "[]"}},
+			{cmd: finalView},
+		}}
+		h := New(issueBranchRunner(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+			res, err := runner.Run(ctx, cmd)
+			if len(runner.exps) > 0 {
+				return res, err
+			}
+			if got := time.Since(start); got <= 0 || got >= timeout {
+				t.Fatalf("reconciliation started after %v, want time left in %v budget", got, timeout)
+			}
+			if deadline, ok := ctx.Deadline(); !ok || !deadline.Equal(start.Add(timeout)) {
+				t.Fatalf("reconciliation deadline = %v, want %v", deadline, start.Add(timeout))
+			}
+			<-ctx.Done()
+			return execx.Result{}, ctx.Err()
+		}))
+		h.PRChecksWatchTimeout = timeout
+		merged, err := h.waitForResumedChecks(t.Context(), url)
+		if merged || !errors.Is(err, ErrChecksUnavailable) || time.Since(start) != timeout || len(runner.exps) != 0 {
+			t.Fatalf("remote check wait = (%t, %v) after %v, remaining queries=%d", merged, err, time.Since(start), len(runner.exps))
+		}
+	})
+}
+
 func TestResumedCheckWaitRemembersDisappearedCheckUntilHeadChangesOrCheckReturns(t *testing.T) {
 	t.Parallel()
 	const url = "https://github.com/example/repo/pull/42"
@@ -466,7 +513,7 @@ func TestResumedCheckWaitRemembersDisappearedCheckUntilHeadChangesOrCheckReturns
 		name  string
 		final []expectedRun
 	}{
-		{"check returns", []expectedRun{view("current", `[{"name":"CI","conclusion":"SUCCESS"}]`)}},
+		{"check returns", []expectedRun{view("current", `[{"name":"CI","conclusion":"SUCCESS"}]`), dispatch("current")}},
 		{"new head", []expectedRun{view("new", "[]"), dispatch("new")}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -549,9 +596,8 @@ func TestResumedReconcilesMissingRequiredChecks(t *testing.T) {
 				if tc.sameName {
 					runner.exps = append(runner.exps, expectedRun{cmd: rollupCmd,
 						res: execx.Result{Stdout: checkRollupPageJSON("task", "current", "current", tc.checks, false, "")}})
-				} else if !tc.partial {
-					runner.exps = append(runner.exps, expectedRun{cmd: dispatch, res: execx.Result{Stdout: runs}})
 				}
+				runner.exps = append(runner.exps, expectedRun{cmd: dispatch, res: execx.Result{Stdout: runs}})
 				runner.exps = append(runner.exps, expectedRun{cmd: prStateViewCommand("", url, "id"), res: execx.Result{Stdout: tc.state}})
 				if tc.state == state {
 					if tc.rerun {
@@ -573,7 +619,7 @@ func TestResumedReconcilesMissingRequiredChecks(t *testing.T) {
 				h.PRChecksWatchTimeout = 5 * time.Second
 				start := time.Now()
 				merged, err := h.waitForResumedChecks(t.Context(), url)
-				if merged != tc.merged || errors.Is(err, ErrChecksUnavailable) != tc.retry || len(runner.exps) != 0 || time.Since(start) != h.PRChecksWatchTimeout {
+				if merged != tc.merged || errors.Is(err, ErrChecksUnavailable) != tc.retry || len(runner.exps) != 0 || time.Since(start) != 4*time.Second {
 					t.Fatalf("remote check wait = (%t, %v) after %v, remaining queries=%d", merged, err, time.Since(start), len(runner.exps))
 				}
 				if tc.checks == "[]" || (tc.partial && !tc.noDispatch) {
