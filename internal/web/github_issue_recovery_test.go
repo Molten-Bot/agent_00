@@ -26,6 +26,7 @@ import (
 type recoveryGitHub struct {
 	*automationGitHub
 	prs             string
+	pendingPR       string
 	deleteError     bool
 	deletes         int
 	loseTagResponse bool
@@ -36,6 +37,14 @@ func (f *recoveryGitHub) Run(ctx context.Context, cmd execx.Command) (execx.Resu
 	args := strings.Join(cmd.Args, " ")
 	if strings.Contains(args, "/pulls?") {
 		return execx.Result{Stdout: f.prs}, nil
+	}
+	if args == "pr view 42 --repo acme/repo --json state,mergedAt,title" {
+		f.calls++
+		state := f.pendingPR
+		if state == "" {
+			state = `{"state":"OPEN"}`
+		}
+		return execx.Result{Stdout: state}, nil
 	}
 	if strings.Contains(args, "--method DELETE") {
 		f.deletes++
@@ -877,6 +886,53 @@ func TestIssueCheckRecoveryWaitsForRateResetThenResubmitsSameClaim(t *testing.T)
 	records, err := s.IssueClaims.List()
 	if err != nil || len(records) != 1 || records[0].RequestID != record.RequestID {
 		t.Fatalf("retry created another claim or task: %+v, %v", records, err)
+	}
+}
+
+func TestIssueCheckRecoverySettlesMergedPRBeforeResubmitting(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	reconcileOrAdmitTestIssue(t.Context(), s)
+	record := completeRecoveryRecord(t, s, localruntime.IssueChecksPending, 1)
+	record.State = localruntime.IssueChecksPending
+	record.PRURL = "https://github.com/acme/repo/pull/42"
+	record.PRVerification = "Verify draft checks"
+	doc, err := s.Workflows.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := doc.Workflows[0]
+	const eventID = "checks-pending-activation"
+	record.Run.Workflow = &config.WorkflowRunConfig{ID: w.ID, EventID: eventID, PolicyHash: w.ExecutionPolicyHash()}
+	s.Workflows.Now = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+	item := workflow.Item{Kind: "issue", Repository: w.Repository, Number: record.Run.GitHubIssue.Number}
+	if err := s.Workflows.PrepareIssueRecovery(w.ID, w.ExecutionPolicyHash(), eventID, "", item, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	f.pendingPR = `{"state":"MERGED","mergedAt":"2026-01-01T00:02:00Z","title":"Published PR"}`
+	for range 2 {
+		if err := s.ReconcileIssueWork(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := latestRecoveryRecord(t, s)
+	if got.Outcome != "merged" || !got.Fulfilled() || got.PRTitle != "Published PR" ||
+		got.PRVerification != record.PRVerification || !got.VerifiedAt.IsZero() ||
+		got.UnlockPending || got.LabelAdded || !got.NextAttemptAt.IsZero() || len(f.submissions) != 1 || f.deletes != 1 {
+		t.Fatalf("merge did not settle pending checks: %+v, submissions=%d, label removals=%d", got, len(f.submissions), f.deletes)
+	}
+	response := httptest.NewRecorder()
+	s.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/status", nil))
+	var dashboard Snapshot
+	if err := json.Unmarshal(response.Body.Bytes(), &dashboard); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusOK || dashboard.Stats.TotalSavedSeconds != 120 ||
+		len(dashboard.Tasks) != 1 || dashboard.Tasks[0].Status != "merged" {
+		t.Fatalf("dashboard did not show the merge: %s", response.Body.String())
 	}
 }
 

@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -231,6 +233,18 @@ func configureWorkflows(ctx context.Context, cfg localruntime.InitConfig, runner
 	_ = ctx // The caller starts polling after server callbacks are configured.
 	return nil
 }
+
+func retainMergedReviewLogs(root, requestID string) (bool, error) {
+	outcome, err := workflow.LoadReviewOutcome(root, requestID)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("load review evidence before task cleanup: %w", err)
+	}
+	return outcome.Status == "failed" || outcome.Status == workflow.OutcomeReviewPending || outcome.ReviewInterrupted, nil
+}
+
 func parseWorkflowOrSelection(body []byte) (config.Config, error) {
 	var header struct {
 		Workflow *config.WorkflowRunConfig `json:"workflow"`

@@ -839,7 +839,20 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		r.Status = "running"
 	}
 	if r.Status == OutcomeChecksPending {
-		return nil
+		if !active || e.InspectPRState == nil || !strings.Contains(r.PRURL, "/pull/") {
+			return nil
+		}
+		i, err := e.InspectPRState(ctx, r.Item.Repository, r.PRURL)
+		if err != nil {
+			waitForQuota(err)
+			return errors.Join(err, finish())
+		}
+		if !i.Merged {
+			return nil
+		}
+		mergedAt = i.MergedAt
+		r.Status, r.Reason = "merged", externalMergeReason
+		return finish()
 	}
 	if r.Status == "running" || r.hasFailedPendingReview() {
 		var o Outcome
@@ -1066,9 +1079,23 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 			r.Reason = "Head changed after merge eligibility; a new review is required"
 		} else if !e.Allowed(r.Item.Repository) || !e.StillEnabled(r.Workflow) {
 			r.Reason = "Workflow changed or was disabled before merge"
-		} else if mergeErr := e.Merge(ctx, r); errors.Is(mergeErr, githubutil.ErrReviewInterrupted) {
-			r.Status = "merged"
-			r.Reason = externalMergeReason
+		} else if mergeErr := e.Merge(ctx, r); mergeErr == nil || errors.Is(mergeErr, githubutil.ErrReviewInterrupted) {
+			if e.InspectPRState != nil {
+				state, err := e.InspectPRState(ctx, r.Item.Repository, r.PRURL)
+				if err != nil {
+					waitForQuota(err)
+					return errors.Join(err, finish())
+				}
+				if !state.Merged {
+					r.Reason = "Waiting for GitHub to confirm the pull request merged"
+					return finish()
+				}
+				mergedAt = state.MergedAt
+			}
+			r.Status, r.Reason = "merged", "Pull request merged"
+			if mergeErr != nil {
+				r.Reason = externalMergeReason
+			}
 		} else if errors.Is(mergeErr, githubutil.ErrReviewCheckPending) {
 			r.Reason = "Waiting for the trusted review policy check on the current pull request head"
 		} else if errors.Is(mergeErr, githubutil.ErrReviewThreadsPending) {
@@ -1079,13 +1106,10 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 			r.Reason = "Waiting for human approval"
 		} else if errors.Is(mergeErr, errMergePending) {
 			r.Reason = "Waiting for GitHub to confirm the pull request merged"
-		} else if mergeErr != nil {
+		} else {
 			if !waitForQuota(mergeErr) {
 				r.Reason = "Merge blocked: " + mergeErr.Error()
 			}
-		} else {
-			r.Status = "merged"
-			r.Reason = "Pull request merged"
 		}
 	}
 

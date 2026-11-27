@@ -904,8 +904,14 @@ func runServer(args []string) int {
 			if record.ID != "" && !record.Fulfilled() {
 				return fmt.Errorf("unresolved issue evidence is retained; resolve or explicitly abandon the issue before deleting it")
 			}
-			if automatic && retainMergedIssueLogs(record) {
-				return nil
+			if automatic {
+				if retainMergedIssueLogs(record) {
+					return nil
+				}
+				retain, err := retainMergedReviewLogs(filepath.Dir(cfg.RuntimeConfigPath), requestID)
+				if err != nil || retain {
+					return err
+				}
 			}
 			var errs []error
 

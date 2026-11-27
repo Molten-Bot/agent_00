@@ -461,6 +461,15 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		return nil
 	}
 	if record.Outcome == localruntime.IssueChecksPending {
+		if record.PRURL != "" {
+			pr, err := s.inspectPendingIssuePR(ctx, record)
+			if err != nil {
+				return s.deferIssueRecord(record, err)
+			}
+			if pr.Merged {
+				return s.recordRecoveredIssueMerge(record, pr)
+			}
+		}
 		if staleOwner || record.Control != "" || record.State == "blocked" {
 			return nil
 		}
@@ -689,6 +698,32 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		return s.deferIssueRecord(record, err)
 	}
 	return nil
+}
+
+func (s Server) inspectPendingIssuePR(ctx context.Context, record localruntime.IssueClaimRecord) (issuePullRequest, error) {
+	repo := record.Run.GitHubIssue.Repository
+	if !strings.EqualFold(githubutil.PullRequestRepository(record.PRURL), repo) {
+		return issuePullRequest{}, fmt.Errorf("pending check pull request does not belong to the issue repository")
+	}
+	result, err := s.runIssueGH(ctx, execx.Command{Name: "gh", Args: []string{
+		"pr", "view", githubutil.PullRequestSelector(record.PRURL), "--repo", repo, "--json", "state,mergedAt,title",
+	}})
+	if err != nil {
+		return issuePullRequest{}, err
+	}
+	var pr struct {
+		State, Title string
+		MergedAt     time.Time
+	}
+	if err := json.Unmarshal([]byte(result.Stdout), &pr); err != nil {
+		return issuePullRequest{}, fmt.Errorf("decode pending check pull request: %w", err)
+	}
+	switch pr.State {
+	case "OPEN", "CLOSED", "MERGED":
+	default:
+		return issuePullRequest{}, fmt.Errorf("unexpected pending check pull request state %q", pr.State)
+	}
+	return issuePullRequest{URL: record.PRURL, Title: pr.Title, Merged: pr.State == "MERGED", MergedAt: pr.MergedAt}, nil
 }
 
 func (s Server) resumeIssueChecks(ctx context.Context, record localruntime.IssueClaimRecord) error {

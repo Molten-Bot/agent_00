@@ -166,6 +166,66 @@ func TestWorkflowTerminalTransitionDuration(t *testing.T) {
 	}
 }
 
+func TestWorkflowMergeUsesGitHubTimestamp(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name, status, reason string
+		mergeErr             error
+	}{
+		{name: "app merge", status: "waiting", reason: "merged"},
+		{name: "operator merge during merge call", status: "waiting", reason: "merge_unconfirmed", mergeErr: githubutil.ErrReviewInterrupted},
+		{name: "operator merge while checks pending", status: OutcomeChecksPending, reason: "merge_unconfirmed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			w := definition("delivery")
+			w.Merge.Enabled, w.Merge.RequireApproval = true, false
+			e, _, _ := testEngine(t, w)
+			start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+			mergedAt := start.Add(3 * time.Second)
+			e.Now = func() time.Time { return start.Add(time.Hour) }
+			e.InspectPR = func(context.Context, string, string) (Item, error) {
+				return Item{Open: true, HeadSHA: "abc", ChecksPassed: true}, nil
+			}
+			mergeCalled := false
+			e.Merge = func(context.Context, Run) error {
+				mergeCalled = true
+				return test.mergeErr
+			}
+			e.InspectPRState = func(context.Context, string, string) (Item, error) {
+				if mergeCalled != (test.status == "waiting") {
+					t.Fatalf("merge call before state lookup = %t", mergeCalled)
+				}
+				return Item{Merged: true, MergedAt: mergedAt}, nil
+			}
+			recorded := 0
+			e.RecordMerge = func(_ Run, got time.Time) error {
+				recorded++
+				if !got.Equal(mergedAt) {
+					t.Fatalf("merge receipt timestamp = %v, want %v", got, mergedAt)
+				}
+				return nil
+			}
+			var logs []string
+			e.Logf = func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }
+			if err := e.transaction(func(s *State) error {
+				s.Runs = []Run{{ID: "activation", Workflow: w, Item: Item{Repository: w.Repository},
+					PRURL: "https://github.com/acme/repo/pull/42", Status: test.status, StartedAt: &start, UpdatedAt: start}}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			tick(t, e)
+			tick(t, e)
+			if recorded != 1 || len(logs) != 1 ||
+				!strings.Contains(logs[0], "merged_at="+mergedAt.Format(time.RFC3339Nano)) ||
+				!strings.HasSuffix(logs[0], "status=merged reason="+test.reason+" duration_ms=3000") {
+				t.Fatalf("recorded %d merge receipts, transitions = %v", recorded, logs)
+			}
+		})
+	}
+}
+
 func TestWorkflowRetryDurationIncludesRetiredActivationAfterRestart(t *testing.T) {
 	t.Parallel()
 	for _, recovery := range []string{"dispatch", "issue recovery", "same event issue recovery"} {

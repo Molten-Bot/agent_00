@@ -19,6 +19,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/githubutil"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/web"
+	"github.com/Molten-Bot/agent_00/internal/workflow"
 )
 
 func TestRetainMergedIssueLogs(t *testing.T) {
@@ -36,6 +37,34 @@ func TestRetainMergedIssueLogs(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			if got := retainMergedIssueLogs(test.record); got != test.want {
 				t.Fatalf("retainMergedIssueLogs() = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+func TestRetainMergedReviewLogs(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name    string
+		outcome *workflow.Outcome
+		want    bool
+	}{
+		{name: "no archived review"},
+		{name: "clean review", outcome: &workflow.Outcome{Status: "succeeded"}},
+		{name: "failed review", outcome: &workflow.Outcome{Status: "failed"}, want: true},
+		{name: "pending review", outcome: &workflow.Outcome{Status: workflow.OutcomeReviewPending}, want: true},
+		{name: "interrupted review", outcome: &workflow.Outcome{Status: "succeeded", ReviewInterrupted: true}, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			const requestID = "pr-workflow"
+			if test.outcome != nil {
+				if err := workflow.SaveReviewOutcome(root, requestID, *test.outcome); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if retain, err := retainMergedReviewLogs(root, requestID); err != nil || retain != test.want {
+				t.Fatalf("retainMergedReviewLogs() = %t, %v, want %t", retain, err, test.want)
 			}
 		})
 	}
