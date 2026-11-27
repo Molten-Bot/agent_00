@@ -149,6 +149,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 		earlyReady             bool
 		readyOnPassingPoll     bool
 		readyDuringVerifier    bool
+		checkAfterVerification bool
 		keepDraft              bool
 		watchOutages           int
 		evidenceOutage         bool
@@ -191,6 +192,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 		{name: "keep explicit draft after early readiness", answer: localSuccess, change: true, earlyReady: true, keepDraft: true},
 		{name: "restore readiness on the last check poll", answer: localSuccess, change: true, earlyReady: true, readyOnPassingPoll: true},
 		{name: "restore readiness changed during verification", answer: localSuccess, change: true, readyDuringVerifier: true},
+		{name: "readiness starts another required check during verification", answer: localSuccess, change: true, readyDuringVerifier: true, checkAfterVerification: true, wantChecksPending: true, wantExit: ExitPR},
 		{name: "empty rollup cannot erase observed pending checks", answer: localSuccess, change: true, pendingChecks: 1, wantExit: ExitPR, wantChecksPending: true,
 			checkRollups: []string{`[{"name":"CI","status":"IN_PROGRESS"}]`, `[]`}},
 		{name: "empty rollup after pending with required checks", answer: localSuccess, change: true, pendingChecks: 1, wantExit: ExitPR, wantChecksPending: true,
@@ -550,12 +552,16 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 							}
 							evidenceReads++
 							switch {
+							case tc.checkAfterVerification && verifications > 0:
+								rollup = `[{"name":"CI","conclusion":"SUCCESS"},{"name":"Web and browser tests","status":"IN_PROGRESS"}]`
 							case tc.earlyReady && (evidenceReads == 1 || (!tc.readyOnPassingPoll && evidenceReads == 2)):
 								rollup = `[{"name":"CI","conclusion":"SUCCESS"},{"name":"Web and browser tests","status":"IN_PROGRESS"}]`
 							case tc.earlyReady:
 								rollup = `[{"name":"CI","conclusion":"SUCCESS"},{"name":"Web and browser tests","conclusion":"SUCCESS"}]`
 							case evidenceReads <= len(tc.checkRollups):
 								rollup = tc.checkRollups[evidenceReads-1]
+							case len(tc.checkRollups) > 0:
+								rollup = tc.checkRollups[len(tc.checkRollups)-1]
 							case tc.pendingChecks >= evidenceReads:
 								rollup = `[{"name":"CI","status":"IN_PROGRESS"}]`
 							case tc.checksFail:
@@ -656,7 +662,8 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				}
 				return
 			}
-			if tc.wantExit != ExitSuccess && (!draft || ready != 0 || result.ReviewReceipt != nil || result.PRVerificationPassed) {
+			keepReceipt := errors.Is(result.Err, errDraftChecksPending) || errors.Is(result.Err, errDraftRestoring)
+			if tc.wantExit != ExitSuccess && (!draft || ready != 0 || (result.ReviewReceipt != nil) != keepReceipt || result.PRVerificationPassed) {
 				t.Fatalf("failed verification or review released the draft: %+v", result)
 			}
 			checksRetry := tc.watchOutages == 3 || tc.evidenceOutage
@@ -697,6 +704,15 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			checksPending := tc.wantChecksPending || tc.pendingChecks > 1
 			if checksPending && !errors.Is(result.Err, errDraftChecksPending) {
 				t.Fatalf("expected pending verification after retry budget, got %v", result.Err)
+			}
+			if checksPending && !tc.headMoved && (result.ReviewReceipt == nil || result.ReviewReceipt.Head != api.head) {
+				t.Fatalf("pending verification lost the clean review receipt: %+v", result)
+			}
+			if tc.checkAfterVerification {
+				if verifications != 1 || ready != 0 || !draft || reviewerRuns != 1 {
+					t.Fatalf("new check released the draft or repeated review: verify=%d ready=%d draft=%t review=%d", verifications, ready, draft, reviewerRuns)
+				}
+				return
 			}
 			if tc.checksFail && !strings.Contains(fmt.Sprint(result.Err), "checks failed on the reviewed pull request head") {
 				t.Fatalf("expected failed checks to block verification, got %v", result.Err)
@@ -791,8 +807,8 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			if tc.readyDuringVerifier && (draftRestorations != 1 || reviewerRuns != 1) {
 				t.Fatalf("late readiness triggered %d draft restorations and %d reviewer runs", draftRestorations, reviewerRuns)
 			}
-			if tc.earlyReady && verificationPolicyReads != 2 {
-				t.Fatalf("policy queried %d times, want initial read and final verification refresh", verificationPolicyReads)
+			if tc.earlyReady && verificationPolicyReads != 3 {
+				t.Fatalf("policy queried %d times, want initial read and two passing-rollup refreshes", verificationPolicyReads)
 			}
 			if tc.largePatch {
 				if policy := result.ReviewReceipt.Policy; policy.FixPasses != 10 || policy.Complexity != "easy" {

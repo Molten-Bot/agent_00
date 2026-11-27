@@ -1090,8 +1090,16 @@ func (h Harness) finalizePullRequestReview(
 		if err == nil {
 			err = h.confirmDraftPatchCommits(ctx, *repo)
 		}
+		if err == nil {
+			// Read the live rollup again after verification. Becoming ready can
+			// start new required checks without changing the reviewed head.
+			_, err = h.waitForDraftVerificationEvidence(ctx, *repo)
+		}
 		if err != nil {
-			repo.ReviewReceipt = nil
+			var rate *githubutil.RateLimitError
+			if !errors.Is(err, errDraftChecksPending) && !errors.Is(err, errDraftRestoring) && !errors.As(err, &rate) {
+				repo.ReviewReceipt = nil
+			}
 			repo.ReviewInterrupted = errors.Is(err, githubutil.ErrReviewInterrupted)
 			return ExitPR, "pr_verification", err
 		}
@@ -5587,7 +5595,30 @@ func (h Harness) ensurePullRequestDraft(ctx context.Context, repo repoWorkspace,
 	if repo.ReviewSanitize {
 		cmd = commandWithoutGitHubTokenEnv(cmd)
 	}
-	if _, err := h.runCommand(ctx, stage, cmd); err != nil {
+	var err error
+	if stage == "pr_verification" {
+		_, err = h.runGitHubCommand(githubutil.WithDefaultCaller(ctx, "worker_pr_verification"), h.GitHubCooldown, stage, cmd)
+	} else {
+		_, err = h.runCommand(ctx, stage, cmd)
+	}
+	if err != nil {
+		if stage == "pr_verification" {
+			// A write may have succeeded even when gh lost its response.
+			view := ghCommand(repo.Dir, "pr", "view", prURL, "--json", "isDraft,state")
+			if repo.ReviewSanitize {
+				view = commandWithoutGitHubTokenEnv(view)
+			}
+			if res, viewErr := h.runCheckQuery(ctx, stage, view, checkQueryTimeout); viewErr == nil {
+				var state struct {
+					IsDraft bool   `json:"isDraft"`
+					State   string `json:"state"`
+				}
+				if json.Unmarshal([]byte(res.Stdout), &state) == nil && state.State == "OPEN" && state.IsDraft {
+					h.logf("stage=%s status=ok action=mark_draft reason=confirmed_after_error pr_url=%s", stage, prURL)
+					return nil
+				}
+			}
+		}
 		if isPRAlreadyDraftError(err) {
 			h.logf("stage=%s status=skip action=mark_draft reason=already_draft pr_url=%s", stage, prURL)
 			return nil
