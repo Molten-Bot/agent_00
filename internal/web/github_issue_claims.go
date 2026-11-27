@@ -120,6 +120,16 @@ func (s Server) submitWithIssueClaim(ctx context.Context, body []byte, submit fu
 
 func (s Server) submitParsedWithIssueClaim(ctx context.Context, body []byte, run config.Config, submit func(context.Context, []byte) (string, error)) (string, error) {
 	if run.GitHubIssue == nil {
+		if run.Workflow == nil && s.Workflows != nil {
+			if err := s.applyDefaultExecution(&run); err != nil {
+				return "", err
+			}
+			var err error
+			body, err = json.Marshal(run)
+			if err != nil {
+				return "", err
+			}
+		}
 		return submit(ctx, body)
 	}
 	if s.ReviewSettingsStatus == nil {
@@ -228,6 +238,9 @@ var errIssueRecoveryRequired = errors.New("issue is reserved by a previous attem
 
 // Explicit starts recover previous attempts under the one-worker-per-issue assumption.
 func (s Server) claimAndSubmitIssueMode(ctx context.Context, run config.Config, settings ReviewSettingsState, login string, submit func(context.Context, []byte) (string, error), manual bool) (string, error) {
+	if err := s.applyDefaultExecution(&run); err != nil {
+		return "", err
+	}
 	if s.issueAutomation == nil || s.IssueClaims == nil {
 		return "", fmt.Errorf("issue claim storage is unavailable")
 	}
@@ -862,7 +875,7 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 			savedRun = &observed.Run
 		}
 	}
-	if metadataRetry && !automatic && savedRun != nil && savedRun.Workflow != nil && s.Workflows != nil {
+	if metadataRetry && !automatic && savedRun != nil && savedRun.Workflow != nil && !savedRun.Workflow.IsDefaultExecution() && s.Workflows != nil {
 		policy, policyErr := s.Workflows.PRMetadataRetryPolicy(*savedRun.Workflow)
 		if policyErr != nil {
 			return issueRetryResult{}, http.StatusConflict, policyErr
@@ -1017,6 +1030,9 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 	if savedRun != nil {
 		run = *savedRun
 	}
+	if err := s.applyDefaultExecution(&run); err != nil {
+		return issueRetryResult{}, http.StatusServiceUnavailable, err
+	}
 	exclusion := remote.Claim.ExclusionLabel
 	if exclusion == "" && savedRun != nil {
 		exclusion = savedRun.GitHubIssue.Claim.ExclusionLabel
@@ -1071,7 +1087,7 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 	// if the publication response was lost. Retain the original workflow policy.
 	verificationWorkflowRetry := automatic && run.Workflow != nil &&
 		(previous.PRVerification != "" || previous.Outcome == workflow.OutcomeReviewPending)
-	if workflowRecovery || ownedWorkflowRetry || verificationWorkflowRetry {
+	if !run.Workflow.IsDefaultExecution() && (workflowRecovery || ownedWorkflowRetry || verificationWorkflowRetry) {
 		var retryOf string
 		if ownedWorkflowRetry || verificationWorkflowRetry {
 			// A stopped task can remain in the broker after its workflow run was

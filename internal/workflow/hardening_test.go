@@ -99,7 +99,7 @@ func TestMergeWaitsForNonemptyHead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = e.Complete(runs[0].ID, Outcome{Status: "succeeded", PRURL: "https://github.com/acme/repo/pull/2"}); err != nil {
+	if err = e.Complete(runs[0].ID, Outcome{Status: "succeeded", PRURL: "https://github.com/acme/repo/pull/2", ReviewReceipt: fixtureRunReviewReceipt(runs[0], "https://github.com/acme/repo/pull/2")}); err != nil {
 		t.Fatal(err)
 	}
 	pr := Item{Open: true, ChecksPassed: true, HumanApproved: true}

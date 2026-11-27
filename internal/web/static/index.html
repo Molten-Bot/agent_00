@@ -814,7 +814,7 @@
             <label class="selectable-option">
               <input class="sr-only" id="review-settings-workflow-enabled" type="checkbox">
               <svg class="lucide lucide-diagram-flow-vertical" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 003.5 3.5 3.5 3.5 0 013.5 3.5v.5"/><path d="M12 8v.5A3.5 3.5 0 018.5 12 3.5 3.5 0 005 15.5v.5"/><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/></svg>
-              <span>Workflow (beta)</span>
+              <span>Custom workflow execution (beta)</span>
             </label>
             <div class="complexity-slider">
               <label for="settings-default-complexity">Default task complexity</label>
@@ -1401,7 +1401,8 @@
       return Boolean(state.reviewSettings?.autoMerge);
     }
 
-    function taskReviewStepEnabled() {
+    function taskReviewStepEnabled(task) {
+      if (task?.review_policy) return task.review_policy.fix_passes > 0;
       return String(state.reviewSettings?.reviewLevel || "off").trim().toLowerCase() !== "off";
     }
 
@@ -2176,8 +2177,8 @@
     }
 
     function syncWorkflowAvailability() {
-      const enabled = state.reviewSettings?.workflowEnabled === true;
       const link = document.getElementById("workflow-dock-link");
+      const enabled = link?.hasAttribute("data-default-execution-editor") || state.reviewSettings?.workflowEnabled === true;
       link?.classList.toggle("hidden", !enabled);
       link?.setAttribute("aria-disabled", String(!enabled));
       if (enabled) link?.removeAttribute("tabindex");
@@ -2867,7 +2868,7 @@
         reviewSettingsJSONEnabled.checked = state.reviewSettings.jsonEnabled;
       }
       setDefaultComplexity(state.reviewSettings.defaultComplexity);
-      window.mountWorkflowEditor?.(taskAgentLogoURL(), state.reviewSettings.defaultComplexity);
+      window.mountWorkflowEditor?.(taskAgentLogoURL(), state.reviewSettings.defaultComplexity, state.reviewSettings.workflowEnabled);
       reviewSettingsWorkflowEnabled.checked = state.reviewSettings.workflowEnabled;
       renderRepositorySettings();
       renderRepoHistoryOptions();
@@ -3459,7 +3460,7 @@
           configuredAgentLabel: state.ui.configuredAgentLabel,
         }, state.agentAuth);
       }
-      window.mountWorkflowEditor?.(taskAgentLogoURL(), state.reviewSettings.defaultComplexity);
+      window.mountWorkflowEditor?.(taskAgentLogoURL(), state.reviewSettings.defaultComplexity, state.reviewSettings.workflowEnabled);
     }
 
     function setAgentAuthVerifyPending(pending) {
@@ -9064,7 +9065,7 @@
         });
       }
       return workflowEditorLoad.then(() => {
-        window.mountWorkflowEditor(taskAgentLogoURL(), state.reviewSettings.defaultComplexity);
+        window.mountWorkflowEditor(taskAgentLogoURL(), state.reviewSettings.defaultComplexity, state.reviewSettings.workflowEnabled);
         window.dispatchEvent(new CustomEvent("workflow-display", { detail: "workflow" }));
       }).catch(error => {
         document.getElementById("workflow-editor-root").textContent = error.message;
@@ -9090,7 +9091,7 @@
         });
         mode = "studio";
       }
-      if (mode === "workflow" && state.reviewSettings?.workflowEnabled !== true) {
+      if (mode === "workflow" && !document.getElementById("workflow-dock-link")?.hasAttribute("data-default-execution-editor") && state.reviewSettings?.workflowEnabled !== true) {
         mode = "studio";
       }
       if (mode !== "workflow" && state.workflowFullscreenTrigger) {
@@ -11777,7 +11778,7 @@
         status !== "no_changes" &&
         taskFinalReviewEligible(task) &&
         (signals.hasReviewSeen || signals.hasReviewFixSeen || signals.hasReviewChecksSeen ||
-          (signals.hasReviewConfigSeen ? signals.reviewPasses > 0 : taskReviewStepEnabled())) &&
+          (signals.hasReviewConfigSeen ? signals.reviewPasses > 0 : taskReviewStepEnabled(task))) &&
         (String(task?.pr_url || "").trim() !== "" || !COMPLETED_STATUSES.has(status))
       ) {
         if (signals.reviewSteps.size) {
@@ -11918,7 +11919,7 @@
         String(task?.status || ""),
         taskAgentLogoURL(task),
         taskAutoMergeStepEnabled(task) ? "auto_merge" : "",
-        taskReviewStepEnabled() ? "review_cycle" : "",
+        taskReviewStepEnabled(task) ? "review_cycle" : "",
         taskStartSource(task),
         taskProgressEntryStepID(task),
         Boolean(task?.workflow_triggered),
@@ -12363,6 +12364,7 @@
             autoMergeStep: taskAutoMergeStepEnabled(task),
             entryStep: taskProgressEntryStepID(task),
             workflowTriggered: Boolean(task?.workflow_triggered),
+            reviewPolicy: task?.review_policy,
             currentState: taskCurrentStateSignature(task),
             name: taskNameText(task),
             repos: formatTaskRepos(task),
@@ -12871,6 +12873,13 @@
           update.dataset.requestId = requestID;
           applyTaskTimingSummary(update, task);
           meta.append(repos, branch, update);
+          if (task.review_policy) {
+            const policy = document.createElement("div");
+            const { name, fix_passes, complexity } = task.review_policy;
+            const reviewer = complexity && complexity[0].toUpperCase() + complexity.slice(1);
+            policy.textContent = [name, reviewer && `${reviewer} reviewer`, `${fix_passes} fix ${fix_passes === 1 ? "pass" : "passes"}`].filter(Boolean).join(" · ");
+            meta.appendChild(policy);
+          }
           if (task.complexity) {
             const runtime = document.createElement("div");
             runtime.className = "task-runtime-complexity";

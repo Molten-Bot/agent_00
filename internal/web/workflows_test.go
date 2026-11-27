@@ -245,7 +245,9 @@ func TestWorkflowRecoversPreviouslyClaimedIssue(t *testing.T) {
 			engine.Submit = func(ctx context.Context, r workflow.Run) (string, error) {
 				event = r.ID
 				run := issueRunConfig(GitHubRepo{FullName: w.Repository}, f.issue, config.GitHubIssueLinkClose)
-				run.Workflow = &config.WorkflowRunConfig{ID: w.ID, EventID: r.ID, Name: w.Name, PolicyHash: policy, Instructions: w.Task.Instructions, ReviewCycles: w.ReviewCycles}
+				execution := r.ReviewPolicy()
+				run.Workflow = &config.WorkflowRunConfig{ID: w.ID, EventID: r.ID, Name: w.Name, PolicyHash: policy, Instructions: w.Task.Instructions,
+					DefaultApplied: true, ReviewCycles: execution.ReviewCycles, ReviewAgent: execution.ReviewAgent}
 				id, err := s.SubmitWorkflowRun(ctx, run, f.submit)
 				if legacy && errors.Is(err, workflow.ErrIssueAdmissionPending) {
 					return "", errors.New("legacy admission did not retain the workflow run")
@@ -417,6 +419,7 @@ func TestWorkflowRecoversPreviouslyClaimedIssue(t *testing.T) {
 				t.Fatalf("missing native review did not block recovered work: %+v, merges=%d, %v", runs, merges, err)
 			}
 			receipt := recoveredWorkflowReview(*w, prURL)
+			receipt.Policy.Complexity = runs[0].ReviewPolicy().ReviewAgent.Complexity
 			if err := engine.Complete(event, workflow.Outcome{Status: "succeeded", PRURL: prURL, ReviewReceipt: receipt}); err != nil {
 				t.Fatal(err)
 			}

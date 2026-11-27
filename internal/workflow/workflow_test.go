@@ -216,6 +216,16 @@ func fixtureReviewReceipt(w Definition, prURL string) *githubutil.ReviewReceipt 
 	}
 }
 
+func fixtureRunReviewReceipt(run Run, prURL string) *githubutil.ReviewReceipt {
+	receipt := fixtureReviewReceipt(run.Workflow, prURL)
+	policy := run.ReviewPolicy()
+	if run.Workflow.Task.Kind != "review" {
+		receipt.Policy.FixPasses = policy.ReviewCycles
+	}
+	receipt.Policy.Complexity = policy.ReviewAgent.Complexity
+	return receipt
+}
+
 func TestEngineMergeGatesAndReviewFindings(t *testing.T) {
 	t.Parallel()
 	for _, clean := range []bool{false, true} {
@@ -235,7 +245,7 @@ func TestEngineMergeGatesAndReviewFindings(t *testing.T) {
 			runs, _ := e.Runs()
 			outcome := Outcome{Status: "succeeded", PRURL: pr.URL}
 			if clean {
-				outcome.ReviewReceipt = fixtureReviewReceipt(w, pr.URL)
+				outcome.ReviewReceipt = fixtureRunReviewReceipt(runs[0], pr.URL)
 			}
 			if err := e.Complete(runs[0].ID, outcome); err != nil {
 				t.Fatal(err)
@@ -318,7 +328,7 @@ func TestEngineReconcilesLateReviewReceipt(t *testing.T) {
 	}
 
 	pr.HeadSHA = "new"
-	outcome.ReviewReceipt = fixtureReviewReceipt(w, pr.URL)
+	outcome.ReviewReceipt = fixtureRunReviewReceipt(runs[0], pr.URL)
 	if err := e.Complete(id, outcome); err != nil {
 		t.Fatal(err)
 	}
@@ -532,7 +542,7 @@ func TestImplementationMergeRequiresPersistedReceiptOnCurrentHead(t *testing.T) 
 			}
 			o := Outcome{Status: "succeeded", PRURL: "https://github.com/acme/repo/pull/12", ReviewInterrupted: tc.interrupted}
 			if tc.receipt {
-				o.ReviewReceipt = fixtureReviewReceipt(runs[0].Workflow, o.PRURL)
+				o.ReviewReceipt = fixtureRunReviewReceipt(runs[0], o.PRURL)
 				if tc.requireCheck {
 					o.ReviewReceipt.Policy.CheckAppID = 456
 				}

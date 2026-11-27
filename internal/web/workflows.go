@@ -14,6 +14,18 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/workflow"
 )
 
+func (s Server) applyDefaultExecution(run *config.Config) error {
+	if run.Workflow != nil || s.Workflows == nil {
+		return nil
+	}
+	policy, err := s.Workflows.Store.DefaultExecution()
+	if err != nil {
+		return err
+	}
+	run.Workflow = policy.Snapshot()
+	return nil
+}
+
 func workflowError(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, githubErrorStatus(w, status, err), map[string]any{"error": err.Error()})
 }
@@ -39,7 +51,7 @@ func (s Server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 		workflowError(w, 400, err)
 		return
 	}
-	d, err := workflow.Decode(data)
+	d, err := workflow.DecodeUpdate(data)
 	if err != nil {
 		workflowError(w, 400, err)
 		return
@@ -120,9 +132,18 @@ func (s Server) SubmitWorkflowRun(ctx context.Context, run config.Config, submit
 func (s Server) prepareWorkflowIssueRecovery(run config.Config, retryOf string) error {
 	issue := run.GitHubIssue
 	return s.Workflows.PrepareIssueRecovery(run.Workflow.ID, run.Workflow.PolicyHash, run.Workflow.EventID, retryOf,
-		workflow.Item{Kind: "issue", Repository: issue.Repository, Number: issue.Number, Title: issue.Title, URL: issue.URL, Open: true})
+		workflow.Item{Kind: "issue", Repository: issue.Repository, Number: issue.Number, Title: issue.Title, URL: issue.URL, Open: true},
+		workflow.CapturedExecution(run.Workflow))
 }
 func (s Server) workflowIssueSettings(run config.Config) (ReviewSettingsState, bool, error) {
+	if run.Workflow.IsDefaultExecution() && s.ReviewSettingsStatus != nil {
+		// Manual issue claims keep their saved policy and follow the GitHub
+		// Issues gate. Event trigger filters do not apply to an explicit start.
+		settings, err := s.ReviewSettingsStatus(context.Background())
+		settings.GitHubIssueAutoStartOnlyAssigned = false
+		settings.GitHubIssueAutoStartLabels = nil
+		return settings, settings.GitHubIssuesEnabled && err == nil, err
+	}
 	if s.Workflows == nil || s.Workflows.Store == nil || run.Workflow == nil || run.GitHubIssue == nil || !s.Workflows.Enabled() {
 		return ReviewSettingsState{}, false, nil
 	}

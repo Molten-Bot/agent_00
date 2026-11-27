@@ -203,7 +203,7 @@ func (h Harness) collectDraftVerificationEvidence(ctx context.Context, repo repo
 	}
 
 	targetRepo := githubutil.PullRequestRepository(receipt.PRURL)
-	required, err := h.configuredRequiredStatusChecks(ctx, repo.Dir, targetRepo, repo.BaseBranch, repo.ReviewSanitize)
+	required, err := h.configuredRequiredStatusChecks(ctx, repo.Dir, targetRepo, repo.BaseBranch, repo.ReviewSanitize, false)
 	if err != nil {
 		return nil, fmt.Errorf("load required checks for draft verification: %w", err)
 	}

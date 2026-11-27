@@ -71,6 +71,8 @@ func TestRequiredCheckConfirmationUsesCurrentHeadAndRules(t *testing.T) {
 		nextPage                 string
 		more                     bool
 		unavailable              bool
+		ready, noRequired        bool
+		hiddenProtection         bool
 	}{
 		{name: "current required results", head: "current", rollup: `[{"name":"build","conclusion":"SUCCESS","isRequired":true},{"context":"lint","state":"SUCCESS","isRequired":true}]`},
 		{name: "changed head", head: "older", rollup: `[{"name":"build","conclusion":"SUCCESS","isRequired":true},{"context":"lint","state":"SUCCESS","isRequired":true}]`, want: "head changed", unavailable: true},
@@ -96,6 +98,17 @@ func TestRequiredCheckConfirmationUsesCurrentHeadAndRules(t *testing.T) {
 			more: true, nextPage: checkRollupPageJSON("task", "current", "current", `[{"context":"lint","state":"SUCCESS","isRequired":true}]`, true, "page-2"),
 			want: "pagination cursor repeated", unavailable: true},
 		{name: "actual failed check", head: "current", rollup: `[{"name":"build","conclusion":"FAILURE","isRequired":true}]`, want: "failed on the current pull request head"},
+		{name: "ready with all requirements present", head: "current", ready: true, rollup: `[{"name":"build","conclusion":"SUCCESS","isRequired":true},{"context":"lint","state":"SUCCESS","isRequired":true}]`},
+		{name: "ready with no configured checks", head: "current", ready: true, noRequired: true, rollup: "[]"},
+		{name: "ready blocked when branch protection is unavailable", head: "current", ready: true, hiddenProtection: true,
+			want: "load required checks: required_status_checks HTTP 404"},
+		{name: "ready with empty rollup and configured checks", head: "current", ready: true, rollup: "[]", want: `required check "build"`, unavailable: true},
+		{name: "ready with review-only rollup and configured checks", head: "current", ready: true,
+			rollup: `[{"name":"` + githubutil.ReviewCheckName + `","conclusion":"SUCCESS","isRequired":true}]`, want: `required check "build"`, unavailable: true},
+		{name: "ready with only classic requirement present", head: "current", ready: true,
+			rollup: `[{"name":"build","conclusion":"SUCCESS","isRequired":true}]`, want: `required check "lint"`, unavailable: true},
+		{name: "ready with optional check still pending", head: "current", ready: true, noRequired: true,
+			rollup: `[{"name":"preview","isRequired":false}]`, want: `check "preview" is still pending`, unavailable: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -116,14 +129,29 @@ func TestRequiredCheckConfirmationUsesCurrentHeadAndRules(t *testing.T) {
 						return execx.Result{Stdout: tc.nextPage}, nil
 					}
 				case strings.Contains(args, "/protection/required_status_checks"):
+					if tc.hiddenProtection {
+						return execx.Result{}, errors.New("required_status_checks HTTP 404")
+					}
+					if tc.noRequired {
+						return execx.Result{Stdout: `{"contexts":[]}`}, nil
+					}
 					return execx.Result{Stdout: `{"contexts":["build"]}`}, nil
 				case strings.Contains(args, "/rules/branches/"):
+					if tc.noRequired {
+						return execx.Result{Stdout: `[]`}, nil
+					}
 					return execx.Result{Stdout: `[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"lint"}]}}]`}, nil
 				}
 				t.Fatalf("unexpected check read: %s", args)
 				return execx.Result{}, nil
 			}))
-			err := h.confirmCurrentRequiredChecks(t.Context(), repo, "current")
+			var err error
+			if tc.ready {
+				repo.BaseBranch, repo.Branch = "", ""
+				err = h.confirmHeadChecks(t.Context(), repo, "current", true)
+			} else {
+				err = h.confirmCurrentRequiredChecks(t.Context(), repo, "current")
+			}
 			if (err != nil) != (tc.want != "") || (err != nil && !strings.Contains(err.Error(), tc.want)) ||
 				errors.Is(err, ErrChecksUnavailable) != tc.unavailable {
 				t.Fatalf("confirmation error = %v, want %q (retryable=%t)", err, tc.want, tc.unavailable)

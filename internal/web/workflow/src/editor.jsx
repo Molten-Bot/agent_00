@@ -303,7 +303,7 @@ function WorkflowCanvas({ workflow, saving, onInit, onDragChange, onMove, onSele
     </ReactFlow>
   );
 }
-function Editor({ defaultComplexity }) {
+function Editor({ defaultComplexity, customEnabled }) {
   const [editor, setEditor] = useState({ doc: null, current: null, savedSettings: null });
   const latest = useRef(editor);
   const write = useRef(null);
@@ -642,6 +642,23 @@ function Editor({ defaultComplexity }) {
       }
     }
   }
+  async function saveDefaultExecution(event) {
+    event.preventDefault();
+    const fields = new FormData(event.currentTarget);
+    const existing = doc.defaultExecution;
+    const defaultExecution = {
+      reviewCycles: Number(fields.get("fixPasses")),
+      reviewAgent: { ...existing.reviewAgent, complexity: fields.get("reviewer") },
+    };
+    if (!await flush()) return;
+    if (JSON.stringify(latest.current.doc.defaultExecution) !== JSON.stringify(existing)) {
+      setSaveError("Default execution changed elsewhere. Reload before saving.");
+      return;
+    }
+    await writeDocument({ ...latest.current.doc, defaultExecution }, null, () => {
+      setNotice("Default execution saved.");
+    }).result;
+  }
   function toggleEnabled() {
     if (!write.current) saveDefinition({ ...latest.current.current, enabled: !current.enabled }, true);
   }
@@ -723,6 +740,11 @@ function Editor({ defaultComplexity }) {
         "linkedIssue",
       ];
   const templatesLabel = templatesOpen ? "Hide workflow templates" : "Show workflow templates";
+  const defaultCycles = doc?.defaultExecution?.reviewCycles ?? 0;
+  const effectiveCycles = current ? Math.max(current.reviewCycles, defaultCycles) : 0;
+  const canvasWorkflow = current && effectiveCycles !== current.reviewCycles
+    ? { ...current, reviewCycles: effectiveCycles }
+    : current;
   const message = incomplete || saveError || notice;
   return (
     <div className="wf-editor">
@@ -785,7 +807,27 @@ function Editor({ defaultComplexity }) {
       </header>
       <div className="wf-workspace">
         <aside className="wf-palette" aria-label="Repository workflows">
+          {doc?.defaultExecution && (
+            <details className="wf-default-execution">
+              <summary>Default execution</summary>
+              <p className="wf-muted">Applies to Prompt, Chat, JSON, Library, and manual GitHub Issue starts. Custom workflows can raise these minimums.</p>
+              <form key={JSON.stringify(doc.defaultExecution)} onSubmit={saveDefaultExecution}>
+                <Field label="Default review fix passes">
+                  <input type="number" name="fixPasses" min={1} max={10} step={1} required defaultValue={doc.defaultExecution.reviewCycles} />
+                </Field>
+                <Field label="Default reviewer complexity">
+                  <select name="reviewer" defaultValue={doc.defaultExecution.reviewAgent.complexity}>
+                    <option value="easy">Easy</option>
+                    <option value="standard">Standard</option>
+                    <option value="advanced">Advanced</option>
+                  </select>
+                </Field>
+                <button type="submit" className="wf-primary" disabled={saving}>Save default execution</button>
+              </form>
+            </details>
+          )}
           <div className="wf-section-label">REPOSITORY</div>
+          {!customEnabled && <p className="wf-muted">Custom execution is paused in Settings.</p>}
           <RepositoryPicker
             repositories={repos}
             value={repo}
@@ -797,7 +839,7 @@ function Editor({ defaultComplexity }) {
           />
           <div className="wf-step-list">
             {visible.map((w) => {
-              const status = w.enabled ? "Running" : "Paused";
+              const status = w.enabled && customEnabled ? "Running" : "Paused";
               const StatusIcon = w.enabled ? Play : Pause;
               return (
               <button
@@ -847,7 +889,7 @@ function Editor({ defaultComplexity }) {
           {/* Keep late drag events in the store for the workflow where they started. */}
           <ReactFlowProvider key={current?.id}>
             <WorkflowCanvas
-              workflow={current}
+              workflow={canvasWorkflow}
               saving={saving}
               onInit={flow => { fitView.current = flow.fitView; }}
               onDragChange={setDragging}
@@ -884,7 +926,13 @@ function Editor({ defaultComplexity }) {
         <aside className="wf-inspector" aria-label="Step settings">
           {current && <div className="wf-composition">
             <span className="wf-section-label">COMPOSE STEPS</span>
-            {current.task.kind !== "review" && <Toggle label="Review step" value={current.reviewCycles > 0} onChange={(enabled) => { updateReviewCycles(enabled ? 1 : 0); setSelection(enabled ? "review" : "task"); }} />}
+            {current.task.kind !== "review" && <Toggle label={defaultCycles ? "Custom review budget" : "Review step"} value={current.reviewCycles > 0} onChange={(enabled) => { updateReviewCycles(enabled ? defaultCycles || 1 : 0); setSelection(enabled || defaultCycles ? "review" : "task"); }} />}
+            {current.task.kind !== "review" && doc?.defaultExecution && (
+              <p className="wf-muted">
+                Effective fix passes {effectiveCycles}.
+                Turning off custom cycles inherits the global fix-pass budget.
+              </p>
+            )}
             <Toggle label="Merge step" value={current.merge.enabled} onChange={(enabled) => { updateMerge("enabled", enabled); setSelection(enabled ? "merge" : "task"); }} />
           </div>}
 
@@ -1158,7 +1206,7 @@ function Editor({ defaultComplexity }) {
                       </select>
                     </Field>
                   )}
-                  {inputTriggered && <p className="wf-muted">The submitted prompt, images, and JSON options are kept. Instructions below add context. Without an enabled custom workflow, existing configuration defaults apply.</p>}
+                  {inputTriggered && <p className="wf-muted">The submitted task and attachments are kept. Instructions below add context to the task.</p>}
                   {!inputTriggered && <Field label="Prompt source">
                     <select
                       aria-label="Prompt source"
@@ -1294,11 +1342,12 @@ function Editor({ defaultComplexity }) {
                   <h2>Review agent</h2>
                   <ComplexitySlider
                     label="Review complexity"
-                    inheritedLabel="Use agent task complexity"
+                    inheritedLabel={doc?.defaultExecution ? "Use default reviewer" : "Use agent task complexity"}
                     value={current.reviewAgent?.complexity}
-                    defaultComplexity={current.task.complexity || defaultComplexity}
+                    defaultComplexity={doc?.defaultExecution?.reviewAgent.complexity || current.task.complexity || defaultComplexity}
                     onChange={(value) => updateReviewAgent("complexity", value)}
                   />
+                  {doc?.defaultExecution && <p className="wf-muted">The reviewer runs at the higher of the default and custom complexity.</p>}
                   <Field label="Review prompt (optional)">
                     <textarea
                       aria-label="Review prompt (optional)"
@@ -1385,17 +1434,19 @@ function localDateInput(value) {
 let root;
 let renderedAgentLogoURL;
 let renderedDefaultComplexity;
-window.mountWorkflowEditor = (agentLogoURL, defaultComplexity) => {
-  if (root && renderedAgentLogoURL === agentLogoURL && renderedDefaultComplexity === defaultComplexity) return;
+let renderedCustomEnabled;
+window.mountWorkflowEditor = (agentLogoURL, defaultComplexity, customEnabled) => {
+  if (root && renderedAgentLogoURL === agentLogoURL && renderedDefaultComplexity === defaultComplexity && renderedCustomEnabled === customEnabled) return;
   const container = document.getElementById("workflow-editor-root");
   if (!container) return;
   root ??= createRoot(container);
   renderedAgentLogoURL = agentLogoURL;
   renderedDefaultComplexity = defaultComplexity;
+  renderedCustomEnabled = customEnabled;
   root.render(
     <AgentLogoContext.Provider value={agentLogoURL}>
       <ReactFlowProvider>
-        <Editor defaultComplexity={defaultComplexity} />
+        <Editor defaultComplexity={defaultComplexity} customEnabled={customEnabled} />
       </ReactFlowProvider>
     </AgentLogoContext.Provider>,
   );
