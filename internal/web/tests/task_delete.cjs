@@ -12,7 +12,56 @@ function pendingDeleteKeys(tab, requestID) {
   ), requestID);
 }
 
-test('Close updates after a terminal scope change and keeps both generations across tabs', async t => {
+test('Close redraws cached history before the first snapshot', async t => {
+  const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  t.after(() => assert.deepEqual(errors, []));
+  const now = new Date().toISOString();
+  await page.addInitScript(task => {
+    localStorage.setItem('hubui.taskStatusFilter', 'completed');
+    localStorage.setItem('hubui.taskHistory.v1', JSON.stringify([task, { ...task, request_id: 'other-cached' }]));
+  }, {
+    request_id: 'cached',
+    status: 'completed',
+    started_at: now,
+    updated_at: now,
+    delete_attempt_generations: { cached: 'cached-generation' },
+  });
+  const origin = new URL(baseURL).origin;
+  await page.route('**/*', route => {
+    const url = new URL(route.request().url());
+    if (url.origin !== origin) return route.abort();
+    switch (url.pathname) {
+      case '/api/status':
+      case '/api/tasks/cached/delete':
+        return route.fulfill({ status: 503 });
+      case '/api/stream':
+        return route.fulfill({ contentType: 'text/event-stream', body: '' });
+      case '/api/agent-auth':
+        return route.fulfill({ json: { ok: true, auth: { required: false, ready: true, state: 'ready' } } });
+      case '/api/github/repos':
+        return route.fulfill({ json: { ok: true, repos: [] } });
+      default:
+        return route.continue();
+    }
+  });
+  await page.goto(`${baseURL}/#current-work`);
+  const card = page.locator('#task-list .task[data-request-id="cached"]');
+  const close = card.getByRole('button', { name: 'Delete task' });
+  await expect(close).toBeVisible();
+  const deletion = page.waitForResponse(response => response.url().endsWith('/api/tasks/cached/delete'));
+  await close.click();
+  await expect(card).toHaveCount(0);
+  assert.equal((await deletion).status(), 503);
+  await page.reload();
+  await expect(page.locator('#task-list .task[data-request-id="other-cached"]')).toBeVisible();
+  await expect(card).toHaveCount(0);
+});
+
+test('Close keeps separate scopes and generations across tabs', async t => {
   const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
   t.after(() => browser.close());
   const context = await browser.newContext();
@@ -24,6 +73,7 @@ test('Close updates after a terminal scope change and keeps both generations acr
 
   const requests = [];
   let generation = 'old';
+  let siblingCompleted = false;
   let allowDelete = false;
   const now = new Date().toISOString();
   const snapshot = () => ({
@@ -32,7 +82,10 @@ test('Close updates after a terminal scope change and keeps both generations acr
       status: 'completed',
       started_at: now,
       updated_at: now,
-      delete_attempt_generations: { 'same-result': generation },
+      delete_attempt_generations: {
+        'same-result': generation,
+        ...(siblingCompleted ? { sibling: 'sibling-generation' } : {}),
+      },
     }, {
       request_id: 'still-running',
       status: 'running',
@@ -56,7 +109,7 @@ test('Close updates after a terminal scope change and keeps both generations acr
       case '/api/github/repos':
         return route.fulfill({ json: { ok: true, repos: [] } });
       case '/api/tasks/same-result/delete':
-        requests.push(route.request().postDataJSON().attempt_generations['same-result']);
+        requests.push(route.request().postDataJSON().attempt_generations);
         return route.fulfill({ status: allowDelete ? 404 : 503 });
       default:
         return route.continue();
@@ -70,22 +123,37 @@ test('Close updates after a terminal scope change and keeps both generations acr
     await expect(close(tab)).toBeVisible();
   }
   generation = 'resumed';
+  const narrowTab = await context.newPage();
+  await narrowTab.goto(`${baseURL}/#current-work`);
+  await expect(close(narrowTab)).toBeVisible();
+  siblingCompleted = true;
   // Deliver only the next terminal snapshot, as when the stream coalesces updates.
   await freshTab.evaluate(next => render(next), snapshot());
   await close(freshTab).click();
-  await expect.poll(() => requests[0]).toBe('resumed');
+  const widerScope = { 'same-result': 'resumed', sibling: 'sibling-generation' };
+  await expect.poll(() => requests[0]).toEqual(widerScope);
   await expect(card(freshTab)).toHaveCount(0);
+  await close(narrowTab).click();
+  await expect(card(narrowTab)).toHaveCount(0);
   await close(staleTab).click();
   await expect(card(staleTab)).toHaveCount(0);
-  await expect.poll(() => requests).toContain('old');
+  await expect.poll(() => requests).toContainEqual({ 'same-result': 'old' });
+  const storedScopes = await freshTab.evaluate(() => Object.entries(localStorage)
+    .filter(([key]) => key.startsWith('hubui.pendingTaskDeletes:'))
+    .map(([, scope]) => JSON.parse(scope)));
+  assert.equal(storedScopes.length, 3);
+  assert.deepEqual(storedScopes.find(scope => scope.sibling), widerScope);
+  assert.ok(storedScopes.some(scope => scope['same-result'] === 'resumed' && !scope.sibling));
   await staleTab.close();
   await freshTab.close();
+  await narrowTab.close();
 
   requests.length = 0;
   allowDelete = true;
   const reloaded = await context.newPage();
   await reloaded.goto(`${baseURL}/#current-work`);
-  await expect.poll(() => [...new Set(requests)].sort()).toEqual(['old', 'resumed']);
+  await expect.poll(() => [...new Set(requests.map(scope => scope['same-result']))].sort()).toEqual(['old', 'resumed']);
+  assert.deepEqual(requests.find(scope => scope['same-result'] === 'resumed'), widerScope);
   await expect.poll(() => pendingDeleteKeys(reloaded)).toEqual([]);
   // Both dismissal markers survive after the pending requests have been cleared.
   for (const dismissedGeneration of ['resumed', 'old']) {
@@ -239,8 +307,11 @@ test('Close survives overlapping tab retries and a deferred Removed redraw', asy
   await expect(removedTab.locator(cardSelector)).toBeVisible();
   const otherRemovedCard = removedTab.locator(otherCardSelector);
   await expect(otherRemovedCard).toBeVisible();
-  await card.locator('.task-id').evaluate(label => window.getSelection().selectAllChildren(label));
-  await filter.dispatchEvent('click');
+  await page.bringToFront();
+  await card.locator('.task-id').evaluate(label => {
+    window.getSelection().selectAllChildren(label);
+    document.getElementById('task-history-toggle').click();
+  });
   await expect(filter).toHaveAttribute('data-filter', 'running');
   await expect(card).toBeVisible();
   const alreadyDeleted = page.waitForResponse(response => response.url().endsWith('/api/tasks/finished/delete'));

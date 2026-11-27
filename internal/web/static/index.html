@@ -1663,18 +1663,18 @@
       const entries = new Map(Array.from(loadLegacyTaskMarkers(key), ([requestID, stored]) =>
         [`${key}.${requestID}`, { requestID, stored }]
       ));
-      for (const [generationKey, stored] of loadTaskStorageEntries(`${key}:`)) {
+      for (const [entryKey, stored] of loadTaskStorageEntries(`${key}:`)) {
         try {
-          const [requestID] = JSON.parse(generationKey);
+          const [requestID, generation] = JSON.parse(entryKey);
           if (typeof requestID === "string" && requestID) {
-            entries.set(`${key}:${generationKey}`, { requestID, stored });
+            entries.set(`${key}:${entryKey}`, { requestID, generation, stored });
           }
         } catch (_err) {
           // A malformed key cannot identify the request to delete.
         }
       }
       const deletes = new Map();
-      for (const [storageKey, { requestID, stored }] of entries) {
+      for (const [storageKey, { requestID, generation, stored }] of entries) {
         let generations = {};
         try {
           const scope = JSON.parse(stored);
@@ -1684,7 +1684,7 @@
         } catch (_err) {
           // An unreadable scope, like an older ID-only queue, cannot identify a result.
         }
-        deletes.set(storageKey, { requestID, generations, stored });
+        deletes.set(storageKey, { requestID, generation: generation ?? generations[requestID], generations, stored });
       }
       return deletes;
     }
@@ -9865,10 +9865,10 @@
     }
 
     function hasPendingTaskDeletion(requestID, generation) {
-      const key = taskGenerationKey(requestID, generation);
-      const legacy = pendingTaskDeletes.get(`${PENDING_TASK_DELETES_KEY}.${requestID}`);
-      return pendingTaskDeletes.has(`${PENDING_TASK_DELETES_KEY}:${key}`) ||
-        legacy?.generations?.[requestID] === generation;
+      for (const pending of pendingTaskDeletes.values()) {
+        if (pending.requestID === requestID && pending.generation === generation) return true;
+      }
+      return false;
     }
 
     function isRemovedTaskHidden(task) {
@@ -10711,8 +10711,9 @@
       trackAnalyticsEvent("task_close_started");
       // Use the rendered card's scope even if a newer snapshot is already waiting to render.
       const generations = task.delete_attempt_generations || {};
-      const pending = { requestID, generations, stored: JSON.stringify(generations) };
-      const storageKey = `${PENDING_TASK_DELETES_KEY}:${key}`;
+      const stored = JSON.stringify(generations, Object.keys(generations).sort());
+      const pending = { requestID, generation, generations, stored };
+      const storageKey = `${PENDING_TASK_DELETES_KEY}:${JSON.stringify([requestID, generation, stored])}`;
       pendingTaskDeletes.set(storageKey, pending);
       persistTaskMarker(storageKey, pending.stored);
       completeTaskDismissal(requestID, true, task);
@@ -10720,15 +10721,28 @@
     }
 
     async function syncTaskDeletion(storageKey, pending) {
-      const { requestID, generations, stored } = pending;
+      const { requestID, generation, generations, stored } = pending;
       let retryDelay = 1000;
-      const body = JSON.stringify({ attempt_generations: generations });
+      const scope = Object.entries(generations);
       while (pendingTaskDeletes.get(storageKey) === pending) {
+        // A narrower delete would remove the target needed to delete its siblings.
+        let covering = generations;
+        let coveringSize = scope.length;
+        if (generation && generations[requestID] === generation) {
+          for (const candidate of loadPendingTaskDeletes().values()) {
+            if (candidate.requestID !== requestID || candidate.generation !== generation) continue;
+            const size = Object.keys(candidate.generations).length;
+            if (size > coveringSize && scope.every(([id, value]) => candidate.generations[id] === value)) {
+              covering = candidate.generations;
+              coveringSize = size;
+            }
+          }
+        }
         try {
           const response = await fetch(`/api/tasks/${encodeURIComponent(requestID)}/delete`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body,
+            body: JSON.stringify({ attempt_generations: covering }),
             signal: AbortSignal.timeout(TASK_DELETE_TIMEOUT_MS),
           });
           // The result may already be gone or have been superseded by a resumed run.
@@ -13902,7 +13916,13 @@
     }
 
     function render(snapshot, immediate = false) {
-      if (!snapshot || snapshotIsOlder(snapshot)) return;
+      if (!snapshot) {
+        renderTasks(snapshot, immediate);
+        renderFullscreenTasks(snapshot, immediate);
+        renderFullscreenTerminal(snapshot);
+        return;
+      }
+      if (snapshotIsOlder(snapshot)) return;
       syncCustomLibraryGeneration(snapshot);
       const previousSnapshot = state.snapshot;
       const selectedTask = previousSnapshot?.tasks?.find((task) => task.request_id === state.selectedTaskId);
