@@ -2676,6 +2676,32 @@ select.prompt-control {
 }
 
 
+.task-issue-history {
+  margin-top: 6px;
+  color: var(--text-soft);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.task-issue-history summary {
+  cursor: pointer;
+}
+
+.task-issue-history a {
+  color: var(--running);
+}
+
+.task-issue-history p,
+.task-issue-history ul {
+  margin: 4px 0 0;
+}
+
+.task-issue-history ul {
+  list-style: none;
+  padding-inline-start: 0.8rem;
+}
+
 .task.task-merged {
   opacity: 0.62;
   border-color: color-mix(in srgb, var(--border) 86%, #6b7280);
@@ -8893,6 +8919,18 @@ html[data-hover-mode="off"] .task-fullscreen-toggle:hover {
   border-color: color-mix(in srgb, var(--running) 48%, var(--surface-control-border));
   background: var(--accent-soft);
   color: var(--running);
+}
+
+#github-issues-planning-filter {
+  width: auto;
+  flex-basis: auto;
+  padding-inline: 8px;
+  white-space: nowrap;
+}
+
+#github-issues-planning-filter[aria-pressed="false"] {
+  background: var(--surface-control-bg);
+  color: var(--surface-action-muted);
 }
 
 .github-issues-branch-filter svg,

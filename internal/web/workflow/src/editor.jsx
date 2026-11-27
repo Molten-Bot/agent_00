@@ -558,6 +558,18 @@ function Editor({ defaultComplexity }) {
     setSelection("trigger");
     setTimeout(() => fitView.current?.({ padding: 32 }), 0);
   }
+  const selectLinkedWorkflow = useEffectEvent(() => {
+    const hash = new URL(document.URL).hash;
+    if (!loaded || !hash.startsWith("#workflow/")) return;
+    const definition = latest.current.doc.workflows.find(w => `#workflow/${encodeURIComponent(w.id)}` === hash);
+    if (definition) void choose(definition.id);
+  });
+  useEffect(() => {
+    const select = () => selectLinkedWorkflow();
+    select();
+    window.addEventListener("hashchange", select);
+    return () => window.removeEventListener("hashchange", select);
+  }, [loaded]);
   function writeDocument(document, settings, onSaved) {
     const request = jsonOptions("PUT", document);
     const keepalive = canKeepAlive(request.body);

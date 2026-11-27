@@ -1,0 +1,195 @@
+package web
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Molten-Bot/agent_00/internal/config"
+	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/localruntime"
+	"github.com/Molten-Bot/agent_00/internal/workflow"
+)
+
+func TestIssuePlanningFollowsVerifiedDelivery(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	status := issueTodo
+	var updates []string
+	s.GitHubIssueRunner = githubIssueRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+		args := strings.Replace(strings.Join(cmd.Args, " "), "api --include ", "api ", 1)
+		switch {
+		case strings.HasPrefix(args, "api --method PATCH repos/acme/repo/issues/17"):
+			status = strings.TrimPrefix(cmd.Args[len(cmd.Args)-1], "status=")
+			updates = append(updates, status)
+			fallthrough
+		case strings.HasPrefix(args, "api repos/acme/repo/issues/17 -H"):
+			state := "open"
+			if status == issueDone {
+				state = "closed"
+			}
+			return execx.Result{Stdout: fmt.Sprintf(`{"state":%q,"status":{"name":%q}}`, state, status)}, nil
+		default:
+			res, err := f.Run(ctx, cmd)
+			if strings.Contains(args, "defaultBranchRef") {
+				res.Stdout = strings.Replace(res.Stdout, `"repository":{`, `"repository":{"planningStatuses":{"totalCount":7},`, 1)
+				res.Stdout = strings.Replace(res.Stdout, `"issue":{`, fmt.Sprintf(`"issue":{"status":{"name":%q},`, status), 1)
+			}
+			return res, err
+		}
+	})
+
+	reconcileOrAdmitTestIssue(t.Context(), s)
+	record := completeRecoveryRecord(t, s, "error", 1)
+	record.Run.GitHubIssue.LinkMode = config.GitHubIssueLinkClose
+	record.PRURL = "https://github.com/acme/repo/pull/42"
+	record.RunError = "review: pull request head changed"
+	f.prs = recoveryPR("open", "null", record.Run.GitHubIssue.Claim.Branch, "main")
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReconcileIssueWork(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	record = latestRecoveryRecord(t, s)
+	if record.State != "fulfilled" || record.PlanningStatus != issueInReview || record.Outcome != "error" {
+		t.Fatalf("open draft and failed worker = %s %s %s", record.State, record.PlanningStatus, record.Outcome)
+	}
+
+	record.Outcome = "completed"
+	record.ReviewRequired = true
+	record.ReviewHead = "superseded-head"
+	f.prs = recoveryPR("closed", `"2026-05-12T00:00:00Z"`, record.Run.GitHubIssue.Claim.Branch, "main")
+	if err := s.syncIssuePlanning(t.Context(), record); err != nil || status != issueInReview {
+		t.Fatalf("stale review advanced issue: %s %v", status, err)
+	}
+	record.ReviewHead = "existing-commits"
+	f.prs = recoveryPR("closed", "null", record.Run.GitHubIssue.Claim.Branch, "main")
+	if err := s.syncIssuePlanning(t.Context(), record); err != nil || status != issueInReview {
+		t.Fatalf("closed unmerged PR advanced issue: %s %v", status, err)
+	}
+	f.prs = recoveryPR("closed", `"2026-05-12T00:00:00Z"`, record.Run.GitHubIssue.Claim.Branch, "main")
+	record.Run.GitHubIssue.LinkMode = config.GitHubIssueLinkReference
+	if err := s.syncIssuePlanning(t.Context(), record); err != nil || status != issueInReview {
+		t.Fatalf("reference-only PR closed issue: %s %v", status, err)
+	}
+	record.Run.GitHubIssue.LinkMode = config.GitHubIssueLinkClose
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReconcileIssueWork(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(updates, ","); got != "In progress,In review,Done" || latestRecoveryRecord(t, s).PlanningStatus != issueDone {
+		t.Fatalf("issue status transitions = %s", got)
+	}
+}
+
+func TestIssuePlanningBacklogRequiresExplicitStart(t *testing.T) {
+	t.Parallel()
+	var writes int
+	s := githubIssueTestServer(githubIssueRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		writes++
+		if !strings.Contains(strings.Join(cmd.Args, " "), "status=Todo") {
+			t.Fatalf("expected Todo write: %v", cmd.Args)
+		}
+		return execx.Result{Stdout: `{"state":"open","status":{"name":"Todo"}}`}, nil
+	}), true)
+	issue := &config.GitHubIssueConfig{Repository: "acme/repo", Number: 17}
+	target := issueClaimTarget{PlanningEnabled: true, PlanningStatus: "Backlog"}
+	if _, err := s.prepareIssuePlanning(t.Context(), issue, target, false); err == nil || writes != 0 {
+		t.Fatalf("automatic admission accepted Backlog: writes=%d error=%v", writes, err)
+	}
+	if got, err := s.prepareIssuePlanning(t.Context(), issue, target, true); got != issueTodo || err != nil || writes != 1 {
+		t.Fatalf("manual admission failed to plan Backlog: status=%q writes=%d error=%v", got, writes, err)
+	}
+}
+
+func TestIssueTaskSnapshotKeepsRetryAndCompletionOnOneTask(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	reconcileOrAdmitTestIssue(t.Context(), s)
+	record := completeRecoveryRecord(t, s, workflow.OutcomeReviewPending, 1)
+	record.PRURL = "https://github.com/acme/repo/pull/42"
+	record.PlanningStatus = issueInReview
+	record.State, record.Step = "retry_wait", "review"
+	record.Error = "review: pull request head changed"
+	record.RunError = record.Error
+	record.NextAttemptAt = time.Now().Add(time.Minute)
+	save := func(r localruntime.IssueClaimRecord, status string) {
+		t.Helper()
+		if err := s.IssueClaims.Save(r); err != nil {
+			t.Fatal(err)
+		}
+		body, err := json.Marshal(r.Run)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.Broker.RecordTaskRunConfig(r.RequestID, body)
+		s.Broker.IngestLog(fmt.Sprintf("task status=%s request_id=%s", status, r.RequestID))
+	}
+	save(record, "error")
+	snapshot := func() (Task, int) {
+		t.Helper()
+		res := httptest.NewRecorder()
+		s.Handler().ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/api/status", nil))
+		var state Snapshot
+		if err := json.Unmarshal(res.Body.Bytes(), &state); err != nil || len(state.Tasks) != 1 {
+			t.Fatalf("expected one task, status=%d rows=%d err=%v", res.Code, len(state.Tasks), err)
+		}
+		return state.Tasks[0], state.Stats.TotalTasks
+	}
+	waiting, _ := snapshot()
+	if waiting.Status != "queued" || waiting.RetryAt == "" || waiting.Error != record.Error || waiting.TaskID == "" {
+		t.Fatalf("retry wait missing: %+v", waiting)
+	}
+
+	retry := record
+	retry.ID, retry.RequestID = newIssueClaimID(), "request-2"
+	issue, policy := *record.Run.GitHubIssue, *record.Run.Workflow
+	claim := *issue.Claim
+	claim.ID, claim.Attempt = retry.ID, 2
+	issue.Claim, policy.EventID = &claim, "retry-event"
+	retry.Run.GitHubIssue, retry.Run.Workflow = &issue, &policy
+	retry.State, retry.Step, retry.Outcome, retry.Error = "running", "checks", "", ""
+	retry.RunError, retry.PRURL, retry.NextAttemptAt = "", "", time.Time{}
+	save(retry, "running")
+	current, total := snapshot()
+	if current.TaskID != waiting.TaskID || current.RequestID != retry.RequestID || total != 1 ||
+		current.PRURL != record.PRURL || current.GitHubIssueURL != issue.URL || current.WorkflowID != policy.ID ||
+		len(current.IssueAttempts) != 2 || current.IssueAttempts[0].Error != record.Error {
+		t.Fatalf("retry changed task identity or lost evidence: %+v total=%d", current, total)
+	}
+	retry.State, retry.Outcome, retry.RunError = "blocked", "error", "pr_verification: persistent failure"
+	save(retry, "error")
+	blocked, _ := snapshot()
+	if blocked.TaskID != waiting.TaskID || blocked.Status != "error" || blocked.Error != retry.RunError {
+		t.Fatalf("persistent failure missing: %+v", blocked)
+	}
+	s.Broker = NewBroker()
+	restoredBlocked, _ := snapshot()
+	if restoredBlocked.TaskID != blocked.TaskID || restoredBlocked.Status != "error" || !restoredBlocked.HistoryOnly {
+		t.Fatalf("restart lost blocked task: %+v", restoredBlocked)
+	}
+
+	retry.State, retry.Outcome, retry.RunError, retry.PlanningStatus = "fulfilled", "completed", "", issueDone
+	save(retry, "completed")
+	done, total := snapshot()
+	if done.TaskID != waiting.TaskID || done.Status != "merged" || len(done.IssueAttempts) != 2 || total != 1 {
+		t.Fatalf("completion did not update original task: %+v total=%d", done, total)
+	}
+	s.Broker = NewBroker()
+	restored, _ := snapshot()
+	if restored.TaskID != done.TaskID || restored.Status != "merged" || len(restored.IssueAttempts) != 2 ||
+		restored.PRURL != record.PRURL {
+		t.Fatalf("restart lost issue task history: %+v", restored)
+	}
+	if len(f.submissions) != 1 {
+		t.Fatalf("test fixture submitted %d issue tasks", len(f.submissions))
+	}
+}

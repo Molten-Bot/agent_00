@@ -145,6 +145,10 @@ func (s Server) prepareObservedIssue(ctx context.Context, record localruntime.Is
 	if err := githubassets.Validate(record.Run.Assets); err != nil {
 		return record, err
 	}
+	record.PlanningStatus, err = s.prepareIssuePlanning(ctx, issue, target, false)
+	if err != nil {
+		return record, err
+	}
 	record.IssueNodeID = target.ID
 	record.ReservationSHA = sha
 	record.Phase = "reserving"
@@ -260,6 +264,9 @@ func (s Server) ReconcileIssueWork(ctx context.Context) error {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+	if len(keys) > 0 {
+		defer s.Broker.notifyIssueTaskUpdate()
+	}
 	cursor, err := s.IssueClaims.ScanPage("@reconcile", 0)
 	if err != nil {
 		return errors.Join(listErr, err)
@@ -275,6 +282,9 @@ func (s Server) ReconcileIssueWork(ctx context.Context) error {
 		}
 		if record.Version != 2 {
 			continue
+		}
+		if err := s.syncIssuePlanning(ctx, record); err != nil {
+			problems = append(problems, fmt.Errorf("sync issue planning status: %w", err))
 		}
 		if err := s.reconcileIssueRecord(ctx, record); err != nil {
 			problems = append(problems, fmt.Errorf("issue attempt %s: %w", record.ID, err))

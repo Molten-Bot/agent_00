@@ -33,6 +33,8 @@ type Item struct {
 	Assignees      []string `json:"assignees"`
 	Reviewers      []string `json:"reviewers"`
 	IssueType      string   `json:"issueType"`
+	IssueStatus    string   `json:"issueStatus,omitempty"`
+	HasIssueStatus bool     `json:"hasIssueStatus,omitempty"`
 	BaseBranch     string   `json:"baseBranch"`
 	HeadBranch     string   `json:"headBranch"`
 	HeadSHA        string   `json:"headSha"`
@@ -62,6 +64,9 @@ func Match(w Definition, i Item) (bool, string) {
 	kind := strings.Split(w.Trigger.Event, ".")[0]
 	if i.Kind != kind {
 		return false, "Item type does not match"
+	}
+	if i.Kind == "issue" && i.HasIssueStatus && !strings.EqualFold(i.IssueStatus, "Todo") {
+		return false, "Issue planning status must be Todo"
 	}
 	if w.Trigger.Event == ActionFailedEvent {
 		if !i.ChecksFailed {

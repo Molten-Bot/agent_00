@@ -16,7 +16,7 @@
   <script id="d3-script" defer src="https://cdn.jsdelivr.net/npm/d3@7.9.2/dist/d3.min.js"></script>
   <script src="/static/site-header.js"></script>
   <script src="/static/task-asset-preview.js?v=4"></script>
-  <link rel="stylesheet" href="/static/style.css?v=19">
+  <link rel="stylesheet" href="/static/style.css?v=20">
 </head>
 <body>
   <svg class="settings-icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -380,6 +380,7 @@
                   <div class="github-issues-list-heading">
                     <h2 id="github-issues-list-title">Issues (<span id="github-issues-count">0</span>):</h2>
                     <div class="github-issues-list-heading-actions">
+                      <button id="github-issues-planning-filter" class="github-issues-branch-filter" type="button" aria-pressed="true" title="Show Todo issues">Todo</button>
                       <button id="github-issues-branch-filter" class="github-issues-branch-filter" type="button" data-value="all" data-branch-filter="with" aria-label="Branch filter: All" title="All">
                         <i data-branch-filter-icon="all" data-branch-filter-label="All" data-lucide="git-branch" aria-hidden="true"></i>
                         <i data-branch-filter-icon="with" data-branch-filter-label="With branch" data-lucide="git-branch-plus" aria-hidden="true"></i>
@@ -1301,7 +1302,7 @@
 
     function renderTaskPullRequestAction(task) {
       const prURL = taskCardPullRequestURL(task);
-      if (!isCompletedTask(task) || !prURL) {
+      if (!prURL || (!task.task_id && !isCompletedTask(task))) {
         return null;
       }
 
@@ -8982,6 +8983,7 @@
       if (hash === "dashboard" || hash === "chat" || hash === "work" || hash === "workflow") {
         return hash;
       }
+      if (hash.startsWith("workflow/")) return "workflow";
       if (hash === "current-work") {
         return "work";
       }
@@ -9057,7 +9059,7 @@
         document.head.appendChild(css);
         workflowEditorLoad = new Promise((resolve, reject) => {
           const script = document.createElement("script");
-          script.src = "/static/workflow-editor.js?v=25";
+          script.src = "/static/workflow-editor.js?v=26";
           script.onload = resolve;
           script.onerror = () => { script.remove(); css.remove(); workflowEditorLoad = null; reject(new Error("Unable to load Workflow editor. Reload to try again.")); };
           document.head.appendChild(script);
@@ -11066,6 +11068,12 @@
       for (const task of snapshot?.tasks || []) {
         const requestID = String(task?.request_id || "").trim();
         liveTaskIDs.add(requestID);
+        for (const attempt of task.issue_attempts || []) {
+          if (attempt.request_id && (attempt.request_id !== requestID || !isCompletedTask(task))) {
+            changed = state.taskHistoryByID.delete(attempt.request_id) || changed;
+            state.taskHistoryUnseenIDs.delete(attempt.request_id);
+          }
+        }
         if (!isCompletedTask(task)) {
           continue;
         }
@@ -11218,7 +11226,8 @@
 
     function runningTasks(snapshot) {
       const out = currentTasks(snapshot);
-      return out.filter((task) => !isCompletedTask(task));
+      return out.filter((task) => !isCompletedTask(task) ||
+        (task.task_id && ["blocked", "merged_unverified"].includes(task.issue_state)));
     }
 
     function taskHistoryDedupeKeys(task) {
@@ -12333,7 +12342,64 @@
     }
 
     function taskOrderRenderSig(tasks) {
-      return (tasks || []).map((task) => String(taskRequestID(task) || "")).join("|");
+      return (tasks || []).map((task) => task.task_id || taskRequestID(task)).join("|");
+    }
+
+    function renderIssueTaskHistory(task, open) {
+      if (!task.issue_attempts?.length) return null;
+      const region = document.createElement("div");
+      region.className = "task-issue-history";
+      region.addEventListener("click", (event) => event.stopPropagation());
+
+      const stateLabels = {
+        retry_wait: "Waiting to retry",
+        checks_pending: "Waiting for GitHub checks",
+        review_pending: "Waiting to resume review",
+        awaiting_review: "Waiting for review",
+        waiting: "Waiting for merge",
+        blocked: "Blocked",
+        merged_unverified: "Merged before verification",
+      };
+      const details = document.createElement("details");
+      details.open = open;
+      const summary = document.createElement("summary");
+      const stateLabel = stateLabels[task.issue_state];
+      const planning = task.issue_planning_status;
+      const heading = [planning, stateLabel, `Attempt history (${task.issue_attempts.length})`].filter(Boolean);
+      if (task.workflow_id && state.reviewSettings?.workflowEnabled) {
+        const link = document.createElement("a");
+        link.href = `#workflow/${encodeURIComponent(task.workflow_id)}`;
+        link.textContent = task.workflow_name || "Workflow";
+        summary.append(link, " · ");
+      } else if (task.workflow_name) {
+        heading.unshift(task.workflow_name);
+      }
+      summary.append(heading.join(" · "));
+      details.appendChild(summary);
+      region.appendChild(details);
+
+      const detail = [task.review_gate, stateLabel ? task.error : ""].filter(Boolean);
+      if (task.retry_at) {
+        detail.push(`Retry after ${new Date(task.retry_at).toLocaleString()}`);
+      }
+      if (detail.length) {
+        const message = document.createElement("p");
+        message.textContent = detail.join(" · ");
+        region.appendChild(message);
+      }
+
+      const list = document.createElement("ul");
+      for (const attempt of task.issue_attempts) {
+        const row = document.createElement("li");
+        const status = stateLabels[attempt.status] || taskStatusLabel(attempt.status);
+        const stages = attempt.stages?.slice() || [];
+        if (attempt.stage && stages.at(-1) !== attempt.stage) stages.push(attempt.stage);
+        const stageHistory = stages.map((stage) => stage.replaceAll("_", " ")).join(" → ");
+        row.textContent = [`Attempt ${attempt.number}`, status, stageHistory, attempt.error].filter(Boolean).join(" · ");
+        list.appendChild(row);
+      }
+      details.appendChild(list);
+      return region;
     }
 
     function taskCollectionRenderSig(tasks, options = {}) {
@@ -12347,6 +12413,7 @@
         viewMode,
         statusFilter,
         reviewCycleStep: taskReviewStepEnabled(),
+        workflowLinksEnabled: Boolean(state.reviewSettings?.workflowEnabled),
         showOutputAction,
         showImageAction,
         allowCollapse,
@@ -12363,6 +12430,14 @@
             autoMergeStep: taskAutoMergeStepEnabled(task),
             entryStep: taskProgressEntryStepID(task),
             workflowTriggered: Boolean(task?.workflow_triggered),
+            workflowName: task.workflow_name,
+            workflowID: task.workflow_id,
+            issueState: task.issue_state,
+            issuePlanningStatus: task.issue_planning_status,
+            issueAttempts: task.issue_attempts,
+            issueError: task.task_id ? task.error : undefined,
+            issueReviewGate: task.task_id ? task.review_gate : undefined,
+            retryAt: task.retry_at,
             currentState: taskCurrentStateSignature(task),
             name: taskNameText(task),
             repos: formatTaskRepos(task),
@@ -12446,6 +12521,10 @@
       const focusedRuntimeID = listNode.contains(document.activeElement) &&
         document.activeElement.matches(".task-runtime-complexity button") &&
         document.activeElement.closest(".task")?.dataset.requestId;
+      const openIssueTasks = new Set(Array.from(
+        listNode.querySelectorAll(".task-issue-history details[open]"),
+        (details) => details.closest(".task").dataset.taskId,
+      ));
       listNode.replaceChildren();
 
       const renderEmptyState = (emptyOptions = {}) => {
@@ -12597,6 +12676,10 @@
         node.className = "task";
         node.classList.toggle("task-merged", normalizedTaskStatus(task?.status) === "merged");
         node.classList.toggle("task-ui-only", Boolean(task?.ui_only));
+        if (task.task_id) {
+          node.dataset.taskId = task.task_id;
+        }
+        const issueHistory = renderIssueTaskHistory(task, openIssueTasks.has(task.task_id));
         if (requestID) {
           node.dataset.requestId = requestID;
         }
@@ -12677,6 +12760,7 @@
           const body = document.createElement("div");
           body.className = "task-body";
           body.appendChild(top);
+          if (issueHistory) body.appendChild(issueHistory);
           if (compactState) {
             node.classList.add("task-compact-state-left");
             node.appendChild(compactState);
@@ -12936,6 +13020,7 @@
           node.classList.add("task-history-status-left");
           node.appendChild(badge);
         }
+        if (issueHistory) body.appendChild(issueHistory);
         node.appendChild(body);
         if (showTaskSideActions) {
           const sideActions = document.createElement("div");
@@ -13655,6 +13740,11 @@
       if (!snapshot || snapshotIsOlder(snapshot)) return;
       syncCustomLibraryGeneration(snapshot);
       const previousSnapshot = state.snapshot;
+      const selectedTask = previousSnapshot?.tasks?.find((task) => task.request_id === state.selectedTaskId);
+      if (selectedTask?.task_id) {
+        const current = snapshot.tasks?.find((task) => task.task_id === selectedTask.task_id);
+        if (current) state.selectedTaskId = current.request_id;
+      }
       state.snapshot = snapshot;
       renderGitHubRate(snapshot.github_rate);
       syncLocalPromptSubmitDisabled();
@@ -14644,6 +14734,6 @@
   <script src="/static/commit-signing.js"></script>
   <script src="/static/custom-library-sources.js"></script>
   <script src="/static/marked.umd.js?v=18.2.1"></script>
-  <script src="/static/github-issues.js?v=20"></script>
+  <script src="/static/github-issues.js?v=21"></script>
 </body>
 </html>

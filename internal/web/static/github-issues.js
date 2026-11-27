@@ -6,6 +6,7 @@
   const browser = document.getElementById("github-issues-browser");
   const repoSelect = document.getElementById("github-issues-repo");
   const searchInput = document.getElementById("github-issues-search");
+  const planningFilter = document.getElementById("github-issues-planning-filter");
   const branchFilter = document.getElementById("github-issues-branch-filter");
   const branchFilterIcons = branchFilter ? Array.from(branchFilter.querySelectorAll("[data-branch-filter-icon]")) : [];
   const assigneeFilter = document.getElementById("github-issues-assignee-filter");
@@ -101,6 +102,7 @@
   // Issues assigned to the signed-in account are the default view; the filter
   // button turns it off to browse every open issue in the repository.
   let assignedToMe = true;
+  let todoOnly = true;
   try {
     const rememberedAssignee = localStorage.getItem(assigneeStorageKey);
     if (rememberedAssignee !== null) assignedToMe = rememberedAssignee === "true";
@@ -828,6 +830,7 @@
     if (searchQuery) query.set("search", searchQuery);
     if (requestAssignedToMe) query.set("assignee", "me");
     query.set("branch", branchFilterValue());
+    if (todoOnly) query.set("planning", "todo");
     const analyticsParams = issueAnalyticsParams(repo, {
       has_query: Boolean(searchQuery),
       assigned_to_me: requestAssignedToMe,
@@ -947,6 +950,13 @@
       void loadIssues();
     });
   }
+  planningFilter?.addEventListener("click", () => {
+    todoOnly = !todoOnly;
+    planningFilter.textContent = todoOnly ? "Todo" : "All open";
+    planningFilter.setAttribute("aria-pressed", String(todoOnly));
+    planningFilter.title = todoOnly ? "Show Todo issues" : "Show all open issues";
+    void loadIssues();
+  });
   searchInput.addEventListener("input", () => {
     if (searchTimer !== null) window.clearTimeout(searchTimer);
     searchTimer = window.setTimeout(() => {

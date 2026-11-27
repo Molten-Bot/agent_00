@@ -219,6 +219,13 @@ runtime configuration (these are server settings, not run-config fields):
 }
 ```
 
+Where GitHub issue statuses are available, automatic workflows pick up Todo
+issues. Studio defaults to Todo and has an All open filter for manually starting
+backlog issues. An admitted issue moves to In progress, then In review once its
+pull request is published. With issue auto-close enabled, a successfully delivered
+and merged pull request moves the issue to Done. Studio keeps retries and stage
+history on the originating issue task.
+
 Repository rules must permit creation of ownership tags, branches, and issue
 labels. Permission or storage failures remain explicit blockers. Progress cannot
 be guaranteed during a permanent outage or loss of persistent storage; unresolved

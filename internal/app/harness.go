@@ -222,6 +222,8 @@ type agentInvocationLogMetadata struct {
 type Harness struct {
 	// OnStep reports semantic progress, never command output or heartbeats.
 	OnStep func(string)
+	// OnIssuePRPublished persists the published PR before checks and review.
+	OnIssuePRPublished func(string) error
 	// OnCheckout reports that all repositories have been checked out successfully.
 	OnCheckout func()
 	// OnPRTitle reports reused or updated PR titles and handles creation when OnPRCreated is unset.
@@ -1068,6 +1070,7 @@ func (h Harness) finalizePullRequestReview(
 		return ExitPR, "review", fmt.Errorf("waiting for a submitted clean review receipt")
 	}
 	if repo.PRVerification != "" {
+		h.step("pr_verification")
 		evidence, err := h.waitForDraftVerificationEvidence(ctx, *repo)
 		if err == nil {
 			evidence.commits, err = h.loadDraftPatchCommits(ctx, *repo)
@@ -1310,6 +1313,11 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 	if cfg.AssignCreatorEnabled() {
 		if err := h.assignGitHubIssueCreator(ctx, *repo, cfg.GitHubIssue); err != nil {
 			return ExitPR, "pr", err
+		}
+	}
+	if h.OnIssuePRPublished != nil && repo.PRURL != "" {
+		if err := h.OnIssuePRPublished(repo.PRURL); err != nil {
+			return ExitPR, "pr", fmt.Errorf("persist published issue pull request: %w", err)
 		}
 	}
 	h.logf("stage=pr status=ok repo=%s repo_dir=%s pr_url=%s", repo.URL, repo.RelDir, repo.PRURL)
@@ -4848,6 +4856,7 @@ func (h Harness) runFinalReviewCycle(
 			return ExitSuccess, "review", fmt.Errorf("%w after exhausting %d fix pass(es); leaving pull request in draft for human review", errFinalReviewFindingsRemain, h.FinalReviewPasses)
 		}
 
+		h.step("review_fix")
 		h.logf(
 			"stage=review_fix status=start action=agent review_mode=%s pass=%d total=%d repo=%s repo_dir=%s pr_url=%s",
 			reviewMode,
@@ -4905,6 +4914,7 @@ func (h Harness) runFinalReviewCycle(
 
 		fixCfg := cfg
 		fixCfg.CommitMessage = reviewFixCommitMessage(cfg.CommitMessage, pass)
+		h.step("review_checks")
 		h.logf(
 			"stage=review_checks status=start action=verify review_mode=%s pass=%d total=%d repo=%s repo_dir=%s pr_url=%s",
 			reviewMode,

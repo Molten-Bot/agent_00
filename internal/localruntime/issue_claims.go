@@ -35,7 +35,11 @@ type IssueClaimRecord struct {
 	CheckoutComplete bool          `json:"checkoutComplete,omitempty"`
 	PublicationReady bool          `json:"publicationReady,omitempty"`
 	PRVerification   string        `json:"prVerification,omitempty"`
+	PlanningStatus   string        `json:"planningStatus,omitempty"`
+	ReviewHead       string        `json:"reviewHead,omitempty"`
+	ReviewRequired   bool          `json:"reviewRequired,omitempty"`
 	Step             string        `json:"step,omitempty"`
+	Stages           []string      `json:"stages,omitempty"`
 	StepStartedAt    time.Time     `json:"stepStartedAt,omitempty"`
 	StartedAt        time.Time     `json:"startedAt,omitempty"`
 	StoppedAt        time.Time     `json:"stoppedAt,omitempty"`
