@@ -146,6 +146,106 @@ func TestTaskDiskHistoryFlushRetriesVersionedWrite(t *testing.T) {
 	}
 }
 
+func TestTaskDiskHistoryUsesScalarSnapshotUntilVersionedHistoryRecovers(t *testing.T) {
+	t.Parallel()
+
+	const baseline = 2 * 1024 * 1024 * 1024
+	path := filepath.Join(t.TempDir(), "disk-history.json")
+	history, err := OpenTaskDiskHistory(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordedAt := time.Now().Add(-taskDiskSampleMaxAge - time.Hour)
+	history.now = func() time.Time { return recordedAt }
+	for range 2 {
+		if err := history.Record("repo", baseline); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := history.Record("outlier", 3*baseline); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, recordedAt, recordedAt); err != nil {
+		t.Fatal(err)
+	}
+	versioned := TaskDiskSamplesPath(path)
+	backup := versioned + ".backup"
+	if err := os.Rename(versioned, backup); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(versioned, []byte("invalid"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	history, err = OpenTaskDiskHistory(path)
+	if err == nil {
+		t.Fatal("open did not report the unreadable versioned history")
+	}
+	if got := history.RequiredBytes("repo"); got != baseline {
+		t.Errorf("requirement from older scalar snapshot = %d, want %d", got, baseline)
+	}
+	if err := os.Rename(backup, versioned); err != nil {
+		t.Fatal(err)
+	}
+	if err := history.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if got := history.RequiredBytes("repo"); got != baseline {
+		t.Errorf("requirement after recovery = %d, want %d", got, baseline)
+	}
+	if got := history.RequiredBytes("outlier"); got != 0 {
+		t.Errorf("expired peak after recovery = %d, want 0", got)
+	}
+}
+
+func TestTaskDiskHistoryRecoversNewScalarMatchingExpiredPeak(t *testing.T) {
+	t.Parallel()
+
+	const size = 2 * 1024 * 1024 * 1024
+	path := filepath.Join(t.TempDir(), "disk-history.json")
+	history, err := OpenTaskDiskHistory(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	recordedAt := now.Add(-taskDiskSampleMaxAge - time.Hour)
+	history.now = func() time.Time { return recordedAt }
+	if err := history.Record("repo", size); err != nil {
+		t.Fatal(err)
+	}
+	versioned := TaskDiskSamplesPath(path)
+	if err := os.Chtimes(versioned, recordedAt, recordedAt); err != nil {
+		t.Fatal(err)
+	}
+	backup := versioned + ".backup"
+	if err := os.Rename(versioned, backup); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(versioned, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	history.now = func() time.Time { return now }
+	if err := history.Record("repo", size); err == nil {
+		t.Fatal("record succeeded while versioned destination was blocked")
+	}
+	if err := os.Remove(versioned); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(backup, versioned); err != nil {
+		t.Fatal(err)
+	}
+	history, err = OpenTaskDiskHistory(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := history.RequiredBytes("repo"); got != size {
+		t.Errorf("requirement from newer scalar snapshot = %d, want %d", got, size)
+	}
+	history.now = func() time.Time { return now.Add(2 * taskDiskLegacyMaxAge) }
+	if got := history.RequiredBytes("repo"); got != 0 {
+		t.Errorf("requirement after the imported snapshot expires = %d, want 0", got)
+	}
+}
+
 func TestTaskDiskHistoryMergesPendingSamplesAfterFailedLoad(t *testing.T) {
 	t.Parallel()
 
@@ -301,6 +401,41 @@ func TestTaskDiskHistoryRetainsBaselineAfterIdle(t *testing.T) {
 	}
 	if got := reopened.RequiredBytes("repo"); got != baseline/2 {
 		t.Errorf("estimate after smaller runs = %d, want %d", got, baseline/2)
+	}
+}
+
+func TestTaskDiskHistoryBuildsBaselineFromInfrequentRuns(t *testing.T) {
+	t.Parallel()
+
+	const size = 2 * 1024 * 1024 * 1024
+	path := filepath.Join(t.TempDir(), "disk-history.json")
+	history, err := OpenTaskDiskHistory(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	history.now = func() time.Time { return now.Add(-taskDiskSampleMaxAge - time.Hour) }
+	if err := history.Record("repo", size); err != nil {
+		t.Fatal(err)
+	}
+	history.now = func() time.Time { return now }
+	if got := history.RequiredBytes("repo"); got != 0 {
+		t.Fatalf("single expired sample sets requirement = %d, want 0", got)
+	}
+	if err := history.Record("other-repo", 128); err != nil {
+		t.Fatal(err)
+	}
+	history, err = OpenTaskDiskHistory(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	history.now = func() time.Time { return now }
+	if err := history.Record("repo", size); err != nil {
+		t.Fatal(err)
+	}
+	history.now = func() time.Time { return now.Add(taskDiskSampleMaxAge) }
+	if got := history.RequiredBytes("repo"); got != size {
+		t.Errorf("baseline from infrequent runs = %d, want %d", got, size)
 	}
 }
 

@@ -41,6 +41,12 @@ type taskDiskSample struct {
 	Bytes     uint64    `json:"bytes"`
 	ExpiresAt time.Time `json:"expiresAt"`
 	Temporary bool      `json:"temporary,omitempty"`
+
+	scalarFallback bool // Used only in memory while the versioned file is unreadable.
+}
+
+func (s taskDiskSample) peakActive(now time.Time) bool {
+	return s.scalarFallback || now.Before(s.ExpiresAt)
 }
 
 type taskDiskSamples []taskDiskSample
@@ -48,7 +54,7 @@ type taskDiskSamples []taskDiskSample
 func (s taskDiskSamples) estimate(now time.Time) uint64 {
 	var peak, largest, baseline uint64
 	for _, sample := range s {
-		if now.Before(sample.ExpiresAt) {
+		if sample.peakActive(now) {
 			peak = max(peak, sample.Bytes)
 		}
 		// Keep the largest size supported by at least two successful runs.
@@ -67,7 +73,7 @@ func (s taskDiskSamples) estimate(now time.Time) uint64 {
 
 func recentTaskDiskSamples(samples taskDiskSamples, now time.Time) taskDiskSamples {
 	samples = slices.DeleteFunc(samples, func(sample taskDiskSample) bool {
-		return sample.Temporary && !now.Before(sample.ExpiresAt)
+		return sample.Temporary && !sample.peakActive(now)
 	})
 	return samples[max(0, len(samples)-taskDiskHistoryWindow):]
 }
@@ -118,14 +124,17 @@ func readTaskDiskSamples(path string) (map[string]taskDiskSamples, error) {
 	imports := make(map[string]taskDiskSamples)
 	for key, value := range legacy {
 		var sizes []uint64
+		var scalarFallback bool
 		if value[0] == '[' {
 			err = json.Unmarshal(value, &sizes)
 		} else {
 			var size uint64
 			err = json.Unmarshal(value, &size)
+			scalarFallback = versionedErr != nil
 			// A newer scalar snapshot can contain a rollback estimate or
 			// a measurement whose versioned write did not complete.
-			if size > samples[key].estimate(versionedAt) {
+			// A versioned peak may have expired before the scalar write.
+			if size > samples[key].estimate(legacyAt) {
 				sizes = []uint64{size}
 			}
 		}
@@ -135,6 +144,7 @@ func readTaskDiskSamples(path string) (map[string]taskDiskSamples, error) {
 		for _, size := range sizes {
 			imports[key] = append(imports[key], taskDiskSample{
 				Bytes: size, ExpiresAt: legacyAt.Add(taskDiskLegacyMaxAge), Temporary: true,
+				scalarFallback: scalarFallback,
 			})
 		}
 	}
@@ -216,7 +226,7 @@ func (h *TaskDiskHistory) Record(key string, size uint64) error {
 	return h.flushLocked()
 }
 
-// Flush retries any unsaved measurements without recording a new sample.
+// Flush retries loading history and saving pending measurements.
 func (h *TaskDiskHistory) Flush() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -224,7 +234,7 @@ func (h *TaskDiskHistory) Flush() error {
 }
 
 func (h *TaskDiskHistory) flushLocked() error {
-	if h.path == "" || !h.dirty {
+	if h.path == "" || (!h.needsLoad && !h.dirty) {
 		return nil
 	}
 	if h.needsLoad {
@@ -248,12 +258,18 @@ func (h *TaskDiskHistory) flushLocked() error {
 	estimates := make(map[string]uint64)
 	for key, samples := range h.samples {
 		samples = recentTaskDiskSamples(samples, now)
-		if estimate := samples.estimate(now); estimate > 0 {
-			h.samples[key] = samples
-			estimates[key] = estimate
-		} else {
+		if len(samples) == 0 {
 			delete(h.samples, key)
+			continue
 		}
+		// Expired successful samples can still establish a baseline with a later run.
+		h.samples[key] = samples
+		if estimate := samples.estimate(now); estimate > 0 {
+			estimates[key] = estimate
+		}
+	}
+	if !h.dirty {
+		return nil
 	}
 	// Write the rollback-compatible snapshot first so a newer scalar file
 	// can only come from an older release or an interrupted save.
