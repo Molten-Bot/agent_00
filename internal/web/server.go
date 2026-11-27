@@ -3109,6 +3109,7 @@ func (s Server) handleTaskRemoval(w http.ResponseWriter, r *http.Request, reques
 	}
 
 	remove := s.Broker.CloseTask
+	cleanupTarget := true
 	if forget {
 		remove = s.Broker.ForgetTask
 		if r.Body != nil && r.Body != http.NoBody {
@@ -3125,7 +3126,11 @@ func (s Server) handleTaskRemoval(w http.ResponseWriter, r *http.Request, reques
 			if generations == nil {
 				generations = map[string]string{}
 			}
-			remove = func(id string) error { return s.Broker.forgetTask(id, generations) }
+			remove = func(id string) error {
+				var err error
+				cleanupTarget, err = s.Broker.forgetTask(id, generations)
+				return err
+			}
 		}
 	}
 	if err := remove(requestID); err != nil {
@@ -3149,7 +3154,7 @@ func (s Server) handleTaskRemoval(w http.ResponseWriter, r *http.Request, reques
 		return
 	}
 
-	if s.CloseTask != nil {
+	if cleanupTarget && s.CloseTask != nil {
 		if err := s.CloseTask(r.Context(), requestID); err != nil {
 			s.logf("localruntime.ui status=warn event=task_close_cleanup request_id=%s err=%q", requestID, err)
 		}

@@ -94,7 +94,13 @@ test('Close keeps separate scopes and generations across tabs', async t => {
   });
   const origin = new URL(baseURL).origin;
   await context.addInitScript(origin => {
-    if (location.origin === origin) localStorage.setItem('hubui.taskStatusFilter', 'completed');
+    if (location.origin === origin) {
+      localStorage.setItem('hubui.taskStatusFilter', 'completed');
+      // Model clicks made before the tabs receive each other's storage events.
+      window.addEventListener('storage', event => {
+        if (/^hubui\.(pendingTaskDeletes|dismissedTaskIds):/.test(event.key)) event.stopImmediatePropagation();
+      });
+    }
   }, origin);
   await context.route('**/*', route => {
     const url = new URL(route.request().url());
@@ -164,6 +170,54 @@ test('Close keeps separate scopes and generations across tabs', async t => {
   }
 });
 
+test('An already-open tab takes over a queued delete after the closing tab exits', async t => {
+  const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+  t.after(() => browser.close());
+  const context = await browser.newContext();
+  const errors = [];
+  context.on('weberror', event => errors.push(event.error().message));
+  t.after(() => assert.deepEqual(errors, []));
+
+  let available = false;
+  const origin = new URL(baseURL).origin;
+  await context.addInitScript(origin => {
+    if (location.origin === origin) localStorage.setItem('hubui.taskStatusFilter', 'completed');
+  }, origin);
+  await context.route('**/*', route => {
+    const url = new URL(route.request().url());
+    if (url.origin !== origin) return route.abort();
+    switch (url.pathname) {
+      case '/api/tasks/handoff/delete':
+        return available ? route.continue() : route.fulfill({ status: 503 });
+      case '/api/agent-auth':
+        return route.fulfill({ json: { ok: true, auth: { required: false, ready: true, state: 'ready' } } });
+      case '/api/github/repos':
+        return route.fulfill({ json: { ok: true, repos: [] } });
+      default:
+        return route.continue();
+    }
+  });
+
+  const sender = await context.newPage();
+  const receiver = await context.newPage();
+  const card = tab => tab.locator('#task-list .task[data-request-id="handoff"]');
+  for (const tab of [sender, receiver]) {
+    await tab.goto(`${baseURL}/#current-work`);
+    await expect(card(tab)).toBeVisible();
+  }
+  const failed = sender.waitForResponse(response => response.url().endsWith('/api/tasks/handoff/delete'));
+  await card(sender).getByRole('button', { name: 'Delete task' }).click();
+  assert.equal((await failed).status(), 503);
+  await sender.close();
+  await expect(card(receiver)).toHaveCount(0);
+
+  const deleted = receiver.waitForResponse(response => response.url().endsWith('/api/tasks/handoff/delete') && response.ok());
+  available = true;
+  assert.equal((await deleted).status(), 200);
+  await expect.poll(() => pendingDeleteKeys(receiver, 'handoff')).toEqual([]);
+  await expect(card(receiver)).toHaveCount(0);
+});
+
 test('Close survives overlapping tab retries and a deferred Removed redraw', async t => {
   const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
   t.after(() => browser.close());
@@ -189,9 +243,8 @@ test('Close survives overlapping tab retries and a deferred Removed redraw', asy
     if (url.origin !== new URL(baseURL).origin) return route.abort();
     switch (url.pathname) {
       case '/api/tasks/finished/delete':
-        attempts++;
         if (allowDelete) return route.continue();
-        if (attempts === 1) {
+        if (route.request().frame().page() === page && ++attempts === 1) {
           await firstAttempt;
           return route.abort('connectionreset');
         }
@@ -249,6 +302,9 @@ test('Close survives overlapping tab retries and a deferred Removed redraw', asy
   await expect(page.locator('#local-prompt-status')).not.toContainText('Delete failed');
 
   assert.equal((await otherTab.request.post(`${baseURL}/test/rerun`)).status(), 204);
+  const expanded = await (await page.request.get(`${baseURL}/api/status`)).json();
+  assert.ok(expanded.tasks.find(task => task.request_id === 'finished').delete_attempt_generations.later);
+  await page.evaluate(next => render(next, true), expanded);
   allowDelete = true;
   const deleted = page.waitForResponse(response => response.url().endsWith('/api/tasks/finished/delete') && response.ok());
   await page.reload();
@@ -317,7 +373,9 @@ test('Close survives overlapping tab retries and a deferred Removed redraw', asy
   const alreadyDeleted = page.waitForResponse(response => response.url().endsWith('/api/tasks/finished/delete'));
   await close.click();
   await expect(card).toHaveCount(0);
-  assert.equal((await alreadyDeleted).status(), 404);
+  const hiddenAgain = await alreadyDeleted;
+  assert.equal(hiddenAgain.status(), 404);
+  assert.deepEqual(Object.keys(hiddenAgain.request().postDataJSON().attempt_generations), ['finished']);
   await expect.poll(() => pendingDeleteKeys(page, 'finished')).toEqual([]);
   await filter.click();
   await filter.click();

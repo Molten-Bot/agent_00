@@ -334,6 +334,7 @@ type Broker struct {
 	attempts          map[string][]taskAttemptState
 	workflowDurations map[string]time.Duration
 	attemptRoots      map[string]string
+	forgottenAttempts map[taskResult]string
 	attemptSeq        uint64
 	rejectedSeq       uint64
 	subs              map[chan struct{}]struct{}
@@ -436,22 +437,28 @@ type taskAttemptState struct {
 	Generation string
 }
 
+type taskResult struct {
+	requestID  string
+	generation string
+}
+
 // NewBroker returns a monitor state broker with safe defaults.
 func NewBroker() *Broker {
 	now := time.Now
 	return &Broker{
-		now:              now,
-		maxEvents:        defaultMaxEvents,
-		maxTaskLog:       defaultMaxTaskLogs,
-		tasks:            map[string]*taskState{},
-		verifiedTaskPRs:  map[string]verifiedTaskPR{},
-		closedTasks:      map[string]time.Time{},
-		runConfigs:       map[string][]byte{},
-		repoIndex:        map[string]int{},
-		attempts:         map[string][]taskAttemptState{},
-		attemptRoots:     map[string]string{},
-		subs:             map[chan struct{}]struct{}{},
-		sessionStartedAt: now().UTC(),
+		now:               now,
+		maxEvents:         defaultMaxEvents,
+		maxTaskLog:        defaultMaxTaskLogs,
+		tasks:             map[string]*taskState{},
+		verifiedTaskPRs:   map[string]verifiedTaskPR{},
+		closedTasks:       map[string]time.Time{},
+		runConfigs:        map[string][]byte{},
+		repoIndex:         map[string]int{},
+		attempts:          map[string][]taskAttemptState{},
+		attemptRoots:      map[string]string{},
+		forgottenAttempts: map[taskResult]string{},
+		subs:              map[chan struct{}]struct{}{},
+		sessionStartedAt:  now().UTC(),
 	}
 }
 
@@ -971,7 +978,7 @@ func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON [
 					return true
 				})
 				if len(kept) == 0 {
-					delete(b.attempts, old)
+					b.deleteAttemptChainLocked(old)
 				} else {
 					b.attempts[old] = kept
 				}
@@ -2120,17 +2127,19 @@ func (b *Broker) CloseTask(requestID string) error {
 // ForgetTask deletes a terminal task (including closed history) and its completed
 // attempt chain from dashboard metrics. Active sibling attempts are retained.
 func (b *Broker) ForgetTask(requestID string) error {
-	return b.forgetTask(requestID, nil)
+	_, err := b.forgetTask(requestID, nil)
+	return err
 }
 
 // A non-nil generations scope binds deletion to the completed attempts seen by the caller.
-func (b *Broker) forgetTask(requestID string, generations map[string]string) error {
+// The bool reports whether the target itself was removed and needs cleanup.
+func (b *Broker) forgetTask(requestID string, generations map[string]string) (bool, error) {
 	if b == nil {
-		return ErrTaskNotFound
+		return false, ErrTaskNotFound
 	}
 	requestID = strings.TrimSpace(requestID)
 	if requestID == "" {
-		return ErrTaskNotFound
+		return false, ErrTaskNotFound
 	}
 
 	b.mu.Lock()
@@ -2139,22 +2148,32 @@ func (b *Broker) forgetTask(requestID string, generations map[string]string) err
 	root := stringsx.FirstNonEmpty(b.attemptRoots[requestID], requestID)
 	if generations != nil {
 		generation := generations[requestID]
-		if generation == "" || !slices.ContainsFunc(b.attempts[root], func(attempt taskAttemptState) bool {
+		if generation == "" {
+			return false, ErrTaskNotFound
+		}
+		if !slices.ContainsFunc(b.attempts[root], func(attempt taskAttemptState) bool {
 			return attempt.RequestID == requestID && attempt.Generation == generation && isCompletedTaskStatus(attempt.Status)
 		}) {
-			return ErrTaskNotFound
+			// A narrower delete may have removed the target. Use its original root
+			// to finish the scope without cleaning up the target again.
+			forgottenRoot, ok := b.forgottenAttempts[taskResult{requestID, generation}]
+			if !ok || !b.forgetTaskAttemptsLocked(forgottenRoot, generations) {
+				return false, ErrTaskNotFound
+			}
+			b.notifySubscribersLocked()
+			return false, nil
 		}
 	}
 	if task, ok := b.tasks[requestID]; ok {
 		if task == nil || !isCompletedTaskStatus(task.Status) {
-			return ErrTaskNotCompleted
+			return false, ErrTaskNotCompleted
 		}
 	} else if _, ok := b.attemptRoots[requestID]; !ok {
-		return ErrTaskNotFound
+		return false, ErrTaskNotFound
 	}
 	b.forgetTaskAttemptsLocked(root, generations)
 	b.notifySubscribersLocked()
-	return nil
+	return true, nil
 }
 
 func (b *Broker) completedAttemptGenerations(requestID string) map[string]string {
@@ -2188,7 +2207,8 @@ func (b *Broker) closeTaskLocked(requestID string) error {
 }
 
 // Keep active siblings and any siblings outside the requested deletion scope.
-func (b *Broker) forgetTaskAttemptsLocked(root string, generations map[string]string) {
+func (b *Broker) forgetTaskAttemptsLocked(root string, generations map[string]string) bool {
+	now := b.now().UTC()
 	attempts := b.attempts[root]
 	kept := make([]taskAttemptState, 0, len(attempts))
 	for _, attempt := range attempts {
@@ -2202,15 +2222,29 @@ func (b *Broker) forgetTaskAttemptsLocked(root string, generations map[string]st
 			continue
 		}
 		delete(b.tasks, attempt.RequestID)
-		b.closedTasks[attempt.RequestID] = b.now().UTC()
+		b.closedTasks[attempt.RequestID] = now
 		delete(b.attemptRoots, attempt.RequestID)
+		if attempt.Generation != "" && isCompletedTaskStatus(attempt.Status) {
+			b.forgottenAttempts[taskResult{attempt.RequestID, attempt.Generation}] = root
+		}
+	}
+	if generations != nil && len(kept) == len(attempts) {
+		return false
 	}
 	if len(kept) == 0 {
 		delete(b.attemptRoots, root)
-		delete(b.attempts, root)
-		return
+		b.deleteAttemptChainLocked(root)
+	} else {
+		b.attempts[root] = kept
 	}
-	b.attempts[root] = kept
+	return len(kept) < len(attempts)
+}
+
+func (b *Broker) deleteAttemptChainLocked(root string) {
+	delete(b.attempts, root)
+	maps.DeleteFunc(b.forgottenAttempts, func(_ taskResult, forgottenRoot string) bool {
+		return forgottenRoot == root
+	})
 }
 
 func (b *Broker) pruneExpiredTasksLocked(now time.Time) {

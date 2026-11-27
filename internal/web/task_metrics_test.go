@@ -22,6 +22,7 @@ func TestTaskDeleteDismissesImmediatelyAndRetriesInBrowser(t *testing.T) {
 	b.IngestLog("task status=completed request_id=other")
 	b.IngestLog("task status=start request_id=running")
 	b.IngestLog("task status=error request_id=resumed exit_code=1")
+	b.IngestLog("task status=completed request_id=handoff")
 	srv := NewServer("", b)
 	mux := http.NewServeMux()
 	mux.Handle("/", srv.Handler())
@@ -156,6 +157,53 @@ func TestQueuedTaskDeletePreservesResumedGeneration(t *testing.T) {
 	}
 	if len(cleaned) != 1 || cleaned[0] != "finished" {
 		t.Fatalf("expected cleanup only for finished sibling: %v", cleaned)
+	}
+}
+
+func TestScopedTaskDeleteFinishesChainAfterTargetWasDeleted(t *testing.T) {
+	t.Parallel()
+
+	b := NewBroker()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	b.now = func() time.Time { return now }
+	b.IngestLog("task status=completed request_id=original")
+	b.RecordTaskRerunAttempt("original", "finished")
+	b.IngestLog("task status=completed request_id=finished")
+	scope := b.completedAttemptGenerations("finished")
+
+	srv := NewServer("", b)
+	var cleaned []string
+	srv.CloseTask = func(_ context.Context, id string) error {
+		cleaned = append(cleaned, id)
+		return nil
+	}
+	handler := srv.Handler()
+	postDelete := func(generations map[string]string, want int) {
+		t.Helper()
+		body, err := json.Marshal(map[string]any{"attempt_generations": generations})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp := httptest.NewRecorder()
+		handler.ServeHTTP(resp, httptest.NewRequest(http.MethodPost, "/api/tasks/finished/delete", strings.NewReader(string(body))))
+		if resp.Code != want {
+			t.Fatalf("delete = %d, want %d: %s", resp.Code, want, resp.Body.String())
+		}
+	}
+
+	postDelete(map[string]string{"finished": scope["finished"]}, http.StatusOK)
+	now = now.Add(defaultClosedTaskRetention + time.Second)
+	b.IngestLog("task status=completed request_id=unrelated")
+	scope["unrelated"] = b.completedAttemptGenerations("unrelated")["unrelated"]
+	postDelete(map[string]string{"finished": "unknown-generation", "original": scope["original"]}, http.StatusNotFound)
+	postDelete(scope, http.StatusOK)
+	postDelete(scope, http.StatusNotFound)
+
+	if len(cleaned) != 1 || cleaned[0] != "finished" {
+		t.Fatalf("cleanup ran more than once for the target: %v", cleaned)
+	}
+	if snap := b.Snapshot(); len(snap.Tasks) != 1 || snap.Tasks[0].RequestID != "unrelated" || snap.Stats.CompletedTasks != 1 {
+		t.Fatalf("expected only the unrelated task after scoped retry: %#v", snap)
 	}
 }
 

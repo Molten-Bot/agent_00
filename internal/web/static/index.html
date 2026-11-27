@@ -10710,7 +10710,11 @@
       }
       trackAnalyticsEvent("task_close_started");
       // Use the rendered card's scope even if a newer snapshot is already waiting to render.
-      const generations = task.delete_attempt_generations || {};
+      const observedGenerations = task.delete_attempt_generations || {};
+      // Hiding an already-dismissed card must not sweep in siblings from later snapshots.
+      const generations = task.removed_history && observedGenerations[requestID]
+        ? { [requestID]: generation }
+        : observedGenerations;
       const stored = JSON.stringify(generations, Object.keys(generations).sort());
       const pending = { requestID, generation, generations, stored };
       const storageKey = `${PENDING_TASK_DELETES_KEY}:${JSON.stringify([requestID, generation, stored])}`;
@@ -10725,7 +10729,7 @@
       let retryDelay = 1000;
       const scope = Object.entries(generations);
       while (pendingTaskDeletes.get(storageKey) === pending) {
-        // A narrower delete would remove the target needed to delete its siblings.
+        // Prefer a covering scope so overlapping requests can settle in one delete.
         let covering = generations;
         let coveringSize = scope.length;
         if (generation && generations[requestID] === generation) {
@@ -10767,6 +10771,30 @@
         await new Promise((resolve) => window.setTimeout(resolve, retryDelay));
         retryDelay = Math.min(retryDelay * 2, TASK_DELETE_MAX_RETRY_DELAY_MS);
       }
+    }
+
+    function syncStoredTaskDeletion(event) {
+      if (event.storageArea !== localStorage || !event.key || event.newValue === null) return;
+      const dismissalPrefix = `${DISMISSED_TASKS_KEY}:`;
+      if (event.key.startsWith(dismissalPrefix)) {
+        const key = event.key.slice(dismissalPrefix.length);
+        if (!state.dismissedTaskGenerations.has(key)) {
+          state.dismissedTaskGenerations.add(key);
+          render(state.snapshot, true);
+        }
+        return;
+      }
+      if (event.key !== PENDING_TASK_DELETES_KEY &&
+          !event.key.startsWith(`${PENDING_TASK_DELETES_KEY}:`) &&
+          !event.key.startsWith(`${PENDING_TASK_DELETES_KEY}.`)) return;
+      let changed = false;
+      for (const [storageKey, pending] of loadPendingTaskDeletes()) {
+        if (pendingTaskDeletes.get(storageKey)?.stored === pending.stored) continue;
+        pendingTaskDeletes.set(storageKey, pending);
+        void syncTaskDeletion(storageKey, pending);
+        changed = true;
+      }
+      if (changed) render(state.snapshot, true);
     }
 
     function renderTaskCloseButton(task, requestID) {
@@ -14914,6 +14942,7 @@
     void refreshSpeechStatus();
     loadInitial();
     startStream();
+    window.addEventListener("storage", syncStoredTaskDeletion);
     for (const [storageKey, pending] of pendingTaskDeletes) {
       void syncTaskDeletion(storageKey, pending);
     }
