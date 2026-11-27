@@ -1541,18 +1541,19 @@ func (e *Engine) ObserveIssueMerge(id, requestID, prURL string, mergedAt time.Ti
 		}
 		r.Status, r.Reason, r.PRURL = "merged", reason, prURL
 		r.RequestID, r.UpdatedAt, r.GitHubRetryAt = requestID, e.now(), time.Time{}
+		if r.TimingWait != nil {
+			end := mergedAt
+			if end.IsZero() {
+				end = r.UpdatedAt
+			}
+			// Save retires this activation. Log the finish first so a restart
+			// cannot lose the wait. Replayed finishes fold into the same span.
+			r.TimingWait.End(end).Write(e.TimingLog, requestID)
+		}
 		merged = *r
-		r.TimingWait = nil
 		return nil
 	})
 	if err == nil && merged.ID != "" {
-		if merged.TimingWait != nil {
-			end := mergedAt
-			if end.IsZero() {
-				end = merged.UpdatedAt
-			}
-			merged.TimingWait.End(end).Write(e.TimingLog, merged.RequestID)
-		}
 		e.logRun(merged, "transition", mergedAt)
 	}
 	return err

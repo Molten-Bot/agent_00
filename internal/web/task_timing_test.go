@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,46 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/tasktiming"
 )
+
+func TestBrokerRetainsTimingBeforeTaskStart(t *testing.T) {
+	t.Parallel()
+	t.Run("lifecycle log", func(t *testing.T) { testBrokerEarlyTiming(t, false) })
+	t.Run("run config", func(t *testing.T) { testBrokerEarlyTiming(t, true) })
+}
+
+func testBrokerEarlyTiming(t *testing.T, registerConfig bool) {
+	t.Helper()
+	b := NewBroker()
+	b.maxEvents = 1
+	acceptedAt := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
+	now := acceptedAt
+	b.now = func() time.Time { return now }
+	const queueStart = "task_timing request_id=delivery attempt=first span=1 stage=queue started_at=2026-11-27T12:00:00Z ended_at=unknown wall_ms=unknown agent_ms=unknown"
+	const queueEnd = "task_timing request_id=delivery attempt=first span=1 stage=queue started_at=2026-11-27T12:00:00Z ended_at=2026-11-27T12:00:02Z wall_ms=2000 agent_ms=unknown"
+	const taskStart = "task status=start request_id=delivery"
+	b.IngestLog(queueStart)
+	if _, ok := b.Task("delivery"); ok {
+		t.Fatal("timing created a task before its lifecycle log")
+	}
+	now = now.Add(2 * time.Second)
+	b.IngestLog(queueEnd)
+	if registerConfig {
+		b.RecordTaskRunConfig("delivery", []byte(`{"prompt":"fixture"}`))
+	}
+	b.IngestLog(taskStart)
+	task, ok := b.Task("delivery")
+	if !ok || task.TimingRevision != 2 || task.TimingAttempt != "first" {
+		t.Fatalf("task timing state = %+v, found = %v", task, ok)
+	}
+	want := []TaskLog{
+		{Time: acceptedAt.Format(time.RFC3339Nano), Stream: "meta", Text: queueStart},
+		{Time: now.Format(time.RFC3339Nano), Stream: "meta", Text: queueEnd},
+		{Time: now.Format(time.RFC3339Nano), Stream: "meta", Text: taskStart},
+	}
+	if !slices.Equal(task.Logs, want) {
+		t.Fatalf("task logs = %+v, want %+v", task.Logs, want)
+	}
+}
 
 func TestTaskTimingHistoryInBrowser(t *testing.T) {
 	requireBrowserTooling(t, "task timing history")

@@ -81,6 +81,55 @@ func TestWorkflowTimingPersistsCheckWaitThroughRestartAndMerge(t *testing.T) {
 	}
 }
 
+func TestObserveIssueMergeClosesWaitBeforeRetiringActivation(t *testing.T) {
+	t.Parallel()
+	w := definition("delivery")
+	e, _, _ := testEngine(t, w)
+	start := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
+	mergedAt := start.Add(10 * time.Second)
+	e.Now = func() time.Time { return mergedAt.Add(time.Minute) }
+	const prURL = "https://github.com/acme/repo/pull/7"
+	wait := tasktiming.Start("worker-attempt", "wait", tasktiming.Checks, start)
+	state, err := e.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Runs = []Run{{ID: "activation", RequestID: "task", Status: "waiting", Workflow: w,
+		Item: Item{Repository: w.Repository, Kind: "issue", Number: 7}, PRURL: prURL, TimingWait: &wait}}
+	if err := e.save(state); err != nil {
+		t.Fatal(err)
+	}
+	var log strings.Builder
+	var closed int
+	e.TimingLog = func(format string, args ...any) {
+		line := fmt.Sprintf(format, args...)
+		if strings.Contains(line, " span=wait ") {
+			closed++
+			persisted, err := e.load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r := persisted.run("activation"); r == nil || r.TimingWait == nil || r.TimingWait.ID != wait.ID {
+				t.Fatal("activation lost its persisted wait before the completion was logged")
+			}
+		}
+		fmt.Fprintln(&log, line)
+	}
+	for range 2 {
+		if err := e.ObserveIssueMerge("activation", "task", prURL, mergedAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if runs, err := e.Runs(); err != nil || len(runs) != 0 {
+		t.Fatalf("runs after merge = %+v, err = %v", runs, err)
+	}
+	spans, err := tasktiming.Read(t.Context(), strings.NewReader(log.String()), "task")
+	if err != nil || closed != 1 || len(spans) == 0 || spans[0].ID != wait.ID || spans[0].EndedAt == nil ||
+		!spans[0].EndedAt.Equal(mergedAt) || spans[0].WallMS == nil || *spans[0].WallMS != 10000 {
+		t.Fatalf("timing after observed merge = %+v, closed = %d, err = %v\n%s", spans, closed, err, log.String())
+	}
+}
+
 func TestFailedWorkflowTimingUsesCompletionAndKeepsUnknownStart(t *testing.T) {
 	t.Parallel()
 	start := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
