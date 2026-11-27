@@ -1321,6 +1321,19 @@ test('dock links fail safe to hidden when the initial settings read fails, then 
 for (const viewport of [{ width: 1280, height: 1100 }, { width: 430, height: 932 }, { width: 430, height: 500 }]) {
   test(`settings keep their height and header position across tabs at ${viewport.width}×${viewport.height}`, async t => {
     const { page } = await openSettings(t, { viewport });
+    const tabbar = page.locator('.settings-tabbar');
+    const labels = tabbar.locator('[role="tab"] span');
+    const assertReadableLabels = async () => {
+      assert.deepEqual(await labels.evaluateAll(nodes => nodes.filter(node => {
+        const style = getComputedStyle(node);
+        return style.opacity === '1' && style.visibility === 'visible'
+          && node.clientWidth > 0 && node.clientWidth >= node.scrollWidth;
+      }).map(node => node.textContent)), ['Features', 'Repositories', 'Libraries', 'Commit Signing']);
+    };
+    await assertReadableLabels();
+    if (viewport.width === 430) {
+      assert.ok(await tabbar.evaluate(node => node.scrollWidth > node.clientWidth), 'labeled tabs scroll on narrow screens');
+    }
     const geometry = () => page.locator('.settings-shell').evaluate(node => {
       const shell = node.getBoundingClientRect();
       const header = node.querySelector('.settings-header-slim').getBoundingClientRect();
@@ -1331,6 +1344,7 @@ for (const viewport of [{ width: 1280, height: 1100 }, { width: 430, height: 932
     assert.ok(initial.top >= 0 && initial.bottom <= viewport.height, 'dialog fits the screen');
     for (const name of ['signing', 'automation', 'repositories', 'library']) {
       await select(page, name);
+      await assertReadableLabels();
       const current = await geometry();
       for (const key of ['top', 'height', 'headerTop', 'tabsTop']) {
         assert.ok(Math.abs(current[key] - initial[key]) < 1, `${name}: ${key} stays fixed`);
