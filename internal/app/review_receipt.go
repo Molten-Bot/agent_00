@@ -265,7 +265,7 @@ func (h Harness) publishSubmittedReview(
 		return receipt, fmt.Errorf("waiting for acknowledged submitted review: %w", errors.Join(writeErr, errors.New("GitHub review receipt missing")))
 	}
 	receipt.ReviewID, receipt.ReviewNodeID, receipt.URL = submitted.ID, submitted.NodeID, submitted.URL
-	if err := saveReviewReceipt(final, receipt); err != nil {
+	if err := saveReviewJournal(final, receipt); err != nil {
 		return receipt, fmt.Errorf("persist submitted review receipt: %w", err)
 	}
 	return receipt, nil
@@ -303,13 +303,44 @@ func savedCleanReviewReceipt(runDir, prURL, head string, policy githubutil.Revie
 	return nil, nil
 }
 
-func saveReviewReceipt(path string, receipt githubutil.ReviewReceipt) error {
-	f, err := os.CreateTemp(filepath.Dir(path), ".review-receipt-*")
+type reviewRepairProgress struct {
+	PRURL, Head string
+	Pass        int
+	Policy      githubutil.ReviewPolicy
+}
+
+func (h Harness) reviewRepairProgressPath(repo repoWorkspace) string {
+	dir := stringsx.FirstNonEmpty(h.IssueWorkspaceDir, filepath.Dir(repo.Dir))
+	return filepath.Join(dir, "review-repair.json")
+}
+
+// Only continue the fix budget for the same published repair and policy.
+func (h Harness) loadReviewRepairPass(repo repoWorkspace, head string, policy githubutil.ReviewPolicy) (int, error) {
+	raw, err := os.ReadFile(h.reviewRepairProgressPath(repo))
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("load published review repair: %w", err)
+	}
+	var progress reviewRepairProgress
+	if err := json.Unmarshal(raw, &progress); err != nil {
+		return 0, fmt.Errorf("decode published review repair: %w", err)
+	}
+	if progress.PRURL != repo.PRURL || progress.Head != head || progress.Policy != policy ||
+		progress.Pass < 1 || progress.Pass > policy.FixPasses {
+		return 0, nil
+	}
+	return progress.Pass, nil
+}
+
+func saveReviewJournal(path string, value any) error {
+	f, err := os.CreateTemp(filepath.Dir(path), ".review-journal-*")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(f.Name())
-	err = json.NewEncoder(f).Encode(receipt)
+	err = json.NewEncoder(f).Encode(value)
 	if err = errors.Join(err, f.Sync(), f.Close()); err != nil {
 		return err
 	}
