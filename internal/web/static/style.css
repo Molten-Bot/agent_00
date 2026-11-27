@@ -6792,11 +6792,10 @@ body.onboarding-modal-open {
   display: inline-flex;
   flex: 0 0 auto;
   min-width: 44px;
-  max-width: 100%;
   overflow: visible;
   align-items: center;
   justify-content: center;
-  gap: 0;
+  gap: 8px;
   min-height: 48px;
   padding: 10px 14px;
   border: 1px solid transparent;
@@ -6816,26 +6815,12 @@ body.onboarding-modal-open {
 }
 
 .settings-tab span {
-  display: inline-block;
-  max-width: 0;
-  margin-left: 0;
-  overflow: hidden;
   white-space: nowrap;
-  text-overflow: ellipsis;
-  opacity: 0;
-  transition: max-width 0.2s ease, margin-left 0.2s ease, opacity 0.15s ease;
 }
 
 .settings-tab:hover,
 .settings-tab:focus-visible {
   color: var(--text);
-}
-
-.settings-tab:hover span,
-.settings-tab:focus-visible span {
-  max-width: 200px;
-  margin-left: 8px;
-  opacity: 1;
 }
 
 .settings-tab.active,
@@ -7311,14 +7296,6 @@ body.onboarding-modal-open {
   .settings-tab {
     padding: 10px 10px;
   }
-
-  .settings-tab:hover span,
-  .settings-tab:focus-visible span {
-    max-width: 96px;
-  }
-
-
-
 }
 
 .agent-auth-configure-input-github {
@@ -8362,8 +8339,6 @@ html[data-hover-mode="off"] .task-fullscreen-toggle:hover {
 .settings-header-slim { align-items: center; }
 .settings-header-slim #settings-title { display: flex; align-items: center; gap: 12px; }
 .settings-header-slim #settings-title svg { width: 30px; height: 30px; flex: none; }
-.settings-tab[aria-selected="true"] span { max-width: 200px; margin-left: 8px; opacity: 1; }
-.settings-tab:hover span, .settings-tab:focus-visible span { max-width: 200px; }
 .selectable-option:has(input:disabled) { opacity: .5; cursor: not-allowed; }
 .selectable-option:has(input:disabled):hover { color: var(--text-soft); border-color: var(--surface-control-border); }
 #custom-library-section:has(#review-settings-default-library:not(:checked)) .custom-library-fields { display: none; }
@@ -8371,12 +8346,8 @@ html[data-hover-mode="off"] .task-fullscreen-toggle:hover {
 #settings-panel-automation .selectable-option { margin: 0; }
 .settings-shell input[type="range"]:focus-visible { outline: 2px solid var(--running); outline-offset: 3px; }
 .settings-shell .selectable-option span { min-width: 0; }
-@media (max-width: 820px) {
-  .settings-tab:not([aria-selected="true"]):hover span,
-  .settings-tab:not([aria-selected="true"]):focus-visible span { max-width: 96px; }
-}
 @media (prefers-reduced-motion: reduce) {
-  .settings-tab span, .review-settings-merge-slider-thumb { transition: none; }
+  .review-settings-merge-slider-thumb { transition: none; }
 }
 
 .selectable-option svg, .review-slider svg {

@@ -609,9 +609,6 @@ func TestEmbeddedSettingsTabbarStaysScrollableOnNarrowViewports(t *testing.T) {
 	}
 	css := string(data)
 
-	if !strings.Contains(css, "overflow-x: auto;") {
-		t.Fatalf("embedded style.css should let .settings-tabbar scroll horizontally instead of clipping overflow tabs")
-	}
 	settingsTabbarIdx := strings.Index(css, ".settings-tabbar {")
 	if settingsTabbarIdx == -1 {
 		t.Fatalf("embedded style.css missing .settings-tabbar rule")
@@ -621,109 +618,9 @@ func TestEmbeddedSettingsTabbarStaysScrollableOnNarrowViewports(t *testing.T) {
 		t.Fatalf("embedded style.css .settings-tabbar rule missing closing brace")
 	}
 	settingsTabbarRule := css[settingsTabbarIdx : settingsTabbarIdx+settingsTabbarEnd]
-	if strings.Contains(settingsTabbarRule, "overflow: hidden;") {
-		t.Fatalf("embedded style.css .settings-tabbar should not hard-clip overflow, trailing tabs would become unreachable on narrow viewports")
+	if !strings.Contains(settingsTabbarRule, "overflow-x: auto;") || strings.Contains(settingsTabbarRule, "overflow: hidden;") {
+		t.Fatalf("embedded style.css should let .settings-tabbar scroll horizontally, got %q", settingsTabbarRule)
 	}
-	// overflow-y: hidden previously clipped the hover/focus label reveal:
-	// .settings-tab is a normal-flow descendant of the tabbar, so any
-	// taller-than-expected reveal (e.g. a wrapped or zoomed label) was
-	// silently cut off with only 6px of padding to spare. overflow-x:
-	// auto alone already gives horizontal scrolling; per the CSS Overflow
-	// spec a 'visible' overflow-y paired with a non-visible overflow-x
-	// computes to 'auto', so dropping the explicit overflow-y keeps
-	// scroll behavior identical while removing the clip hazard entirely.
-	if strings.Contains(settingsTabbarRule, "overflow-y: hidden") {
-		t.Fatalf("embedded style.css .settings-tabbar must not set overflow-y: hidden, it clips the hover/focus label reveal, got %q", settingsTabbarRule)
-	}
-
-	normalized := normalizeCSSWhitespace(css)
-	hoverLabelSelector := `.settings-tab:hover span, .settings-tab:focus-visible span {`
-	hoverLabelIdx := strings.Index(normalized, hoverLabelSelector)
-	if hoverLabelIdx == -1 {
-		t.Fatalf("embedded style.css missing hover/focus tab label reveal rule %q", hoverLabelSelector)
-	}
-	hoverLabelRuleEnd := strings.Index(normalized[hoverLabelIdx:], "}")
-	if hoverLabelRuleEnd == -1 {
-		t.Fatalf("embedded style.css hover/focus label reveal rule missing closing brace")
-	}
-	hoverLabelRule := normalized[hoverLabelIdx : hoverLabelIdx+hoverLabelRuleEnd]
-	if strings.Contains(hoverLabelRule, "position: absolute") {
-		t.Fatalf("embedded style.css hover/focus tab label must not use position: absolute, it would float outside the in-flow row and misalign with its tab, got %q", hoverLabelRule)
-	}
-	// The reveal must only ever animate width/opacity-style properties.
-	// Anything that can grow the label's height (white-space: normal,
-	// line-height, height) would make the label taller than its tab and
-	// risk clipping again regardless of the tabbar's overflow-y value, so
-	// ban those here instead of relying solely on overflow-y staying
-	// off. Match declarations by exact property name so a future, unrelated
-	// min-height/max-height addition doesn't false-positive on the "height:"
-	// substring.
-	if strings.Contains(hoverLabelRule, "white-space: normal") {
-		t.Fatalf("embedded style.css hover/focus tab label rule must not set %q, it could grow the label taller than its tab and get clipped, got %q", "white-space: normal", hoverLabelRule)
-	}
-	for _, decl := range strings.Split(hoverLabelRule, ";") {
-		propEnd := strings.Index(decl, ":")
-		if propEnd == -1 {
-			continue
-		}
-		switch strings.TrimSpace(decl[:propEnd]) {
-		case "height", "line-height":
-			t.Fatalf("embedded style.css hover/focus tab label rule must not set %q, it could grow the label taller than its tab and get clipped, got %q", strings.TrimSpace(decl), hoverLabelRule)
-		}
-	}
-
-	// Selected labels stay visible so the active section is named even without hover.
-	if !strings.Contains(normalized, `.settings-tab[aria-selected="true"] span { max-width: 200px; margin-left: 8px; opacity: 1; }`) {
-		t.Fatal("selected settings labels must remain expanded")
-	}
-	spanIdx := strings.Index(css, ".settings-tab span {")
-	if spanIdx == -1 {
-		t.Fatalf("embedded style.css missing .settings-tab span rule")
-	}
-	spanEnd := strings.Index(css[spanIdx:], "}")
-	if spanEnd == -1 {
-		t.Fatalf("embedded style.css .settings-tab span rule missing closing brace")
-	}
-	spanRule := css[spanIdx : spanIdx+spanEnd]
-	if !strings.Contains(spanRule, "white-space: nowrap;") {
-		t.Fatalf("embedded style.css .settings-tab span must keep white-space: nowrap, wrapped text would grow taller than its tab and risk clipping, got %q", spanRule)
-	}
-
-	// Siblings must not visually compress when the active or hovered
-	// tab's label grows the tab's width in-flow, or every selection
-	// change/hover causes the whole bar to jiggle.
-	settingsTabIdx := strings.Index(css, ".settings-tab {")
-	if settingsTabIdx == -1 {
-		t.Fatalf("embedded style.css missing .settings-tab rule")
-	}
-	settingsTabEnd := strings.Index(css[settingsTabIdx:], "}")
-	if settingsTabEnd == -1 {
-		t.Fatalf("embedded style.css .settings-tab rule missing closing brace")
-	}
-	settingsTabRule := css[settingsTabIdx : settingsTabIdx+settingsTabEnd]
-	if !strings.Contains(settingsTabRule, "flex: 0 0 auto;") {
-		t.Fatalf("embedded style.css .settings-tab should use flex: 0 0 auto (flex-shrink: 0) so other tabs don't compress when a label grows, got %q", settingsTabRule)
-	}
-
-	narrowMediaIdx := strings.Index(css, "@media (max-width: 820px) {")
-	if narrowMediaIdx == -1 {
-		t.Fatalf("embedded style.css missing narrow viewport media query")
-	}
-	narrowMedia := normalizeCSSWhitespace(css[narrowMediaIdx:])
-	narrowHoverSelector := `.settings-tab:hover span, .settings-tab:focus-visible span {`
-	narrowHoverIdx := strings.Index(narrowMedia, narrowHoverSelector)
-	if narrowHoverIdx == -1 {
-		t.Fatalf("embedded style.css narrow viewport rules missing %q", narrowHoverSelector)
-	}
-	narrowHoverRuleEnd := strings.Index(narrowMedia[narrowHoverIdx:], "}")
-	if narrowHoverRuleEnd == -1 {
-		t.Fatalf("embedded style.css narrow viewport hover tab span rule missing closing brace")
-	}
-	narrowHoverRule := narrowMedia[narrowHoverIdx : narrowHoverIdx+narrowHoverRuleEnd]
-	if !strings.Contains(narrowHoverRule, "max-width: 96px;") {
-		t.Fatalf("embedded style.css narrow viewport hover tab span rule should cap max-width at 96px, got %q", narrowHoverRule)
-	}
-
 }
 
 // normalizeCSSWhitespace collapses all whitespace runs to single spaces so
