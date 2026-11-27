@@ -5346,7 +5346,8 @@ func (h Harness) prepareReviewEvidence(ctx context.Context, repo repoWorkspace, 
 
 	discussionText := h.loadPullRequestDiscussion(ctx, repo.Dir, metadata.Number, gitHubTokenEnvSanitized)
 
-	baseRef := remoteTrackingRef(metadata.BaseRefName)
+	localBaseRef := remoteTrackingRef(metadata.BaseRefName)
+	baseRef := localBaseRef
 	headRef := stringsx.FirstNonEmpty(metadata.HeadRefOID, pullRequestTrackingRef(metadata.Number))
 	var draftPatch *draftReviewPatch
 	var patch string
@@ -5389,6 +5390,8 @@ func (h Harness) prepareReviewEvidence(ctx context.Context, repo repoWorkspace, 
 	b.WriteString(fmt.Sprintf("- Pull request URL: %s\n", stringsx.FirstNonEmpty(metadata.URL, reviewCfg.PRURL)))
 	b.WriteString(fmt.Sprintf("- Base branch: %s\n", metadata.BaseRefName))
 	b.WriteString(fmt.Sprintf("- Head branch: %s\n", stringsx.FirstNonEmpty(metadata.HeadRefName, reviewCfg.HeadBranch)))
+	b.WriteString(fmt.Sprintf("- Local base branch ref: %q\n", localBaseRef))
+	b.WriteString(fmt.Sprintf("- Local merge-base diff range: %q\n", baseRef+"..."+headRef))
 	if trigger := strings.TrimSpace(reviewCfg.Trigger); trigger != "" {
 		b.WriteString(fmt.Sprintf("- Review trigger: %s\n", trigger))
 	}
@@ -5396,7 +5399,7 @@ func (h Harness) prepareReviewEvidence(ctx context.Context, repo repoWorkspace, 
 		b.WriteString(fmt.Sprintf("- Verified requested reviewer: %s\n", reviewer))
 	}
 	b.WriteString("- Existing PR discussion has already been fetched for you below.\n")
-	b.WriteString("- The git diff below was generated locally after fetching the PR head and base refs.\n")
+	b.WriteString("- The harness generated the diff below from the merge base to the PR head using the local range above. Use that evidence and the local checkout to inspect the changes.\n")
 	b.WriteString("- Treat this prepared context as a starting point and verify important claims yourself before concluding.\n\n")
 	b.WriteString("Pull request metadata:\n```json\n")
 	b.WriteString(truncateForPrompt(string(metadataJSON), maxReviewMetadataChars))

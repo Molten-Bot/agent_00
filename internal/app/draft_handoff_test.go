@@ -426,6 +426,10 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 						if !draft {
 							t.Error("review ran before draft publication")
 						}
+						wantRange := fmt.Sprintf("- Local merge-base diff range: %q", base+"..."+api.head)
+						if !strings.Contains(cmd.Stdin, `- Local base branch ref: "refs/remotes/origin/main"`) || !strings.Contains(cmd.Stdin, wantRange) {
+							t.Errorf("draft reviewer did not receive the fetched base ref and commit range %s", wantRange)
+						}
 						if tc.findings || (tc.repair && reviewerRuns == 1) {
 							return execx.Result{Stdout: `{"status":"findings","findings":[{"severity":"high","path":"work.txt","line":1,"title":"Incorrect output"}]}`}, nil
 						}
