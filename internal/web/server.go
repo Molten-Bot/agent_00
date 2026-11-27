@@ -3129,6 +3129,9 @@ func (s Server) handleTaskRemoval(w http.ResponseWriter, r *http.Request, reques
 			remove = func(id string) error {
 				var err error
 				cleanupTarget, err = s.Broker.forgetTask(id, generations)
+				if errors.Is(err, ErrTaskNotFound) {
+					cleanupTarget, err = s.forgetRestoredIssueTask(id, generations)
+				}
 				return err
 			}
 		}

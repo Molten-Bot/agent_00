@@ -327,6 +327,7 @@ type Broker struct {
 	releases          []releaseState
 	tasks             map[string]*taskState
 	closedTasks       map[string]time.Time
+	closedIssueTasks  map[taskResult]time.Time
 	runConfigs        map[string][]byte
 	promptedRepos     []string
 	repositories      []Repository
@@ -452,6 +453,7 @@ func NewBroker() *Broker {
 		tasks:             map[string]*taskState{},
 		verifiedTaskPRs:   map[string]verifiedTaskPR{},
 		closedTasks:       map[string]time.Time{},
+		closedIssueTasks:  map[taskResult]time.Time{},
 		runConfigs:        map[string][]byte{},
 		repoIndex:         map[string]int{},
 		attempts:          map[string][]taskAttemptState{},
@@ -550,7 +552,10 @@ func (b *Broker) IngestLog(line string) {
 			}
 		}
 	}
-	if requestID != "" && !workflowEvent &&
+	// Cleanup reports activity after the task was removed.
+	taskCleanupEvent := strings.HasPrefix(line, "task ") &&
+		(fields["action"] == "task_close_cleanup" || fields["action"] == "skip_workspace_cleanup")
+	if requestID != "" && !workflowEvent && !taskCleanupEvent &&
 		!isDuplicateTaskLifecycleLine(fields) &&
 		!b.isClosedTaskLocked(requestID, now) {
 		t := b.ensureTaskLocked(requestID, now)
@@ -2259,6 +2264,9 @@ func (b *Broker) deleteAttemptChainLocked(root string) {
 }
 
 func (b *Broker) pruneExpiredTasksLocked(now time.Time) {
+	maps.DeleteFunc(b.closedIssueTasks, func(_ taskResult, closedAt time.Time) bool {
+		return now.Sub(closedAt) >= defaultClosedTaskRetention
+	})
 	for requestID, pr := range b.verifiedTaskPRs {
 		if now.Sub(pr.VerifiedAt) >= verifiedTaskPRRetention {
 			delete(b.verifiedTaskPRs, requestID)

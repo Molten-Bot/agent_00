@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,12 @@ func TestIssueTaskDeleteGenerationSurvivesBrokerRestart(t *testing.T) {
 
 	s := NewServer("", NewBroker())
 	s.IssueClaims = &localruntime.IssueClaimStore{Root: t.TempDir()}
+	cleanups := 0
+	s.CloseTask = func(_ context.Context, id string) error {
+		cleanups++
+		s.Broker.IngestLog("task status=ok action=task_close_cleanup request_id=" + id)
+		return nil
+	}
 	record := localruntime.IssueClaimRecord{
 		Version: 2, ID: "11111111111111111111111111111111", RequestID: "issue-task",
 		Phase: "submitted", State: "fulfilled", Outcome: "completed",
@@ -39,7 +46,7 @@ func TestIssueTaskDeleteGenerationSurvivesBrokerRestart(t *testing.T) {
 		s.Broker.RecordTaskRunConfig(record.RequestID, run)
 		s.Broker.IngestLog("task status=completed request_id=" + record.RequestID)
 	}
-	readTask := func() Task {
+	readTasks := func() []Task {
 		t.Helper()
 		resp := httptest.NewRecorder()
 		s.Handler().ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/api/status", nil))
@@ -50,10 +57,27 @@ func TestIssueTaskDeleteGenerationSurvivesBrokerRestart(t *testing.T) {
 		if err := json.Unmarshal(resp.Body.Bytes(), &snapshot); err != nil {
 			t.Fatal(err)
 		}
-		if len(snapshot.Tasks) != 1 || snapshot.Tasks[0].RequestID != record.RequestID {
-			t.Fatalf("expected one issue task, got %+v", snapshot.Tasks)
+		return snapshot.Tasks
+	}
+	readTask := func() Task {
+		t.Helper()
+		tasks := readTasks()
+		if len(tasks) != 1 || tasks[0].RequestID != record.RequestID {
+			t.Fatalf("expected one issue task, got %+v", tasks)
 		}
-		return snapshot.Tasks[0]
+		return tasks[0]
+	}
+	deleteTask := func(generations map[string]string, want int) {
+		t.Helper()
+		body, err := json.Marshal(map[string]any{"attempt_generations": generations})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp := httptest.NewRecorder()
+		s.Handler().ServeHTTP(resp, httptest.NewRequest(http.MethodPost, "/api/tasks/"+record.RequestID+"/delete", strings.NewReader(string(body))))
+		if resp.Code != want {
+			t.Fatalf("delete status = %d, want %d: %s", resp.Code, want, resp.Body.String())
+		}
 	}
 
 	publishResult()
@@ -69,6 +93,14 @@ func TestIssueTaskDeleteGenerationSurvivesBrokerRestart(t *testing.T) {
 	if got := restored.DeleteScope[record.RequestID]; !restored.HistoryOnly || got != generation {
 		t.Fatalf("restored history-only = %v, generation = %q, want history-only and generation %q", restored.HistoryOnly, got, generation)
 	}
+	deleteTask(map[string]string{record.RequestID: "stale"}, http.StatusNotFound)
+	readTask()
+	deleteTask(restored.DeleteScope, http.StatusOK)
+	if tasks := readTasks(); len(tasks) != 0 {
+		t.Fatalf("deleted issue task still appears in status: %+v", tasks)
+	}
+	deleteTask(restored.DeleteScope, http.StatusNotFound)
+	restartedBroker := s.Broker
 
 	// Draft verification can use a new claim with the original request ID.
 	s.Broker = liveBroker
@@ -79,14 +111,12 @@ func TestIssueTaskDeleteGenerationSurvivesBrokerRestart(t *testing.T) {
 	if got := readTask().DeleteScope[record.RequestID]; got == "" || got == generation {
 		t.Fatalf("new claim generation = %q, previous generation = %q", got, generation)
 	}
-	body, err := json.Marshal(map[string]any{"attempt_generations": before.DeleteScope})
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp := httptest.NewRecorder()
-	s.Handler().ServeHTTP(resp, httptest.NewRequest(http.MethodPost, "/api/tasks/"+record.RequestID+"/delete", strings.NewReader(string(body))))
-	if resp.Code != http.StatusNotFound {
-		t.Fatalf("stale delete status = %d: %s", resp.Code, resp.Body.String())
-	}
+	deleteTask(before.DeleteScope, http.StatusNotFound)
 	readTask()
+	s.Broker = restartedBroker
+	deleteTask(before.DeleteScope, http.StatusNotFound)
+	readTask()
+	if cleanups != 1 {
+		t.Fatalf("expected cleanup for only the matching result, got %d calls", cleanups)
+	}
 }

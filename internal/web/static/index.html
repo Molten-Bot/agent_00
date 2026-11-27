@@ -9864,6 +9864,29 @@
         hasPendingTaskDeletion(id, generation);
     }
 
+    function reconcileLegacyTaskDismissals(snapshot) {
+      for (const task of snapshot.tasks || []) {
+        const id = taskRequestID(task);
+        const generation = task.delete_attempt_generations?.[id];
+        if (!generation || !isCompletedTask(task) ||
+            !state.dismissedTaskGenerations.has(taskGenerationKey(id, "1"))) continue;
+        const cached = state.taskHistoryByID.get(id);
+        if (!isCompletedTask(cached) || cached.delete_attempt_generations?.[id] ||
+            normalizedTaskStatus(cached.status) !== normalizedTaskStatus(task.status)) continue;
+        // Journal-restored issue cards can have different timestamps from the
+        // live card. Their issue task ID and attempt number survive restart.
+        const attempt = task.issue_attempts?.at(-1)?.number;
+        const cachedAttempt = cached.issue_attempts?.at(-1)?.number;
+        const matches = task.task_id && task.task_id === cached.task_id && attempt && cachedAttempt
+          ? attempt === cachedAttempt
+          : cached.updated_at && cached.updated_at === task.updated_at;
+        if (!matches) continue;
+        const key = taskGenerationKey(id, generation);
+        state.dismissedTaskGenerations.add(key);
+        persistTaskMarker(`${DISMISSED_TASKS_KEY}:${key}`);
+      }
+    }
+
     function hasPendingTaskDeletion(requestID, generation) {
       for (const pending of pendingTaskDeletes.values()) {
         if (pending.requestID === requestID && pending.generation === generation) return true;
@@ -13959,6 +13982,7 @@
         if (current) state.selectedTaskId = current.request_id;
       }
       state.snapshot = snapshot;
+      reconcileLegacyTaskDismissals(snapshot);
       renderGitHubRate(snapshot.github_rate);
       syncLocalPromptSubmitDisabled();
       syncTaskCompletionSounds(snapshot);

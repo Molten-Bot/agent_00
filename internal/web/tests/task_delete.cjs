@@ -12,6 +12,72 @@ function pendingDeleteKeys(tab, requestID) {
   ), requestID);
 }
 
+test('Legacy dismissals migrate only for matching terminal results', async t => {
+  const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  t.after(() => assert.deepEqual(errors, []));
+  const now = new Date().toISOString();
+  const completed = {
+    request_id: 'legacy-issue', task_id: 'issue-task', status: 'completed', started_at: now, updated_at: now,
+    issue_attempts: [{ number: 1, request_id: 'legacy-issue', status: 'completed' }],
+  };
+  const restored = { ...completed, updated_at: new Date(Date.parse(now) + 1000).toISOString() };
+  const resumed = { ...restored, issue_attempts: [{ ...completed.issue_attempts[0], number: 2 }] };
+  const otherCompleted = {
+    ...completed, request_id: 'already-resumed', task_id: 'another-issue-task',
+    issue_attempts: [{ ...completed.issue_attempts[0], request_id: 'already-resumed' }],
+  };
+  const snapshot = {
+    tasks: [
+      { ...restored, delete_attempt_generations: { 'legacy-issue': 'first-claim' } },
+      { ...otherCompleted, updated_at: resumed.updated_at,
+        issue_attempts: [{ ...otherCompleted.issue_attempts[0], number: 2 }],
+        delete_attempt_generations: { 'already-resumed': 'new-claim' } },
+    ],
+  };
+  await page.addInitScript(([task, otherTask]) => {
+    if (localStorage.getItem('hubui.taskHistory.v1')) return;
+    localStorage.setItem('hubui.taskStatusFilter', 'completed');
+    localStorage.setItem('hubui.dismissedTaskIds', JSON.stringify([task.request_id]));
+    localStorage.setItem('hubui.dismissedTaskIds.already-resumed', '1');
+    localStorage.setItem('hubui.taskHistory.v1', JSON.stringify([task, otherTask]));
+  }, [completed, otherCompleted]);
+  const origin = new URL(baseURL).origin;
+  await page.route('**/*', route => {
+    const url = new URL(route.request().url());
+    if (url.origin !== origin) return route.abort();
+    switch (url.pathname) {
+      case '/api/status':
+        return route.fulfill({ json: snapshot });
+      case '/api/stream':
+        return route.fulfill({ contentType: 'text/event-stream', body: '' });
+      case '/api/agent-auth':
+        return route.fulfill({ json: { ok: true, auth: { required: false, ready: true, state: 'ready' } } });
+      case '/api/github/repos':
+        return route.fulfill({ json: { ok: true, repos: [] } });
+      default:
+        return route.continue();
+    }
+  });
+
+  await page.goto(`${baseURL}/#current-work`);
+  const card = page.locator('#task-list .task[data-request-id="legacy-issue"]');
+  await expect(page.locator('#task-list .task[data-request-id="already-resumed"]')).toBeVisible();
+  await expect(card).toHaveCount(0);
+  const marker = 'hubui.dismissedTaskIds:["legacy-issue","first-claim"]';
+  assert.equal(await page.evaluate(key => localStorage.getItem(key), marker), '1');
+  await page.reload();
+  await expect(page.locator('#task-list .task[data-request-id="already-resumed"]')).toBeVisible();
+  await expect(card).toHaveCount(0);
+
+  snapshot.tasks[0] = { ...resumed, delete_attempt_generations: { 'legacy-issue': 'resumed-claim' } };
+  await page.reload();
+  await expect(card).toBeVisible();
+});
+
 test('Close redraws cached history before the first snapshot', async t => {
   const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
   t.after(() => browser.close());
