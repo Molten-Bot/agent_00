@@ -1043,11 +1043,6 @@ function Editor({ defaultComplexity, customEnabled }) {
                         />
                       </Field>
                       <p className="wf-muted">
-                        Without a first-run time, the first run is one interval
-                        after enabling. Keep the app running. Missed intervals
-                        produce one catch-up run; overlapping runs wait.
-                      </p>
-                      <p className="wf-muted">
                         {dirty
                           ? "Schedule updates after valid changes are saved."
                           : scheduleStatus?.nextRunAt &&

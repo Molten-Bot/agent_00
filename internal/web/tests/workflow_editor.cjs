@@ -327,31 +327,67 @@ test('a single Workflow owner is selected while multiple repositories remain a c
  assert.equal(await page.getByRole('button',{name:'Implement issues',exact:true}).isDisabled(),true);
 });
 
-test('schedule scale drags between units and preserves minute and month intervals on reload', async t => {
+test('schedule sliders select bounded counts and preserve minute and month intervals on reload', async t => {
  const {page,getDocument}=await openEditor(t,{width:390,height:844});
  await selectRepository(page,'acme/repo');
  await page.getByRole('button',{name:'Scheduled task',exact:true}).click();
+ const amount=unit=>page.getByRole('slider',{name:`Repeat every (${unit})`,exact:true});
+ assert.equal(await page.getByText(/Without a first-run time/).count(),0);
+ assert.equal(await page.getByLabel(/First run \(optional/).isVisible(),true);
  await page.getByRole('button',{name:'minutes',exact:true}).click();
- await page.getByLabel('Repeat every (minutes)',{exact:true}).fill('7');
+ assert.equal(await amount('minutes').inputValue(),'5');
+ await amount('minutes').press('ArrowLeft');
+ await waitForSaved(page);
+ assert.equal(getDocument().workflows[0].trigger.intervalHours,5/60);
+ await amount('minutes').fill('7');
  await waitForSaved(page);
  assert.equal(getDocument().workflows[0].trigger.intervalHours,7/60);
  await page.reload();await selectRepository(page,'acme/repo');await page.locator('.wf-step').first().click();await page.locator('[data-id="trigger"]').click();
- assert.equal(await page.getByLabel('Repeat every (minutes)',{exact:true}).inputValue(),'7');
+ assert.equal(await amount('minutes').inputValue(),'7');
  const slider=page.getByRole('slider',{name:'Repeat interval scale'});
  await slider.scrollIntoViewIfNeeded();const box=await slider.boundingBox();
  await page.mouse.move(box.x+8,box.y+box.height/2);await page.mouse.down();await page.mouse.move(box.x+box.width-8,box.y+box.height/2,{steps:12});await page.mouse.up();
  assert.equal(await slider.getAttribute('aria-valuetext'),'months');
- await page.getByLabel('Repeat every (months)',{exact:true}).fill('2');
+ await amount('months').fill('2');
  await waitForSaved(page);assert.equal(getDocument().workflows[0].trigger.intervalHours,1440);
  await page.reload();await selectRepository(page,'acme/repo');await page.locator('.wf-step').first().click();await page.locator('[data-id="trigger"]').click();
- assert.equal(await page.getByLabel('Repeat every (months)',{exact:true}).inputValue(),'2');
- await page.getByRole('slider',{name:'Repeat interval scale'}).focus();await page.keyboard.press('Home');await page.keyboard.press('ArrowRight');
- assert.equal(await page.getByRole('slider').getAttribute('aria-valuetext'),'hours');
- await page.getByRole('button',{name:'weeks',exact:true}).click();await waitForSaved(page);assert.equal(getDocument().workflows[0].trigger.intervalHours,336);
- const scale=await page.getByRole('slider').boundingBox(),amount=await page.getByLabel('Repeat every (weeks)',{exact:true}).boundingBox();assert.ok(scale.y+scale.height<amount.y);
+ assert.equal(await amount('months').inputValue(),'2');
+ await slider.press('Home');await slider.press('ArrowRight');
+ assert.equal(await slider.getAttribute('aria-valuetext'),'hours');
+ for (const [unit,min,max,hours] of [['minutes',5,60,1],['hours',1,24,24],['months',1,12,8640],['days',1,7,168],['weeks',1,4,672]]) {
+  await page.getByRole('button',{name:unit,exact:true}).click();
+  assert.equal(await amount(unit).getAttribute('min'),String(min));
+  assert.equal(await amount(unit).getAttribute('max'),String(max));
+  await amount(unit).press('End');
+  await waitForSaved(page);
+  assert.equal(getDocument().workflows[0].trigger.intervalHours,hours);
+ }
+ const scale=await slider.boundingBox(),count=await amount('weeks').boundingBox();assert.ok(scale.y+scale.height<count.y);
  assert.equal(await page.locator('.wf-interval-units svg').count(),5);
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
  await page.screenshot({path:join(tmpdir(),'agent00-schedule-scale-mobile.png'),fullPage:true});
+});
+
+test('editing a scheduled workflow preserves its legacy count until the slider moves', async t => {
+ const {page,getDocument}=await openEditor(t);
+ await selectRepository(page,'acme/repo');
+ await page.getByRole('button',{name:'Scheduled task',exact:true}).click();
+ await waitForSaved(page);
+ const workflow=getDocument().workflows[0];
+ workflow.trigger.intervalHours=10*24;
+ await page.goto(`${baseURL}/#workflow/${workflow.id}`);
+ await page.reload();
+ await page.locator('[data-id="trigger"]').click();
+ const amount=page.getByRole('slider',{name:'Repeat every (days)',exact:true});
+ assert.equal(await amount.inputValue(),'7');
+ assert.equal(await page.getByText('10 (saved)',{exact:true}).isVisible(),true);
+ await page.getByLabel('Workflow name').fill('Renamed scheduled workflow');
+ await waitForSaved(page);
+ assert.equal(getDocument().workflows[0].trigger.intervalHours,10*24);
+ await amount.press('ArrowLeft');
+ await waitForSaved(page);
+ assert.equal(getDocument().workflows[0].trigger.intervalHours,6*24);
+ assert.equal(await page.getByText('10 (saved)',{exact:true}).count(),0);
 });
 
 test('in-app workflows keep defaults opt-in and compose review and merge steps', async t => {

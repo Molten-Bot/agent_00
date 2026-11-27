@@ -1,13 +1,17 @@
-import React, { useState } from "react";
+import React, { useId, useState } from "react";
 import { Timer, Clock3, Sun, CalendarDays, CalendarRange } from "lucide-react";
 
 const units = [
-  { label: "min", name: "minutes", hours: 1 / 60, Icon: Timer },
-  { label: "hour", name: "hours", hours: 1, Icon: Clock3 },
-  { label: "day", name: "days", hours: 24, Icon: Sun },
-  { label: "week", name: "weeks", hours: 168, Icon: CalendarDays },
-  { label: "month", name: "months", hours: 720, Icon: CalendarRange },
+  { label: "min", name: "minutes", hours: 1 / 60, min: 5, max: 60, Icon: Timer },
+  { label: "hour", name: "hours", hours: 1, min: 1, max: 24, Icon: Clock3 },
+  { label: "day", name: "days", hours: 24, min: 1, max: 7, Icon: Sun },
+  { label: "week", name: "weeks", hours: 168, min: 1, max: 4, Icon: CalendarDays },
+  { label: "month", name: "months", hours: 720, min: 1, max: 12, Icon: CalendarRange },
 ];
+
+function sliderAmount(amount, { min, max }) {
+  return Math.min(Math.max(min, Math.round(amount)), max);
+}
 
 function initialUnit(hours) {
   for (let i = units.length - 1; i > 0; i--) {
@@ -17,14 +21,16 @@ function initialUnit(hours) {
 }
 
 export function ScheduleInterval({ hours, onChange }) {
+  const id = useId();
   const [index, setIndex] = useState(() => initialUnit(hours));
   const unit = units[index];
   const amount = Math.round((hours / unit.hours) * 1e8) / 1e8;
-  const maximum = Math.floor(8760 / unit.hours);
+  const sliderValue = sliderAmount(amount, unit);
+  const savedValue = amount !== sliderValue;
   function selectUnit(next) {
     if (next === index) return;
     setIndex(next);
-    onChange(Math.min(Math.max(1, Math.round(amount)), Math.floor(8760 / units[next].hours)) * units[next].hours);
+    onChange(sliderAmount(amount, units[next]) * units[next].hours);
   }
   return (
     <div className="wf-schedule-interval">
@@ -40,11 +46,13 @@ export function ScheduleInterval({ hours, onChange }) {
       <input className="wf-interval-scale" type="range" min="0" max="4" step="1" value={index}
         aria-label="Repeat interval scale" aria-valuetext={unit.name}
         onChange={(e) => selectUnit(Number(e.target.value))} />
-      <label className="wf-field wf-interval-amount">
-        <span>Repeat every ({unit.name})</span>
-        <input type="number" min="1" max={maximum} step="1" required value={amount || ""}
+      <div className="wf-interval-amount">
+        <label htmlFor={id}>Repeat every ({unit.name})</label>
+        <span>{amount}{savedValue && " (saved)"}</span>
+        <input id={id} type="range" min={unit.min} max={unit.max} step="1" value={sliderValue}
+          aria-valuetext={savedValue ? `${amount} ${unit.name}, saved value; move slider to change` : `${amount}`}
           onChange={(e) => onChange(Number(e.target.value) * unit.hours)} />
-      </label>
+      </div>
       {index === 4 && <p className="wf-interval-hint">One month is a fixed 30-day interval.</p>}
     </div>
   );

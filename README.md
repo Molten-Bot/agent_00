@@ -96,10 +96,10 @@ recorded with that task so later library edits do not change an existing run.
 Optional context extends the library prompt. Required context and non-default
 branch requirements are checked before enabling a workflow and again at execution.
 
-A scheduled trigger repeats every **1 minute–365 days**. Drag the unit scale
-(minute, hour, day, week, month), then enter the repeat count. Months are fixed
-30-day intervals. An optional first-run date and time is also available. The editor uses your
-local timezone and saves an absolute timestamp. Without a first-run time, the
+A scheduled trigger uses separate sliders for the unit and repeat count. Choose
+**5–60 minutes**, **1–24 hours**, **1–7 days**, **1–4 weeks**, or **1–12 months**.
+Months are fixed 30-day intervals. The optional first-run date and time uses your
+local timezone and is saved as an absolute timestamp. Without a first-run time, the
 first occurrence is due one interval after enabling. Changing the interval or
 first-run time resets the cursor; prompt and layout edits preserve it. Scheduled
 triggers run directly against the repository without issue/PR filters, then use
