@@ -260,6 +260,8 @@ type Engine struct {
 	Logf      func(string, ...any)
 
 	FinishReview func(context.Context, githubutil.ReviewReceipt, *githubutil.PendingReviewGate) error
+	// IssueTaskStopped checks the issue claim for a stopped workflow event ID.
+	IssueTaskStopped func(string) bool
 	// RecordIssueMerge saves the merge before pruning an issue activation.
 	RecordIssueMerge func(previous Run, pr Item, mergedByApp bool) error
 	// MemoryPressure defers background ticks while host memory is exhausted.
@@ -304,6 +306,18 @@ func (e *Engine) Runs() ([]Run, error) {
 	defer e.mu.Unlock()
 	s, err := e.load()
 	return s.Runs, err
+}
+
+// StopIssueTask serializes a durable issue stop with review writeback and merge.
+// The claim journal is authoritative so a stop survives a workflow journal error.
+func (e *Engine) StopIssueTask(persist func() error) error {
+	e.tickMu.Lock()
+	defer e.tickMu.Unlock()
+	if err := persist(); err != nil {
+		return err
+	}
+	e.RequestScan()
+	return nil
 }
 
 // save persists only runs that still need dispatch recovery or merge coordination.
@@ -844,6 +858,12 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 			mergedPR.Title, mergedByApp = r.AppMerge.Title, true
 			r.Reason = "Pull request merged"
 		}
+		return finish()
+	}
+	if r.Item.Kind == "issue" && e.IssueTaskStopped != nil && e.IssueTaskStopped(r.ID) {
+		r.Status, r.Reason = "failed", "Task was stopped by operator"
+		r.Outcome = nil
+		r.GitHubRetryAt = time.Time{}
 		return finish()
 	}
 	active := featureEnabled && exists && w.Enabled && e.Allowed(w.Repository) && e.Allowed(r.Item.Repository)

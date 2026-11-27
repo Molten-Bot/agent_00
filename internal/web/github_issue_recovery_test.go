@@ -2395,6 +2395,84 @@ func TestIssueRecoveryKeepsPausedAndUncertainWorkersBlocked(t *testing.T) {
 	}
 }
 
+func TestStopRetainedIssueTask(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, state, outcome, control, status string
+	}{
+		{name: "queued", state: "queued", status: "queued"},
+		{name: "paused after restart", state: "blocked", outcome: "interrupted", control: "paused", status: "paused"},
+		{name: "checks pending", state: localruntime.IssueChecksPending, outcome: localruntime.IssueChecksPending, status: "queued"},
+		{name: "waiting to retry", state: "retry_wait", outcome: "error", status: "queued"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f := recoveryServer(t)
+			reconcileOrAdmitTestIssue(t.Context(), s)
+			record := completeRecoveryRecord(t, s, tc.outcome, 1)
+			record.State, record.Control = tc.state, tc.control
+			record.NextAttemptAt = time.Now().Add(time.Hour)
+			if tc.outcome == localruntime.IssueChecksPending {
+				record.PRURL = "https://github.com/acme/repo/pull/42"
+			}
+			if err := s.IssueClaims.Save(record); err != nil {
+				t.Fatal(err)
+			}
+			if tc.outcome == localruntime.IssueChecksPending {
+				s.Broker.IngestLog("task status=queued request_id=" + record.RequestID + " action=wait_for_github_checks")
+				tc.status = "pending"
+			}
+			s.ResolveTaskControls = func(string) TaskControls { return TaskControls{} }
+			s.StopTask = func(context.Context, string) error { return ErrTaskNotFound }
+			handler := s.Handler()
+			assertStatus := func(want string, canStop bool) {
+				t.Helper()
+				res := httptest.NewRecorder()
+				handler.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/api/status", nil))
+				var snapshot Snapshot
+				if err := json.Unmarshal(res.Body.Bytes(), &snapshot); err != nil {
+					t.Fatal(err)
+				}
+				for _, task := range snapshot.Tasks {
+					if task.RequestID == record.RequestID {
+						if task.Status != want || task.Controls.Stop != canStop {
+							t.Fatalf("task status = %q, stop = %t, want %q, %t", task.Status, task.Controls.Stop, want, canStop)
+						}
+						return
+					}
+				}
+				t.Fatalf("task %q missing from status response", record.RequestID)
+			}
+			assertStatus(tc.status, true)
+			stop := func(want int) {
+				t.Helper()
+				res := httptest.NewRecorder()
+				handler.ServeHTTP(res, httptest.NewRequest(http.MethodPost, "/api/tasks/"+record.RequestID+"/stop", nil))
+				if res.Code != want {
+					t.Fatalf("stop = %d %s, want %d", res.Code, res.Body, want)
+				}
+			}
+			stop(http.StatusOK)
+			assertStatus("stopped", false)
+			stop(http.StatusConflict)
+			if err := s.ReconcileIssueWork(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			saved := latestRecoveryRecord(t, s)
+			if saved.Control != "stopped" || saved.Outcome != "stopped" || !saved.NextAttemptAt.IsZero() ||
+				len(f.submissions) != 1 || f.deletes != 1 {
+				t.Fatalf("stop did not persist and release the label without resubmitting: %+v, submissions=%d deletes=%d", saved, len(f.submissions), f.deletes)
+			}
+			assertStatus("stopped", false)
+			if record.PRURL != "" {
+				if err := s.Broker.MarkTaskPRMerged(record.RequestID, ""); err != nil {
+					t.Fatal(err)
+				}
+				assertStatus("merged", false)
+			}
+		})
+	}
+}
+
 func TestIssueRecoveryBlocksLegacyDiskExhaustionUntilExplicitRetry(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)
