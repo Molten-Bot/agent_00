@@ -182,6 +182,14 @@ func (e *issueExecution) finish(ctx context.Context, state string, result app.Re
 			record.Outcome = "error"
 		}
 		record.NoChangeEvidence = result.NoChangeEvidence
+		if result.PRAlreadyMerged {
+			record.PRAlreadyMerged = true
+			record.State = "fulfilled"
+			record.VerifiedAt = stoppedAt
+			record.Error = ""
+			record.Incident = ""
+			record.NextAttemptAt = time.Time{}
+		}
 		if state == "interrupted" && errors.Is(context.Cause(ctx), context.Canceled) {
 			record.Incident = "service_shutdown"
 		}
@@ -258,6 +266,7 @@ func (e *issueExecution) finish(ctx context.Context, state string, result app.Re
 func (e *issueExecution) configure(ctx context.Context, h *app.Harness) (context.Context, func()) {
 	runCtx, cancel := context.WithCancelCause(ctx)
 	watchdog := localruntime.NewStepWatchdog(time.Duration(e.policy.StepTimeoutSeconds)*time.Second, cancel)
+	pauseWatchdogDuringAdmission(h, watchdog)
 	h.Workspace.Root = filepath.Dir(e.record.WorkspaceDir)
 	h.Workspace.NewGUID = func() string { return filepath.Base(e.record.WorkspaceDir) }
 	h.ResumeIssueWorkspace = true

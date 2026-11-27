@@ -85,10 +85,12 @@ func (p checkPoll) delay(h Harness) time.Duration {
 	return checkPollDelay(h.CheckTimings.average(p.key), time.Since(p.started))
 }
 
-func (p checkPoll) finish(h Harness) {
+func (p checkPoll) finish(h Harness, learn bool) {
 	elapsed := time.Since(p.started)
 	prediction := h.CheckTimings.average(p.key)
-	h.CheckTimings.record(p.key, elapsed)
+	if learn {
+		h.CheckTimings.record(p.key, elapsed)
+	}
 	h.logf("stage=%s status=ok action=github_checks_finished elapsed_ms=%d estimated_ms=%d", p.stage, elapsed.Milliseconds(), prediction.Milliseconds())
 }
 
@@ -120,23 +122,23 @@ func (h Harness) requireWorkspace(ctx context.Context) error {
 // Check a retained PR from outside its checkout before disk admission. This
 // only defers work while checks are pending. The regular path still verifies
 // branches, the checked-out head, and all required gates before proceeding.
-func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) error {
+func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) (merged bool, err error) {
 	poll := newCheckPoll("checks", prURL)
 	pending := false
 	for remaining := h.prChecksWatchTimeout(); ; {
 		res, err := h.runCheckQuery(ctx, "checks", prStateViewCommand("", prURL, "statusCheckRollup"), checkQueryTimeout)
 		if err != nil {
-			return fmt.Errorf("%w: refresh resumed PR checks: %w", ErrChecksUnavailable, err)
+			return false, commandErrorWithDetails("refresh resumed PR checks", err, res, maxGitErrorDetailChars)
 		}
 		var pr struct {
 			prStateView
 			StatusCheckRollup []githubutil.StatusCheck
 		}
 		if err := json.Unmarshal([]byte(res.Stdout), &pr); err != nil {
-			return fmt.Errorf("%w: decode resumed PR checks: %w", ErrChecksUnavailable, err)
+			return false, fmt.Errorf("%w: decode resumed PR checks: %w", ErrChecksUnavailable, err)
 		}
 		if pullRequestStateIsMerged(pr.prStateView) {
-			return githubutil.ErrReviewInterrupted
+			return true, nil
 		}
 		passed, failed := githubutil.CIStatus(pr.StatusCheckRollup)
 		var names []string
@@ -153,19 +155,20 @@ func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) error {
 		}
 		if len(names) == 0 {
 			if pending && (passed || failed) {
-				poll.finish(h)
+				// A resumed wait sees only the tail of a build.
+				poll.finish(h, false)
 			}
-			return nil
+			return false, nil
 		}
 		if remaining <= 0 {
-			return ErrChecksUnavailable
+			return false, ErrChecksUnavailable
 		}
 		pending = true
 		slices.Sort(names)
 		delay := min(remaining, poll.delay(h))
 		poll.report(h, "wait_for_github_checks", "", slices.Compact(names), time.Now(), delay)
 		if err := h.Sleep(ctx, delay); err != nil {
-			return err
+			return false, err
 		}
 		remaining -= delay
 	}

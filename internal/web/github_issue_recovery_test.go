@@ -880,6 +880,35 @@ func TestIssueCheckRecoveryWaitsForRateResetThenResubmitsSameClaim(t *testing.T)
 	}
 }
 
+func TestIssueRecoveryOnlyUnlocksClaimAfterConfirmedMerge(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	reconcileOrAdmitTestIssue(t.Context(), s)
+	record := completeRecoveryRecord(t, s, "completed", 1)
+	record.State = "fulfilled"
+	record.PRAlreadyMerged = true
+	record.PRURL = "https://github.com/acme/repo/pull/42"
+	record.PRVerification = "Verify CI on the draft."
+	record.VerifiedAt = time.Now()
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := s.ReconcileIssueWork(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if response := retryIssue(t, s, record.ID, true); response.Code != http.StatusConflict ||
+		!strings.Contains(response.Body.String(), "issue already has a merged PR") {
+		t.Fatalf("retry after confirmed merge: status=%d body=%s", response.Code, response.Body.String())
+	}
+	got := latestRecoveryRecord(t, s)
+	if !got.Fulfilled() || got.Outcome != "completed" || got.Error != "" || got.UnlockPending || got.LabelAdded ||
+		got.PRVerification != record.PRVerification || len(f.submissions) != 1 || f.deletes != 1 {
+		t.Fatalf("confirmed merge reconciliation = %+v, submissions=%d deletes=%d", got, len(f.submissions), f.deletes)
+	}
+}
+
 func TestIssueRecoveryPreservesFailedVerificationAfterExternalMerge(t *testing.T) {
 	t.Parallel()
 	for _, mode := range []string{"restart", "explicit retry", "legacy fulfilled record"} {

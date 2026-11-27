@@ -570,6 +570,7 @@ func runServer(args []string) int {
 			lease := &taskWorkspaceLease{
 				scheduler: scheduler, requestID: requestID, handle: taskHandle,
 				logf: daemonLogger, timings: checkTimings,
+				history: diskHistory, diskKey: diskKey,
 			}
 			defer lease.suspend()
 			forceRetry := false
@@ -764,6 +765,9 @@ func runServer(args []string) int {
 				if outcome.Result.Err != nil {
 					reviewOutcome.Reason = outcome.Result.Err.Error()
 				}
+				if outcome.Result.PRAlreadyMerged {
+					reviewOutcome.Status = workflow.OutcomeAlreadyMerged
+				}
 				var rate *githubutil.RateLimitError
 				if outcome.State == "error" && (errors.Is(outcome.Result.Err, app.ErrReviewPending) || errors.Is(outcome.Result.Err, app.ErrReviewHeadChanged) || errors.As(outcome.Result.Err, &rate)) {
 					reviewOutcome.Status = workflow.OutcomeReviewPending
@@ -778,7 +782,8 @@ func runServer(args []string) int {
 				}
 
 				var reviewArchiveErr error
-				if reviewOutcome.ReviewReceipt != nil || reviewOutcome.ReviewInterrupted || reviewOutcome.ReviewRequired || reviewOutcome.Status == workflow.OutcomeReviewPending {
+				if reviewOutcome.ReviewReceipt != nil || reviewOutcome.ReviewInterrupted || reviewOutcome.ReviewRequired ||
+					reviewOutcome.Status == workflow.OutcomeReviewPending || reviewOutcome.Status == workflow.OutcomeAlreadyMerged {
 					reviewArchiveErr = workflow.SaveReviewOutcome(filepath.Dir(cfg.RuntimeConfigPath), requestID, reviewOutcome)
 					if reviewArchiveErr != nil {
 						daemonLogger("task status=warn action=save_review_outcome request_id=%s err=%q", requestID, reviewArchiveErr)
@@ -1489,6 +1494,10 @@ func runLocalTask(
 		h.CheckTimings = lease.timings
 		h.ReleaseWorkspace = lease.suspend
 		h.AcquireWorkspace = lease.acquire
+		h.OnWorkspace = func(dir string) {
+			lease.disk.ExistingDir = dir
+			lease.disk.Workspace.Root = filepath.Dir(dir)
+		}
 	}
 	if cooldown, ok := ctx.Value(githubCooldownContextKey{}).(*githubutil.Cooldown); ok {
 		h.GitHubCooldown = cooldown
@@ -1523,6 +1532,7 @@ func runLocalTask(
 		ctx = repairCtx
 		defer func() { watchdog.Close(); cancel(nil) }()
 		h.OnStep = func(step string) { watchdog.Advance(step) }
+		pauseWatchdogDuringAdmission(&h, watchdog)
 		h.Workspace.Root = filepath.Dir(repairWork.workspaceDir())
 		h.Workspace.NewGUID = func() string { return repairWork.record.ID }
 	}
@@ -1559,7 +1569,7 @@ func runLocalTask(
 	if res.Err != nil && context.Cause(ctx) != nil {
 		res.Err = errors.Join(res.Err, context.Cause(ctx))
 	}
-	if taskHandle.IsStopped() {
+	if taskHandle.IsStopped() && !res.PRAlreadyMerged {
 		stopErr := context.Cause(ctx)
 		if stopErr == nil {
 			stopErr = errTaskStoppedByOperator

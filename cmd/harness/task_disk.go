@@ -82,21 +82,27 @@ func localTaskDiskRequest(ctx context.Context, history *localruntime.TaskDiskHis
 		request.ExistingDir = issue.record.WorkspaceDir
 		request.CheckPersistentStorage = workspace.CheckPersistentStorage
 	}
-	var existingBytes uint64
 	if request.ExistingDir != "" {
 		request.Workspace.Root = filepath.Dir(request.ExistingDir)
-		if size, err := workspace.DiskUsage(request.ExistingDir); err == nil {
+	}
+	request.RequiredBytes = localTaskDiskRequirement(history, key, request.ExistingDir)
+	return request
+}
+
+func localTaskDiskRequirement(history *localruntime.TaskDiskHistory, key, dir string) func() uint64 {
+	var existingBytes uint64
+	if dir != "" {
+		if size, err := workspace.DiskUsage(dir); err == nil {
 			existingBytes = size
 		}
 	}
-	request.RequiredBytes = func() uint64 {
+	return func() uint64 {
 		required := history.RequiredBytes(key)
 		if required == 0 {
 			return workspace.MinimumFreeBytes
 		}
 		return required - min(required, existingBytes)
 	}
-	return request
 }
 
 func logIssueWorkspaceStorage(path, requestID string, logf func(string, ...any)) {
@@ -134,6 +140,8 @@ type taskWorkspaceLease struct {
 	scheduler *localruntime.AdaptiveScheduler
 	requestID string
 	disk      localruntime.TaskDiskRequest
+	history   *localruntime.TaskDiskHistory
+	diskKey   string
 	handle    *localTaskHandle
 	logf      func(string, ...any)
 	timings   *app.CheckTimings
@@ -153,6 +161,10 @@ func (l *taskWorkspaceLease) acquire(ctx context.Context) error {
 	}
 	l.logf("task status=queued request_id=%s action=wait_for_workspace", l.requestID)
 	l.handle.SetRunning(false)
+	disk := l.disk
+	if l.history != nil {
+		disk.RequiredBytes = localTaskDiskRequirement(l.history, l.diskKey, disk.ExistingDir)
+	}
 	force := false
 	for {
 		if err := l.handle.WaitUntilRunnable(ctx); err != nil {
@@ -161,7 +173,7 @@ func (l *taskWorkspaceLease) acquire(ctx context.Context) error {
 		acquireCtx, cancel := context.WithCancel(ctx)
 		l.handle.SetAcquireCancel(cancel)
 		force = l.handle.ConsumeForceAcquire() || force
-		_, release, err := l.scheduler.AcquireWorkspace(acquireCtx, l.requestID, l.disk, force)
+		_, release, err := l.scheduler.AcquireWorkspace(acquireCtx, l.requestID, disk, force)
 		l.handle.ClearAcquireCancel(cancel)
 		cancel()
 		if err != nil {
@@ -178,5 +190,17 @@ func (l *taskWorkspaceLease) acquire(ctx context.Context) error {
 		l.handle.SetRunning(true)
 		l.logf("task status=admitted request_id=%s action=resume_workspace", l.requestID)
 		return nil
+	}
+}
+
+func pauseWatchdogDuringAdmission(h *app.Harness, watchdog *localruntime.StepWatchdog) {
+	acquire := h.AcquireWorkspace
+	if acquire == nil {
+		return
+	}
+	h.AcquireWorkspace = func(ctx context.Context) error {
+		resume := watchdog.Pause()
+		defer resume()
+		return acquire(ctx)
 	}
 }

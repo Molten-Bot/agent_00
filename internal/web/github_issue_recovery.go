@@ -439,9 +439,8 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	if record.UnlockPending && now.Before(record.NextUnlockAt) {
 		return nil
 	}
-	if !allowed {
-		// A stopped worker's owned label still needs to be removed. Keep
-		// its claim and outcome for resumption when the repository is enabled.
+	if !allowed || record.PRAlreadyMerged {
+		// Clean up the owned label while preserving the recorded outcome.
 		if !record.LabelAdded {
 			return nil
 		}

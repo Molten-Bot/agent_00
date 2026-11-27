@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/execx"
-	"github.com/Molten-Bot/agent_00/internal/githubutil"
 )
 
 func TestCheckPollDelayLearnsAndTightensNearCompletion(t *testing.T) {
@@ -85,11 +85,12 @@ func TestResumedCheckWaitUsesOnlyGitHubUntilChecksSettle(t *testing.T) {
 	cmd := prStateViewCommand("", url, "statusCheckRollup")
 	for _, tc := range []struct {
 		name, final string
+		merged      bool
 		want        error
 	}{
-		{"passing", `{"state":"OPEN","statusCheckRollup":[{"name":"CI","conclusion":"SUCCESS"}]}`, nil},
-		{"merged", `{"state":"MERGED"}`, githubutil.ErrReviewInterrupted},
-		{"pending", `{"state":"OPEN","statusCheckRollup":[{"name":"CI","status":"IN_PROGRESS"}]}`, ErrChecksUnavailable},
+		{"passing", `{"state":"OPEN","statusCheckRollup":[{"name":"CI","conclusion":"SUCCESS"}]}`, false, nil},
+		{"merged", `{"state":"MERGED"}`, true, nil},
+		{"pending", `{"state":"OPEN","statusCheckRollup":[{"name":"CI","status":"IN_PROGRESS"}]}`, false, ErrChecksUnavailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -98,6 +99,10 @@ func TestResumedCheckWaitUsesOnlyGitHubUntilChecksSettle(t *testing.T) {
 				{cmd: cmd, res: execx.Result{Stdout: tc.final}},
 			}}
 			h := New(runner)
+			h.CheckTimings = &CheckTimings{}
+			const estimate = 2 * time.Minute
+			key := newCheckPoll("checks", url).key
+			h.CheckTimings.record(key, estimate)
 			h.PRChecksWatchTimeout = time.Second
 			h.Sleep = func(_ context.Context, delay time.Duration) error {
 				if delay != time.Second {
@@ -109,9 +114,70 @@ func TestResumedCheckWaitUsesOnlyGitHubUntilChecksSettle(t *testing.T) {
 				t.Fatal("remote check wait tried to acquire workspace")
 				return nil
 			}
-			if err := h.waitForResumedChecks(t.Context(), url); !errors.Is(err, tc.want) {
-				t.Fatalf("remote check wait = %v, want %v", err, tc.want)
+			if merged, err := h.waitForResumedChecks(t.Context(), url); merged != tc.merged || !errors.Is(err, tc.want) {
+				t.Fatalf("remote check wait = (%t, %v), want (%t, %v)", merged, err, tc.merged, tc.want)
+			}
+			if got := h.CheckTimings.average(key); got != estimate {
+				t.Fatalf("resumed wait changed build estimate to %v, want %v", got, estimate)
 			}
 		})
+	}
+}
+
+func TestResumedCheckWaitClassifiesGitHubQueryErrors(t *testing.T) {
+	t.Parallel()
+	const url = "https://github.com/example/repo/pull/42"
+	cmd := prStateViewCommand("", url, "statusCheckRollup")
+	queryErr := errors.New("exit status 1")
+	for _, tc := range []struct {
+		name, stderr string
+		attempts     int
+		retryable    bool
+	}{
+		{"forbidden", "HTTP 403: Resource not accessible", 1, false},
+		{"unavailable", "HTTP 503: Service Unavailable", 3, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runner := &fakeRunner{t: t}
+			for range tc.attempts {
+				runner.exps = append(runner.exps, expectedRun{cmd: cmd, res: execx.Result{Stderr: tc.stderr}, err: queryErr})
+			}
+			h := New(runner)
+			h.Sleep = func(context.Context, time.Duration) error { return nil }
+			merged, err := h.waitForResumedChecks(t.Context(), url)
+			if merged || !errors.Is(err, queryErr) || errors.Is(err, ErrChecksUnavailable) != tc.retryable ||
+				!strings.Contains(err.Error(), tc.stderr) || len(runner.calls) != tc.attempts {
+				t.Fatalf("remote wait = (%t, %v), queries = %d", merged, err, len(runner.calls))
+			}
+		})
+	}
+}
+
+func TestRunReturnsSuccessWhenResumedChecksFindPRMerged(t *testing.T) {
+	t.Parallel()
+	const url = "https://github.com/acme/repo/pull/42"
+	runtime, err := agentruntime.Resolve("codex", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{t: t}
+	for _, cmd := range preflightCommandsWithRuntime(runtime) {
+		runner.exps = append(runner.exps, expectedRun{cmd: cmd})
+	}
+	runner.exps = append(runner.exps,
+		expectedRun{cmd: authCommand()},
+		expectedRun{cmd: prStateViewCommand("", url, "statusCheckRollup"), res: execx.Result{Stdout: `{"state":"MERGED"}`}},
+	)
+	h := New(runner)
+	h.IssueChecksPRURL = url
+	h.AcquireWorkspace = func(context.Context) error {
+		t.Fatal("confirmed merge tried to acquire a workspace")
+		return nil
+	}
+	result := h.Run(t.Context(), sampleConfig())
+	if result.ExitCode != ExitSuccess || result.Err != nil || result.PRURL != url ||
+		!result.PRAlreadyMerged || result.ReviewInterrupted || result.PRVerificationPassed {
+		t.Fatalf("confirmed merge result = %+v", result)
 	}
 }

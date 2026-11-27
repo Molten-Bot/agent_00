@@ -35,6 +35,7 @@ type IssueClaimRecord struct {
 	CheckoutComplete bool          `json:"checkoutComplete,omitempty"`
 	PublicationReady bool          `json:"publicationReady,omitempty"`
 	PRVerification   string        `json:"prVerification,omitempty"`
+	PRAlreadyMerged  bool          `json:"prAlreadyMerged,omitempty"`
 	PlanningStatus   string        `json:"planningStatus,omitempty"`
 	ReviewHead       string        `json:"reviewHead,omitempty"`
 	ReviewRequired   bool          `json:"reviewRequired,omitempty"`
@@ -86,7 +87,7 @@ func (r IssueClaimRecord) FailureDetail() string {
 
 // Fulfilled excludes older records that reconciled a merge with pending verification.
 func (r IssueClaimRecord) Fulfilled() bool {
-	return r.State == "fulfilled" && r.PRVerification == ""
+	return r.State == "fulfilled" && (r.PRVerification == "" || r.PRAlreadyMerged)
 }
 
 type IssueClaimStore struct {

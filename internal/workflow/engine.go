@@ -204,6 +204,9 @@ const OutcomeReviewPending = "review_pending"
 // OutcomeChecksPending reserves the existing activation until its worker resumes.
 const OutcomeChecksPending = "check_verification_pending"
 
+// OutcomeAlreadyMerged records that GitHub confirmed the PR was already merged.
+const OutcomeAlreadyMerged = "already_merged"
+
 type Outcome struct {
 	ReviewReceipt     *githubutil.ReviewReceipt `json:"reviewReceipt,omitempty"`
 	ReviewInterrupted bool                      `json:"reviewInterrupted,omitempty"`
@@ -323,7 +326,7 @@ func (e *Engine) logRun(r Run, event string) {
 		reason = "review_check_pending"
 	case "Review writeback paused: workflow changed or was disabled":
 		reason = "review_writeback_paused"
-	case "Pull request merged externally during review":
+	case "Pull request merged externally during review", "Pull request was already merged when checks resumed":
 		reason = "external_merge"
 	case "Pull request was already merged when the workflow checked":
 		reason = "merge_unconfirmed"
@@ -790,10 +793,14 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		} else {
 			o = e.Status(r.RequestID)
 		}
-		if o.Status == "failed" || o.Status == "succeeded" || o.Status == OutcomeReviewPending || o.Status == OutcomeChecksPending {
+		if o.Status == "failed" || o.Status == "succeeded" || o.Status == OutcomeReviewPending ||
+			o.Status == OutcomeChecksPending || o.Status == OutcomeAlreadyMerged {
 			r.Outcome = &o
 		}
-		if o.ReviewInterrupted {
+		if o.Status == OutcomeAlreadyMerged {
+			r.PRURL, r.Status, r.Reason = o.PRURL, "completed", "Pull request was already merged when checks resumed"
+			r.MergeHead = ""
+		} else if o.ReviewInterrupted {
 			r.PRURL = o.PRURL
 			r.Status = "failed"
 			r.Reason = "Pull request merged externally during review"

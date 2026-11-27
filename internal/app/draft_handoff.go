@@ -137,7 +137,7 @@ func (h Harness) waitForDraftVerificationEvidence(ctx context.Context, repo repo
 			continue
 		}
 		if waitedForChecks && wait.checksPassed {
-			poll.finish(h)
+			poll.finish(h, true)
 			waitedForChecks = false
 		}
 		if !errors.Is(err, ErrReviewPending) || remaining <= 0 {

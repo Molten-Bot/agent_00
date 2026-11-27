@@ -156,6 +156,8 @@ type Result struct {
 
 	// PRVerificationPassed records that the draft verifier completed successfully.
 	PRVerificationPassed bool
+	// PRAlreadyMerged records a merge observed on GitHub before local work resumed.
+	PRAlreadyMerged bool
 }
 
 // RepoResult captures outcome details for one repository in a run.
@@ -227,6 +229,8 @@ type Harness struct {
 	OnIssuePRPublished func(string) error
 	// OnCheckout reports that all repositories have been checked out successfully.
 	OnCheckout func()
+	// OnWorkspace reports the allocated run directory before any checkout work.
+	OnWorkspace func(string)
 	// OnPRTitle reports reused or updated PR titles and handles creation when OnPRCreated is unset.
 	OnPRTitle func(url, title string)
 	// OnPRCreated reports the URL and title of a newly created pull request.
@@ -401,11 +405,12 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	h.logf("stage=auth status=ok")
 
 	if h.IssueChecksPRURL != "" && h.AcquireWorkspace != nil {
-		if err := h.waitForResumedChecks(ctx, h.IssueChecksPRURL); err != nil {
-			if errors.Is(err, githubutil.ErrReviewInterrupted) {
-				return Result{ExitCode: ExitSuccess, PRURL: h.IssueChecksPRURL, ReviewInterrupted: true}
-			}
+		merged, err := h.waitForResumedChecks(ctx, h.IssueChecksPRURL)
+		if err != nil {
 			return h.fail(ExitPR, "checks", err, "")
+		}
+		if merged {
+			return Result{ExitCode: ExitSuccess, PRURL: h.IssueChecksPRURL, PRAlreadyMerged: true}
 		}
 		if err := h.requireWorkspace(ctx); err != nil {
 			return h.fail(ExitWorkspace, "workspace", err, "")
@@ -421,6 +426,9 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	runDir, guid, err := h.Workspace.CreateRunDir()
 	if err != nil {
 		return h.fail(ExitWorkspace, "workspace", err, "")
+	}
+	if h.OnWorkspace != nil {
+		h.OnWorkspace(runDir)
 	}
 	agentsPath, err := h.Workspace.SeedAgentsFile(runDir)
 	if err != nil {
@@ -6236,7 +6244,7 @@ func (h Harness) pollPRChecks(ctx context.Context, cmd execx.Command, prURL stri
 		// gh pr checks exits 8 while checks are still pending.
 		if !checkWatchPending(err) {
 			if waited && (err == nil || snapshot.HasFailures) {
-				poll.finish(h)
+				poll.finish(h, true)
 			}
 			return res, err
 		}
