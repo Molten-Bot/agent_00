@@ -46,6 +46,20 @@ async function visibleNodeCenter(page,node) {
  assert.ok(right>left&&bottom>top,'node and canvas overlap inside the viewport');
  return {x:(left+right)/2,y:(top+bottom)/2};
 }
+test('Repository settings show an icon-only GitHub link for the workflow repository', async t => {
+ const {page}=await openEditor(t);
+ await selectRepository(page,'acme/other');
+ await page.getByRole('button',{name:'Implement issues',exact:true}).click();
+ await page.locator('.react-flow__node[data-id="repository"]').click();
+ const panel=page.getByRole('complementary',{name:'Step settings'});
+ const link=panel.getByRole('link',{name:'Open acme/other on GitHub',exact:true});
+ await link.waitFor();
+ assert.equal(await link.getAttribute('href'),'https://github.com/acme/other');
+ assert.equal(await link.getAttribute('target'),'_blank');
+ assert.equal((await link.textContent()).trim(),'');
+ await link.locator('img[src="/static/logos/github.svg"]').evaluate(img=>img.decode());
+ assert.equal(await panel.getByText('The repository filter and commit signing settings apply to every workflow.',{exact:true}).count(),0);
+});
 test('Agent task updates its SVG when the active harness changes',async t=>{
  let finishAuth;
  const auth=new Promise(resolve=>{finishAuth=resolve});

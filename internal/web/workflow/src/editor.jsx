@@ -905,10 +905,10 @@ function Editor({ defaultComplexity }) {
               {selection === "repository" && (
                 <>
                   <h2>{current.repository}</h2>
-                  <p className="wf-muted">
-                    The repository filter and commit signing settings apply to
-                    every workflow.
-                  </p>
+                  <a className="task-github-link" href={`https://github.com/${current.repository}`}
+                    target="_blank" rel="noopener noreferrer" aria-label={`Open ${current.repository} on GitHub`}>
+                    <img src="/static/logos/github.svg" alt="" />
+                  </a>
                   {!scheduled && !inputTriggered && (
                     <>
                       <Toggle
