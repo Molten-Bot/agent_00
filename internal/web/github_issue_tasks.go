@@ -134,6 +134,9 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 			task.UpdatedAt = formatTimeOrEmpty(latest.UpdatedAt)
 		}
 		switch {
+		case latest.PRAlreadyMerged:
+			task.Status, task.IssueState, task.Error, task.ReviewGate, task.RetryAt = "merged", latest.State, "", "", ""
+			task.Stage, task.StageStatus, task.ExitCode, task.Warning = "finalize", "merged", 0, ""
 		case latest.PlanningStatus == issueDone:
 			task.Status, task.Error, task.ReviewGate = "merged", "", ""
 		case task.IssueState == "retry_wait" || task.IssueState == localruntime.IssueChecksPending ||

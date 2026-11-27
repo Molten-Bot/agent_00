@@ -615,6 +615,10 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				return execx.Result{}, fmt.Errorf("unexpected command %s %s", cmd.Name, args)
 			})
 			h := New(runner)
+			const verificationEstimate = 30 * time.Second
+			const verificationTimingKey = "acme/repo/pr_verification"
+			h.CheckTimings = &CheckTimings{}
+			h.CheckTimings.record(verificationTimingKey, verificationEstimate)
 			workspaceHeld := true
 			h.ReleaseWorkspace = func() { workspaceHeld = false }
 			h.AcquireWorkspace = func(context.Context) error { workspaceHeld = true; return nil }
@@ -648,6 +652,11 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				}
 				return nil
 			}
+			t.Cleanup(func() {
+				if got := h.CheckTimings.average(verificationTimingKey); got != verificationEstimate {
+					t.Errorf("draft evidence wait changed build estimate to %v, want %v", got, verificationEstimate)
+				}
+			})
 			h.SaveWorkflowPRResume = func(url string) error { savedResume = url; return nil }
 			h.Workspace = workspace.Manager{Root: root, NewGUID: func() string { return "issue-workspace" }}
 			if tc.queued {

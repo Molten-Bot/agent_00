@@ -909,9 +909,9 @@ func TestIssueRecoveryOnlyUnlocksClaimAfterConfirmedMerge(t *testing.T) {
 	}
 }
 
-func TestIssueRecoveryPreservesFailedVerificationAfterExternalMerge(t *testing.T) {
+func TestIssueRecoveryRecordsExternalMergeAsTerminalSuccess(t *testing.T) {
 	t.Parallel()
-	for _, mode := range []string{"restart", "explicit retry", "legacy fulfilled record"} {
+	for _, mode := range []string{"restart", "explicit retry", "legacy fulfilled record", "legacy merged-unverified record"} {
 		t.Run(mode, func(t *testing.T) {
 			s, f := recoveryServer(t)
 			reconcileOrAdmitTestIssue(t.Context(), s)
@@ -940,14 +940,28 @@ func TestIssueRecoveryPreservesFailedVerificationAfterExternalMerge(t *testing.T
 					t.Fatal(err)
 				}
 			}
+			if mode == "legacy merged-unverified record" {
+				if err := s.IssueClaims.Update(record.ID, func(r *localruntime.IssueClaimRecord) error {
+					r.State, r.PRURL, r.Error = localruntime.IssueStateMergedUnverified, prURL, "pull request merged before draft verification passed"
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
 			f.prs = recoveryPR("closed", `"2026-01-01T00:00:00Z"`, record.Run.GitHubIssue.Claim.Branch, "main")
 			restarted := automationServer(t, f.automationGitHub)
 			restarted.IssueClaims = &localruntime.IssueClaimStore{Root: s.IssueClaims.Root}
 			restarted.GitHubIssueRunner, restarted.IssueRecovery, restarted.Workflows = f, s.IssueRecovery, s.Workflows
 			if mode == "explicit retry" {
+				if err := restarted.IssueClaims.BeginExecution(latestRecoveryRecord(t, restarted)); err != nil {
+					t.Fatal(err)
+				}
 				if response := retryIssue(t, restarted, record.ID, true); response.Code != http.StatusConflict ||
-					!strings.Contains(response.Body.String(), mergedUnverifiedIssueError) {
+					!strings.Contains(response.Body.String(), issueAlreadyMergedError) {
 					t.Fatalf("retry after merge: status=%d body=%s", response.Code, response.Body.String())
+				}
+				if _, err := os.Stat(filepath.Join(restarted.IssueClaims.Root, ".storage-reserve-"+record.ID)); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("execution reserve after merge: %v", err)
 				}
 			}
 			for range 2 {
@@ -956,11 +970,22 @@ func TestIssueRecoveryPreservesFailedVerificationAfterExternalMerge(t *testing.T
 				}
 			}
 			got := latestRecoveryRecord(t, restarted)
-			if got.State != localruntime.IssueStateMergedUnverified || got.Error != mergedUnverifiedIssueError ||
-				got.ID != record.ID || got.RequestID != record.RequestID || got.Outcome != "error" || got.FailureDetail() != failure ||
-				got.PRVerification != record.PRVerification || got.PRURL != prURL || !got.VerifiedAt.IsZero() || !got.NextAttemptAt.IsZero() ||
-				got.UnlockPending || issueRunFailures(got) != 2 || len(f.submissions) != 1 || len(restarted.Broker.verifiedTaskPRs) != 0 {
-				t.Fatalf("external merge lost failed verification history: %+v, submissions=%d", got, len(f.submissions))
+			if !got.Fulfilled() || !got.PRAlreadyMerged || got.Error != "" || got.Incident != "" ||
+				got.ID != record.ID || got.RequestID != record.RequestID || got.Outcome != "completed" || got.FailureDetail() != failure ||
+				got.PRVerification != record.PRVerification || got.PRURL != prURL || got.VerifiedAt.IsZero() || !got.NextAttemptAt.IsZero() ||
+				got.UnlockPending || got.LabelAdded || got.ExecutionAgentAttempts != nil || issueRunFailures(got) != 0 ||
+				len(f.submissions) != 1 || len(restarted.Broker.verifiedTaskPRs) != 1 {
+				t.Fatalf("external merge outcome or verification history: %+v, submissions=%d", got, len(f.submissions))
+			}
+			response := httptest.NewRecorder()
+			restarted.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/state", nil))
+			var snapshot Snapshot
+			if err := json.Unmarshal(response.Body.Bytes(), &snapshot); response.Code != http.StatusOK || err != nil {
+				t.Fatalf("task state API: status=%d, decode error=%v", response.Code, err)
+			}
+			if len(snapshot.Tasks) != 1 || snapshot.Tasks[0].Status != "merged" || snapshot.Tasks[0].StageStatus != "merged" || snapshot.Tasks[0].Error != "" ||
+				len(snapshot.Tasks[0].IssueAttempts) != 1 || snapshot.Tasks[0].IssueAttempts[0].Error != failure {
+				t.Fatalf("merged task projection = %+v", snapshot.Tasks)
 			}
 		})
 	}

@@ -51,7 +51,7 @@ func (s Server) WakeIssueRecovery() {
 
 var errIssueRecoveryDeferred = errors.New("issue recovery deferred during memory pressure")
 
-const mergedUnverifiedIssueError = "pull request merged before draft verification passed"
+const issueAlreadyMergedError = "issue already has a merged PR"
 
 func (s Server) runIssueRecovery(ctx context.Context) {
 	ticker := time.NewTicker(time.Minute)
@@ -305,14 +305,9 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	if record.Incident == workflowIssueRecoveryIncident {
 		return nil
 	}
-	if !record.UnlockPending {
-		if record.Fulfilled() {
-			s.publishVerifiedIssuePR(record)
-			return nil
-		}
-		if record.State == localruntime.IssueStateMergedUnverified {
-			return nil
-		}
+	if record.Fulfilled() && !record.UnlockPending && !(record.PRAlreadyMerged && record.ExecutionAgentAttempts != nil) {
+		s.publishVerifiedIssuePR(record)
+		return nil
 	}
 	if record.State == "blocked" && record.Incident == localruntime.IssueIncidentBranchRecovery && !record.UnlockPending {
 		return nil
@@ -441,6 +436,11 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	}
 	if !allowed || record.PRAlreadyMerged {
 		// Clean up the owned label while preserving the recorded outcome.
+		if record.PRAlreadyMerged {
+			if err := s.releaseMergedIssueReserve(&record); err != nil {
+				return err
+			}
+		}
 		if !record.LabelAdded {
 			return nil
 		}
@@ -528,7 +528,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 			return s.deferIssueUnlock(record.ID, err)
 		}
 	}
-	if cooling || record.Fulfilled() || record.State == localruntime.IssueStateMergedUnverified {
+	if cooling || record.Fulfilled() {
 		return nil
 	}
 	if app.IsWorkflowPRMetadataFailure(record.FailureDetail()) ||
@@ -553,15 +553,15 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 			}
 		}
 		if ownsBranch && pr.URL != "" && !pr.Closed && pr.BaseBranch == issue.Claim.BaseBranch && !pr.resumesVerification(record) {
-			if pr.mergedUnverified(record) {
-				return s.recordMergedUnverifiedIssuePR(record, pr)
+			if pr.Merged {
+				return s.recordMergedIssuePR(record, pr)
 			}
 			if record.Outcome == "interrupted" {
 				if err := s.verifyRecoveredIssuePR(ctx, record, pr); err != nil {
 					return s.deferIssueRecord(record, err)
 				}
 			}
-			return s.recordVerifiedIssuePR(record, pr)
+			return s.recordVerifiedIssuePR(&record, pr)
 		}
 	}
 	// A restored owner can finalize a stopped attempt. Dispatch still requires
@@ -720,30 +720,46 @@ func (s Server) resumeIssueChecks(ctx context.Context, record localruntime.Issue
 	return nil
 }
 
-func (s Server) recordVerifiedIssuePR(record localruntime.IssueClaimRecord, pr issuePullRequest) error {
+func (s Server) recordVerifiedIssuePR(record *localruntime.IssueClaimRecord, pr issuePullRequest) error {
 	record.PRURL = pr.URL
 	record.PRTitle = strings.TrimSpace(pr.Title)
 	record.VerifiedAt = time.Now().UTC()
 	record.State = "fulfilled"
 	record.Error = ""
 	record.NextAttemptAt = time.Time{}
-	if err := s.IssueClaims.Save(record); err != nil {
+	if err := s.IssueClaims.Save(*record); err != nil {
 		return err
 	}
-	s.publishVerifiedIssuePR(record)
+	s.publishVerifiedIssuePR(*record)
 	return nil
 }
 
-func (s Server) recordMergedUnverifiedIssuePR(record localruntime.IssueClaimRecord, pr issuePullRequest) error {
-	record.RunError = record.FailureDetail()
-	record.PRURL = pr.URL
-	record.PRTitle = strings.TrimSpace(pr.Title)
-	record.VerifiedAt = time.Time{}
-	record.State = localruntime.IssueStateMergedUnverified
-	record.Error = mergedUnverifiedIssueError
-	record.NextAttemptAt = time.Time{}
+func (s Server) recordMergedIssuePR(record localruntime.IssueClaimRecord, pr issuePullRequest) error {
+	if record.State != localruntime.IssueStateMergedUnverified {
+		record.RunError = record.FailureDetail()
+	}
+	record.PRAlreadyMerged = true
+	record.Outcome = "completed"
+	record.Incident = ""
+	if record.StoppedAt.IsZero() {
+		record.StoppedAt = time.Now().UTC()
+	}
 	record.UnlockPending = record.LabelAdded
-	return s.IssueClaims.Save(record)
+	if err := s.recordVerifiedIssuePR(&record, pr); err != nil {
+		return err
+	}
+	return s.releaseMergedIssueReserve(&record)
+}
+
+func (s Server) releaseMergedIssueReserve(record *localruntime.IssueClaimRecord) error {
+	if record.ExecutionAgentAttempts == nil {
+		return nil
+	}
+	if err := s.IssueClaims.ReleaseExecutionReserve(record.ID); err != nil {
+		return fmt.Errorf("release merged issue execution reserve: %w", err)
+	}
+	record.ExecutionAgentAttempts = nil
+	return s.IssueClaims.Save(*record)
 }
 
 func (s Server) publishVerifiedIssuePR(record localruntime.IssueClaimRecord) {
@@ -932,10 +948,6 @@ type issuePullRequest struct {
 	BaseBranch string
 	Closed     bool
 	Merged     bool
-}
-
-func (pr issuePullRequest) mergedUnverified(record localruntime.IssueClaimRecord) bool {
-	return pr.URL != "" && pr.Merged && record.PRVerification != ""
 }
 
 func (pr issuePullRequest) resumesVerification(record localruntime.IssueClaimRecord) bool {

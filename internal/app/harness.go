@@ -1416,6 +1416,11 @@ func (h Harness) checkPublishedPullRequest(
 					exitCode, stage, resultErr = ExitPR, "checks", err
 				}
 			}
+			if errors.Is(resultErr, githubutil.ErrReviewInterrupted) {
+				h.logf("stage=checks status=ok action=observe_merge pr_url=%s", repo.PRURL)
+				h.recordObservedMerge(repo)
+				exitCode, stage, resultErr = ExitSuccess, "", nil
+			}
 		}()
 	}
 	for attempt := 0; ; attempt++ {
@@ -1624,6 +1629,24 @@ func (h Harness) checkPublishedPullRequest(
 				}
 			}
 			noChecksReported := isNoChecksReported(checkRes, checkErr)
+			if noChecksReported && h.IssueChecksPRURL == repo.PRURL && repo.IssueClaimBranch {
+				required, err := h.requiredCIStatusChecks(ctx, *repo, false)
+				if err != nil {
+					return ExitPR, "checks", err
+				}
+				bucket, summary, err := h.readWorkflowDispatchResult(ctx, *repo, checkHead)
+				if err != nil {
+					return ExitPR, "checks", err
+				}
+				if !emptyCheckRollupSettled(required, bucket) {
+					return ExitPR, "checks", fmt.Errorf("%w: current check results are pending or missing", ErrChecksUnavailable)
+				}
+				if bucket != "fail" {
+					return ExitSuccess, "", nil
+				}
+				checkSummary = summary
+				break
+			}
 			if noChecksReported && noReportRetry == 0 {
 				recreated, recreateErr := h.recreatePullRequestIfClosed(ctx, repo, cfg)
 				if recreateErr != nil {
@@ -10375,19 +10398,35 @@ func (h Harness) reconcileNoChecksWithWorkflowDispatch(ctx context.Context, repo
 	}
 
 	h.suspendWorkspace()
-	res, err := h.runCheckQuery(ctx, "checks", workflowDispatchRunsCommand(repo.Dir, repo.Branch), checkQueryTimeout)
+	bucket, summary, err := h.readWorkflowDispatchResult(ctx, repoWorkspace{Dir: repo.Dir, Branch: repo.Branch}, headSHA)
+	return bucket == "pass" || bucket == "skipping", summary, err
+}
+
+func (h Harness) readWorkflowDispatchResult(ctx context.Context, repo repoWorkspace, headSHA string) (bucket, summary string, err error) {
+	cmd := workflowDispatchRunsCommand(repo.Dir, repo.Branch)
+	if target := githubutil.PullRequestRepository(repo.PRURL); target != "" {
+		cmd.Args = append(cmd.Args, "--repo", target, "--commit", headSHA)
+	}
+	res, err := h.runCheckQuery(ctx, "checks", cmd, checkQueryTimeout)
 	if err != nil {
-		return false, "", err
+		detail := strings.ToLower(strings.Join([]string{err.Error(), res.Stderr}, "\n"))
+		if repo.PRURL != "" && !errors.Is(err, ErrChecksUnavailable) &&
+			(strings.Contains(detail, "could not find any workflows named") ||
+				(strings.Contains(detail, "http 404") && strings.Contains(detail, "/actions/workflows/"))) {
+			// Repositories need not have the fallback CI workflow.
+			return "", "", nil
+		}
+		return "", "", err
 	}
 
 	raw := strings.TrimSpace(res.Stdout)
 	if raw == "" {
-		return false, "", nil
+		return "", "", nil
 	}
 
 	var runs []ghWorkflowRun
 	if parseErr := json.Unmarshal([]byte(raw), &runs); parseErr != nil {
-		return false, "", fmt.Errorf("decode workflow dispatch runs: %w", parseErr)
+		return "", "", fmt.Errorf("decode workflow dispatch runs: %w", parseErr)
 	}
 
 	var matching *ghWorkflowRun
@@ -10398,19 +10437,18 @@ func (h Harness) reconcileNoChecksWithWorkflowDispatch(ctx context.Context, repo
 		}
 	}
 	if matching == nil {
-		return false, "", nil
+		return "", "", nil
 	}
 
 	workflowName := stringsx.FirstNonEmpty(matching.DisplayTitle, matching.WorkflowName, defaultCIWorkflowPath)
-	bucket := workflowDispatchConclusionBucket(
+	bucket = workflowDispatchConclusionBucket(
 		strings.ToLower(strings.TrimSpace(matching.Status)),
 		strings.ToLower(strings.TrimSpace(matching.Conclusion)),
 	)
 	if bucket == "" {
-		return false, "", nil
+		return "", "", nil
 	}
-	summary := fmt.Sprintf("%s\t%s", workflowName, bucket)
-	return bucket == "pass" || bucket == "skipping", summary, nil
+	return bucket, fmt.Sprintf("%s\t%s", workflowName, bucket), nil
 }
 
 func requiredStatusChecksRepo(repo repoWorkspace) string {

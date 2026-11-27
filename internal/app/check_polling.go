@@ -131,17 +131,21 @@ func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) (merged
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithDeadlineCause(ctx, deadline, ErrChecksUnavailable)
 		defer cancel()
+		defer func() {
+			if err != nil && errors.Is(context.Cause(ctx), ErrChecksUnavailable) {
+				err = ErrChecksUnavailable
+			}
+		}()
 	}
 	pending := false
+	var policyBase string
+	var required []string
 	for {
 		if timeout > 0 && time.Until(deadline) <= 0 && ctx.Err() == nil {
 			return false, ErrChecksUnavailable
 		}
 		res, err := h.runCheckQuery(ctx, "checks", prStateViewCommand("", prURL, "statusCheckRollup"), checkQueryTimeout)
 		if err != nil {
-			if errors.Is(context.Cause(ctx), ErrChecksUnavailable) {
-				return false, ErrChecksUnavailable
-			}
 			return false, commandErrorWithDetails("refresh resumed PR checks", err, res, maxGitErrorDetailChars)
 		}
 		var pr struct {
@@ -154,39 +158,78 @@ func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) (merged
 		if pullRequestStateIsMerged(pr.prStateView) {
 			return true, nil
 		}
-		passed, failed := githubutil.CIStatus(pr.StatusCheckRollup)
-		if !pullRequestStateIsOpen(pr.prStateView) || passed || failed {
-			if pending && (passed || failed) {
-				// A resumed wait sees only the tail of a build.
-				poll.finish(h, false)
-			}
+		if pr.State == "" {
+			return false, fmt.Errorf("%w: resumed pull request state was missing", ErrChecksUnavailable)
+		}
+		if !pullRequestStateIsOpen(pr.prStateView) {
 			return false, nil
 		}
-		if timeout == 0 {
-			return false, ErrChecksUnavailable
-		}
-		pending = true
+		visible := make(map[string]bool, len(pr.StatusCheckRollup))
 		var names []string
 		for _, check := range pr.StatusCheckRollup {
 			name := stringsx.FirstNonEmpty(check.Name, check.Context)
 			if name == "" || check.Name == githubutil.ReviewCheckName || check.Context == githubutil.ReviewCheckName {
 				continue
 			}
-			if passed, _ := githubutil.CIStatus([]githubutil.StatusCheck{check}); !passed {
+			visible[name] = true
+			if passed, failed := githubutil.CIStatus([]githubutil.StatusCheck{check}); !passed && !failed {
 				names = append(names, name)
 			}
 		}
+		if len(names) == 0 {
+			if pr.BaseRefName == "" || pr.HeadRefName == "" || pr.HeadRefOID == "" {
+				return false, fmt.Errorf("%w: resumed pull request branches or head were missing", ErrChecksUnavailable)
+			}
+			repo := repoWorkspace{PRURL: prURL, BaseBranch: pr.BaseRefName, Branch: pr.HeadRefName}
+			if policyBase != pr.BaseRefName {
+				required, err = h.requiredCIStatusChecks(ctx, repo, false)
+				if err != nil {
+					return false, err
+				}
+				policyBase = pr.BaseRefName
+			}
+			for _, name := range required {
+				if !visible[name] {
+					names = append(names, name)
+				}
+			}
+			settled := len(visible) > 0 && len(names) == 0
+			if len(visible) == 0 {
+				bucket, summary, err := h.readWorkflowDispatchResult(ctx, repo, pr.HeadRefOID)
+				if err != nil {
+					return false, err
+				}
+				settled = emptyCheckRollupSettled(required, bucket)
+				if bucket == "pending" {
+					workflow, _, _ := strings.Cut(summary, "\t")
+					names = append(names, workflow)
+				}
+			}
+			if settled {
+				if pending {
+					poll.finish(h, false)
+				}
+				return false, nil
+			}
+		}
+		if timeout == 0 {
+			return false, ErrChecksUnavailable
+		}
+		pending = true
 		slices.Sort(names)
 		deadline, _ := ctx.Deadline()
 		delay := min(time.Until(deadline), poll.delay(h))
 		poll.report(h, "wait_for_github_checks", "", slices.Compact(names), time.Now(), delay)
 		if err := h.Sleep(ctx, delay); err != nil {
-			if errors.Is(context.Cause(ctx), ErrChecksUnavailable) {
-				return false, ErrChecksUnavailable
-			}
 			return false, err
 		}
 	}
+}
+
+// A dispatch failure is actionable on its own. A successful dispatch cannot
+// supply missing required PR check results.
+func emptyCheckRollupSettled(required []string, dispatchBucket string) bool {
+	return dispatchBucket == "fail" || (len(required) == 0 && dispatchBucket != "pending")
 }
 
 func checkWatchPending(err error) bool {

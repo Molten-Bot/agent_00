@@ -81,24 +81,96 @@ func TestPRCheckWatchReportsChecksWithSchedulerReleased(t *testing.T) {
 	}
 }
 
+func TestPublishedChecksRecordMergeBeforeReview(t *testing.T) {
+	t.Parallel()
+	const url = "https://github.com/example/repo/pull/42"
+	repo := repoWorkspace{Dir: "/checkout", PRURL: url, IssueClaimBranch: true}
+	runner := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: headCommitSHACommand(repo.Dir), res: execx.Result{Stdout: "current"}},
+		{cmd: prStateViewCommand(repo.Dir, url), res: execx.Result{Stdout: `{"state":"OPEN","headRefOid":"current"}`}},
+		{cmd: prChecksTextCommand(repo.Dir, url, false),
+			res: execx.Result{Stdout: "CI\tpending\n"}, err: pendingCheckExit{}},
+		{cmd: prChecksTextCommand(repo.Dir, url, false), res: execx.Result{Stdout: "CI\tpass\n"}},
+		{cmd: prStateViewCommand(repo.Dir, url, "id"), res: execx.Result{Stdout: `{"state":"MERGED"}`}},
+	}}
+	h := New(runner)
+	h.CheckTimings = &CheckTimings{}
+	released := 0
+	h.ReleaseWorkspace = func() { released++ }
+	h.Sleep = func(context.Context, time.Duration) error { return nil }
+	h.AcquireWorkspace = func(context.Context) error {
+		t.Fatal("merged PR reacquired workspace")
+		return nil
+	}
+	runtime := agentruntime.Default()
+	cfg := config.Config{}
+	if code, stage, err := h.checkPublishedPullRequest(t.Context(), cfg, &repo, runtime, "", codexRunOptions{}, "", "", "", "", false); code != ExitSuccess || err != nil {
+		t.Fatalf("published checks = (%d, %q, %v)", code, stage, err)
+	}
+	if !repo.PRAlreadyMerged || repo.ReviewInterrupted || released != 2 {
+		t.Fatalf("merged = %t, interrupted = %t, releases = %d", repo.PRAlreadyMerged, repo.ReviewInterrupted, released)
+	}
+	if _, stage, err := h.finishPublishedPullRequest(t.Context(), cfg, &repo, runtime, "", codexRunOptions{}, "", "", "", "", false); err != nil {
+		t.Fatalf("%s: %v", stage, err)
+	}
+	if len(runner.exps) != 0 {
+		t.Fatalf("unconsumed commands = %d", len(runner.exps))
+	}
+}
+
 func TestResumedCheckWaitUsesOnlyGitHubUntilChecksSettle(t *testing.T) {
 	t.Parallel()
 	const url = "https://github.com/example/repo/pull/42"
+	const open = `{"state":"OPEN","baseRefName":"main","headRefName":"task","headRefOid":"current","statusCheckRollup":`
+	const passing = `[{"name":"CI","conclusion":"SUCCESS"}]`
 	cmd := prStateViewCommand("", url, "statusCheckRollup")
+	protection := requiredStatusChecksCommand("", "example/repo", "main")
+	rules := ghCommand("", "api", "--paginate", "repos/example/repo/rules/branches/main?per_page=100")
+	dispatch := workflowDispatchRunsCommand("", "task")
+	dispatch.Args = append(dispatch.Args, "--repo", "example/repo", "--commit", "current")
 	for _, tc := range []struct {
-		name, initial, final string
-		merged               bool
+		name, initial, final, classic, rules, run string
+		merged                                    bool
 	}{
-		{"pending then passing", `[{"name":"CI","status":"IN_PROGRESS"}]`, `{"state":"OPEN","statusCheckRollup":[{"name":"CI","conclusion":"SUCCESS"}]}`, false},
-		{"empty then passing", `[]`, `{"state":"OPEN","statusCheckRollup":[{"name":"CI","conclusion":"SUCCESS"}]}`, false},
-		{"review only then merged", `[{"name":"agent00 / review-policy","conclusion":"SUCCESS"}]`, `{"state":"MERGED"}`, true},
+		{name: "pending then passing", initial: `[{"name":"CI","status":"IN_PROGRESS"}]`, final: open + passing + "}", classic: `["CI"]`, rules: "[]"},
+		{name: "empty then passing", initial: "[]", final: open + passing + "}", classic: `["CI"]`, rules: "[]", run: "[]"},
+		{name: "optional pass with missing classic check", initial: `[{"name":"optional","conclusion":"SUCCESS"}]`,
+			final: open + passing + "}", classic: `["CI"]`, rules: "[]"},
+		{name: "optional pass with missing ruleset check", initial: `[{"name":"optional","conclusion":"SUCCESS"}]`,
+			final: open + passing + "}", classic: "[]", rules: `[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"CI"}]}}]`},
+		{name: "no required CI and no dispatch", initial: "[]", classic: "[]", rules: "[]", run: "[]"},
+		{name: "completed dispatch without rollup and no required CI", initial: "[]", classic: "[]", rules: "[]",
+			run: `[{"headSha":"current","status":"completed","conclusion":"success"}]`},
+		{name: "completed successful dispatch cannot satisfy required checks", initial: "[]", final: open + passing + "}", classic: `["CI"]`, rules: "[]",
+			run: `[{"headSha":"current","status":"completed","conclusion":"success"}]`},
+		{name: "completed failed dispatch reaches remediation", initial: "[]", classic: `["CI"]`, rules: "[]",
+			run: `[{"headSha":"current","status":"completed","conclusion":"failure"}]`},
+		{name: "pending dispatch then merged", initial: `[{"name":"agent00 / review-policy","conclusion":"SUCCESS"}]`,
+			final: `{"state":"MERGED"}`, merged: true, classic: "[]", rules: "[]",
+			run: `[{"headSha":"current","status":"in_progress"}]`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			runner := &fakeRunner{t: t, exps: []expectedRun{
-				{cmd: cmd, res: execx.Result{Stdout: `{"state":"OPEN","statusCheckRollup":` + tc.initial + `}`}},
-				{cmd: cmd, res: execx.Result{Stdout: tc.final}},
+				{cmd: cmd, res: execx.Result{Stdout: open + tc.initial + "}"}},
 			}}
+			policy := []expectedRun{
+				{cmd: protection, res: execx.Result{Stdout: `{"contexts":` + tc.classic + "}"}},
+				{cmd: rules, res: execx.Result{Stdout: tc.rules}},
+			}
+			pending := strings.Contains(tc.initial, "IN_PROGRESS")
+			if !pending {
+				runner.exps = append(runner.exps, policy...)
+			}
+			if tc.run != "" {
+				runner.exps = append(runner.exps, expectedRun{cmd: dispatch, res: execx.Result{Stdout: tc.run}})
+			}
+			if tc.final != "" {
+				runner.exps = append(runner.exps, expectedRun{cmd: cmd, res: execx.Result{Stdout: tc.final}})
+			}
+			if pending {
+				runner.exps = append(runner.exps, policy...)
+			}
 			h := New(runner)
 			h.CheckTimings = &CheckTimings{}
 			const estimate = 2 * time.Minute
@@ -130,10 +202,10 @@ func TestResumedCheckWaitDeadlineIncludesQueriesAndRetries(t *testing.T) {
 	const url = "https://github.com/example/repo/pull/42"
 	for _, tc := range []struct {
 		name, rollup string
-		fail         bool
+		fail, policy bool
 	}{
 		{name: "pending check", rollup: `[{"name":"CI","status":"IN_PROGRESS"}]`},
-		{name: "no checks reported", rollup: `[]`},
+		{name: "no checks reported", rollup: `[]`, policy: true},
 		{name: "transient query failure", fail: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -154,8 +226,12 @@ func TestResumedCheckWaitDeadlineIncludesQueriesAndRetries(t *testing.T) {
 						<-ctx.Done()
 						return execx.Result{}, ctx.Err()
 					}
+					if tc.policy && calls == 2 {
+						<-ctx.Done()
+						return execx.Result{}, ctx.Err()
+					}
 					time.Sleep(3 * time.Second)
-					return execx.Result{Stdout: `{"state":"OPEN","statusCheckRollup":` + tc.rollup + `}`}, nil
+					return execx.Result{Stdout: `{"state":"OPEN","baseRefName":"main","headRefName":"task","headRefOid":"current","statusCheckRollup":` + tc.rollup + `}`}, nil
 				}))
 				h.PRChecksWatchTimeout = timeout
 				merged, err := h.waitForResumedChecks(t.Context(), url)
@@ -163,7 +239,7 @@ func TestResumedCheckWaitDeadlineIncludesQueriesAndRetries(t *testing.T) {
 					t.Fatalf("resumed check wait = (%t, %v) after %v", merged, err, time.Since(start))
 				}
 				wantCalls := 1
-				if tc.fail {
+				if tc.fail || tc.policy {
 					wantCalls = 2
 				}
 				if calls != wantCalls {
@@ -226,6 +302,44 @@ func TestNoReportedCheckRetriesTightenWithoutReadmittingWorkspace(t *testing.T) 
 			t.Fatalf("unconsumed commands = %d", len(runner.exps))
 		}
 	})
+}
+
+func TestPublishedResumeReconcilesEmptyRollupBeforeRetrying(t *testing.T) {
+	t.Parallel()
+	const url = "https://github.com/example/repo/pull/42"
+	repo := repoWorkspace{Dir: "/checkout", PRURL: url, BaseBranch: "main", Branch: "task", IssueClaimBranch: true}
+	const state = `{"id":"PR_id","state":"OPEN","baseRefName":"main","headRefName":"task","headRefOid":"current"}`
+	protection := expectedRun{cmd: requiredStatusChecksCommand(repo.Dir, "example/repo", "main"),
+		res: execx.Result{Stdout: `{"contexts":[]}`}}
+	rules := expectedRun{cmd: ghCommand(repo.Dir, "api", "--paginate", "repos/example/repo/rules/branches/main?per_page=100"),
+		res: execx.Result{Stdout: "[]"}}
+	dispatch := workflowDispatchRunsCommand(repo.Dir, repo.Branch)
+	dispatch.Args = append(dispatch.Args, "--repo", "example/repo", "--commit", "current")
+	runner := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: headCommitSHACommand(repo.Dir), res: execx.Result{Stdout: "current"}},
+		{cmd: prStateViewCommand(repo.Dir, url), res: execx.Result{Stdout: state}},
+		{cmd: prChecksCommand(repo.Dir, url), res: execx.Result{Stderr: "no checks reported"}, err: errors.New("exit status 1")},
+		protection, rules,
+		{cmd: dispatch, res: execx.Result{Stdout: `[{"headSha":"current","status":"completed","conclusion":"success"}]`}},
+		{cmd: prStateViewCommand(repo.Dir, url, "id"), res: execx.Result{Stdout: state}},
+		protection, rules,
+		{cmd: ghCommand(repo.Dir, "api", "graphql", "-f", "id=PR_id", "-f", "query="+prCheckRollupQuery),
+			res: execx.Result{Stdout: checkRollupPageJSON(repo.Branch, "current", "current", "[]", false, "")}},
+	}}
+	h := New(runner)
+	h.IssueChecksPRURL = url
+	h.Sleep = func(context.Context, time.Duration) error {
+		t.Fatal("resumed task slept after dispatch completed with no required checks")
+		return nil
+	}
+	h.AcquireWorkspace = func(context.Context) error {
+		t.Fatal("check reconciliation tried to reacquire workspace")
+		return nil
+	}
+	code, stage, err := h.checkPublishedPullRequest(t.Context(), config.Config{}, &repo, agentruntime.Default(), "", codexRunOptions{}, "", "", "", "", false)
+	if code != ExitSuccess || err != nil || len(runner.exps) != 0 {
+		t.Fatalf("resumed checks = (%d, %q, %v), remaining commands=%d", code, stage, err, len(runner.exps))
+	}
 }
 
 func TestResumedCheckWaitClassifiesGitHubQueryErrors(t *testing.T) {

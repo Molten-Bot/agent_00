@@ -130,7 +130,9 @@ func (h Harness) waitForDraftVerificationEvidence(ctx context.Context, repo repo
 			continue
 		}
 		if waitedForChecks && wait.checksPassed {
-			poll.finish(h, true)
+			// Draft verification starts after publication and review, so this
+			// wait can only measure part of the build.
+			poll.finish(h, false)
 			waitedForChecks = false
 		}
 		if !errors.Is(err, ErrReviewPending) || remaining <= 0 {
@@ -139,6 +141,9 @@ func (h Harness) waitForDraftVerificationEvidence(ctx context.Context, repo repo
 		h.suspendWorkspace()
 		delay := min(remaining, checkPollDelay(0, 0))
 		if errors.Is(err, errDraftChecksPending) {
+			if !waitedForChecks {
+				poll.started = time.Now()
+			}
 			waitedForChecks = true
 			delay = min(remaining, poll.delay(h))
 		}
