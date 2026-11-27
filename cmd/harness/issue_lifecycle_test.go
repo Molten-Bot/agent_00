@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -303,7 +304,8 @@ func TestIssueCheckWaitResumesSameClaimAndPreservesBackoff(t *testing.T) {
 	record.WorkspaceDir = filepath.Join(filepath.Dir(store.Root), "issue-workspaces", record.ID)
 	record.CheckoutComplete, record.PublicationReady, record.AgentAttempts = true, true, 3
 	record.PRVerification = "Verify CI and clean review on this draft."
-	record.Run.Workflow = &config.WorkflowRunConfig{ID: "issues", EventID: "activation", PolicyHash: "policy"}
+	record.Run.GitHubIssue.Priority = "P0"
+	record.Run.Workflow = &config.WorkflowRunConfig{ID: "issues", EventID: "activation", PolicyHash: "policy", ReviewCycles: 1}
 	if err := store.Save(record); err != nil {
 		t.Fatal(err)
 	}
@@ -338,8 +340,10 @@ func TestIssueCheckWaitResumesSameClaimAndPreservesBackoff(t *testing.T) {
 	h := app.Harness{}
 	ctx, done := next.configure(t.Context(), &h)
 	defer done()
-	if h.IssueChecksPRURL != prURL || !h.IssueCheckoutComplete || next.record.Run.Workflow.EventID != record.Run.Workflow.EventID ||
-		next.record.RequestID != record.RequestID || next.record.ID != record.ID {
+	if h.IssueChecksPRURL != prURL || !h.IssueCheckoutComplete || !reflect.DeepEqual(next.record.Run.Workflow, record.Run.Workflow) ||
+		next.record.RequestID != record.RequestID || next.record.ID != record.ID || next.record.WorkspaceDir != record.WorkspaceDir ||
+		!next.record.LabelAdded || next.record.Run.GitHubIssue.Priority != "P0" ||
+		*next.record.Run.GitHubIssue.Claim != *record.Run.GitHubIssue.Claim {
 		t.Fatalf("retry lost issue, task, workflow or PR identity: %+v", next.record)
 	}
 	if err := next.finish(ctx, localruntime.IssueChecksPending, app.Result{Err: app.ErrChecksUnavailable}, nil); err != nil {
@@ -397,8 +401,19 @@ func TestIssueExecutionDiskFullRestoresAgentBudget(t *testing.T) {
 	ctx, done := work.configure(context.Background(), &h)
 	defer done()
 	h.OnStep("agent")
+	h.OnTaskState("waiting_for_codex_session")
+	waiting, err := store.Load(record.ID)
+	if err != nil || waiting.AgentAttempts != 1 || waiting.State != "waiting_for_codex_session" {
+		t.Fatalf("waiting receipt = %+v, error = %v", waiting, err)
+	}
+	h.OnTaskState("queued")
+	queued, err := store.Load(record.ID)
+	if err != nil || queued.AgentAttempts != 1 || queued.State != "queued" {
+		t.Fatalf("queued receipt = %+v, error = %v", queued, err)
+	}
+	h.OnTaskState("running_agent")
 	running, err := store.Load(record.ID)
-	if err != nil || running.AgentAttempts != 2 {
+	if err != nil || running.AgentAttempts != 2 || running.State != "running_agent" {
 		t.Fatalf("running agent attempts = %d, error = %v", running.AgentAttempts, err)
 	}
 	if err := work.finish(ctx, "error", app.Result{ExitCode: app.ExitCodex, Err: syscall.ENOSPC}, nil); err != nil {
@@ -429,6 +444,7 @@ func TestIssueExecutionStorageHoldSurvivesRestartWithoutTerminalReceipt(t *testi
 	defer done()
 	h.OnCheckout()
 	h.OnStep("agent")
+	h.OnTaskState("running_agent")
 	running, err := store.Load(record.ID)
 	if err != nil || running.AgentAttempts != 2 || !running.CheckoutComplete || running.Outcome != "" {
 		t.Fatalf("running receipt = %+v, error = %v", running, err)

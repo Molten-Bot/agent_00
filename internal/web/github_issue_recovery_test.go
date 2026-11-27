@@ -1064,14 +1064,14 @@ func TestIssueRecoveryRecordsExternalMergeAsTerminalSuccess(t *testing.T) {
 	}
 }
 
-func TestMergedIssueStopsChecksAndReleasesReservation(t *testing.T) {
+func TestMergedIssueStopsCodexWaitAndReleasesReservation(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)
 	reconcileOrAdmitTestIssue(t.Context(), s)
 	record := latestRecoveryRecord(t, s)
 	record.PRURL = "https://github.com/acme/repo/pull/42"
 	record.PRVerification = "Verify draft on the current head."
-	record.State, record.Outcome = "queued", localruntime.IssueChecksPending
+	record.State, record.Outcome = "waiting_for_codex_session", localruntime.IssueChecksPending
 	record.NextAttemptAt = time.Now().Add(time.Hour)
 	if err := s.IssueClaims.BeginExecution(record); err != nil {
 		t.Fatal(err)
@@ -1080,7 +1080,7 @@ func TestMergedIssueStopsChecksAndReleasesReservation(t *testing.T) {
 	if _, err := os.Stat(reserve); err != nil {
 		t.Fatal(err)
 	}
-	s.Broker.IngestLog("task status=queued request_id=" + record.RequestID)
+	s.Broker.IngestLog("task request_id=" + record.RequestID + " task_state=waiting_for_codex_session")
 	s.StopTask = func(context.Context, string) error {
 		t.Fatal("merge cleanup used operator stop")
 		return nil
@@ -1092,7 +1092,7 @@ func TestMergedIssueStopsChecksAndReleasesReservation(t *testing.T) {
 	f.prs = recoveryPR("closed", `"2026-01-01T00:00:00Z"`, "renamed-branch", "main")
 	lock, err := s.IssueClaims.TryLock(localruntime.IssueExecutionKey(record.Run.GitHubIssue))
 	if err != nil || lock == nil {
-		t.Fatalf("acquire queued worker lock: %v", err)
+		t.Fatalf("acquire waiting worker lock: %v", err)
 	}
 	defer lock.Close()
 	corrupt := filepath.Join(s.IssueClaims.Root, strings.Repeat("c", 32)+".json")
@@ -1102,13 +1102,13 @@ func TestMergedIssueStopsChecksAndReleasesReservation(t *testing.T) {
 	if err := s.ReconcileIssueWork(t.Context()); err == nil || !strings.Contains(err.Error(), filepath.Base(corrupt)) {
 		t.Fatalf("reconcile did not report corrupt claim: %v", err)
 	}
-	queued, err := s.IssueClaims.Load(record.ID)
+	waiting, err := s.IssueClaims.Load(record.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	task, _ := s.Broker.Task(record.RequestID)
-	if !queued.PRMerged() || task.Status != "stopped" || f.deletes != 0 {
-		t.Fatalf("locked continuation did not stop before cleanup: state=%s task=%s deletes=%d", queued.State, task.Status, f.deletes)
+	if !waiting.PRMerged() || task.Status != "stopped" || f.deletes != 0 {
+		t.Fatalf("locked continuation did not stop before cleanup: state=%s task=%s deletes=%d", waiting.State, task.Status, f.deletes)
 	}
 	if err := lock.Close(); err != nil {
 		t.Fatal(err)

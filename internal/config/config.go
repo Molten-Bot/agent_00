@@ -78,9 +78,46 @@ type GitHubIssueConfig struct {
 	Repository string            `json:"repository"`
 	Number     int               `json:"number"`
 	Title      string            `json:"title,omitempty"`
+	Priority   string            `json:"priority,omitempty"`
 	URL        string            `json:"url"`
 	LinkMode   string            `json:"linkMode,omitempty"`
 	Claim      *GitHubIssueClaim `json:"claim,omitempty"`
+}
+
+// GitHubIssuePriority captures the highest supported priority label.
+func GitHubIssuePriority(labels []string) string {
+	priority := ""
+	for _, label := range labels {
+		switch strings.ToLower(strings.TrimSpace(label)) {
+		case "priority:p0":
+			return "P0"
+		case "priority:p1":
+			priority = "P1"
+		}
+	}
+	return priority
+}
+
+// GitHubIssuePriority returns the captured priority, including claims saved
+// before priority had its own field in the task configuration.
+func (c Config) GitHubIssuePriority() string {
+	issue := c.GitHubIssue
+	if issue == nil {
+		return ""
+	}
+	if issue.Priority != "" || issue.Claim == nil {
+		return issue.Priority
+	}
+	header, _, found := strings.Cut(c.Prompt, "\n## Harness execution context\n")
+	if !found || !strings.HasPrefix(header, fmt.Sprintf("Complete GitHub issue %s#%d: ", issue.Repository, issue.Number)) {
+		return ""
+	}
+	for line := range strings.SplitSeq(header, "\n") {
+		if labels, ok := strings.CutPrefix(line, "Labels: "); ok {
+			return GitHubIssuePriority(strings.Split(labels, ","))
+		}
+	}
+	return ""
 }
 
 // GitHubIssueTitle returns the issue title captured when the run was admitted.

@@ -844,3 +844,23 @@ func TestApplyDefaultsRemovesStalePromptWithTrailingFenceWhitespace(t *testing.T
 		t.Fatalf("PRBody = %q, want %q", cfg.PRBody, want)
 	}
 }
+
+func TestGitHubIssuePriorityFromLegacyClaim(t *testing.T) {
+	t.Parallel()
+	cfg := Config{
+		GitHubIssue: &GitHubIssueConfig{Repository: "example/repo", Number: 42, Claim: &GitHubIssueClaim{}},
+		Prompt:      "Complete GitHub issue example/repo#42: Example\n\nLabels: ready-for-agent, priority:P1, priority:P0\n\n## Harness execution context\n\n## Issue description\nLabels: priority:P0",
+	}
+	if got := cfg.GitHubIssuePriority(); got != "P0" {
+		t.Fatalf("legacy claim priority = %q, want P0", got)
+	}
+	cfg.GitHubIssue.Priority = "P1"
+	if got := cfg.GitHubIssuePriority(); got != "P1" {
+		t.Fatalf("captured priority = %q, want P1", got)
+	}
+	cfg.GitHubIssue.Priority = ""
+	cfg.Prompt = strings.Replace(cfg.Prompt, "Labels: ready-for-agent, priority:P1, priority:P0\n", "Labels: ready-for-agent\n", 1)
+	if got := cfg.GitHubIssuePriority(); got != "" {
+		t.Fatalf("issue body supplied priority %q", got)
+	}
+}

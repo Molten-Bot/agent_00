@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -55,6 +56,7 @@ type taskWaiter struct {
 	err          error
 	notify       chan struct{}
 	disk         *TaskDiskRequest
+	priority     int
 	root         string
 	device       string
 	diskBytes    uint64
@@ -70,6 +72,8 @@ type TaskDiskRequest struct {
 	Workspace     workspace.Manager
 	ExistingDir   string
 	RequiredBytes func() uint64
+	// Higher priorities are admitted first when a worker slot becomes available.
+	Priority int
 	// CheckPersistentStorage validates the backing filesystem for retained work.
 	CheckPersistentStorage func(string) error
 	// CleanupOnCompletion identifies workspaces removed before reservation release.
@@ -203,6 +207,10 @@ func (c *AdaptiveScheduler) acquire(ctx context.Context, requestID string, disk 
 		disk:      disk,
 	}
 
+	if disk != nil {
+		waiter.priority = disk.Priority
+	}
+
 	var (
 		queued      bool
 		granted     bool
@@ -222,10 +230,18 @@ func (c *AdaptiveScheduler) acquire(ctx context.Context, requestID string, disk 
 		c.mu.Unlock()
 		return "", nil, err
 	}
-	c.waiters = append(c.waiters, waiter)
-	// Earlier waiters have already been considered whenever a slot is free.
-	// Retry disk-blocked waiters on a scheduler tick or when work releases space.
-	c.tryGrantLocked(len(c.waiters) - 1)
+	index := slices.IndexFunc(c.waiters, func(queued *taskWaiter) bool {
+		return waiter.priority > queued.priority
+	})
+	if index < 0 {
+		// Earlier waiters have already been considered whenever a slot is free.
+		c.waiters = append(c.waiters, waiter)
+		c.tryGrantLocked(len(c.waiters) - 1)
+	} else {
+		// Rebuild disk drain decisions in priority order.
+		c.waiters = slices.Insert(c.waiters, index, waiter)
+		c.tryGrantLocked(0)
+	}
 	granted = waiter.granted
 	acquireErr = waiter.err
 	queued = !granted && acquireErr == nil

@@ -370,24 +370,45 @@ func (e *issueExecution) configure(ctx context.Context, h *app.Harness) (context
 		return nil
 	}
 	startedAgent := false
-	h.OnStep = func(step string) {
-		if !watchdog.Advance(step) {
+	currentState, currentStep := "", ""
+	h.OnTaskState = func(state string) {
+		if state == currentState {
 			return
 		}
 		err := e.store.Update(e.record.ID, func(record *localruntime.IssueClaimRecord) error {
 			if record.PRMerged() {
 				return localruntime.ErrIssuePRMerged
 			}
-			record.State = "running"
+			record.State = state
+			if state == "running_agent" && currentStep == "agent" && !startedAgent {
+				record.AgentAttempts++
+				startedAgent = true
+			}
+			return nil
+		})
+		if err != nil {
+			cancel(fmt.Errorf("persist task state: %w", err))
+			return
+		}
+		currentState = state
+	}
+	h.OnStep = func(step string) {
+		if !watchdog.Advance(step) {
+			return
+		}
+		currentStep = step
+		err := e.store.Update(e.record.ID, func(record *localruntime.IssueClaimRecord) error {
+			if record.PRMerged() {
+				return localruntime.ErrIssuePRMerged
+			}
+			if currentState == "" {
+				record.State = "running"
+			}
 			record.Step = step
 			recordIssueStage(record, step)
 			record.StepStartedAt = time.Now().UTC()
 			if record.StartedAt.IsZero() {
 				record.StartedAt = record.StepStartedAt
-			}
-			if step == "agent" && !startedAgent {
-				record.AgentAttempts++
-				startedAgent = true
 			}
 			return nil
 		})
