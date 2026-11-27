@@ -512,14 +512,14 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		}
 		record.UnlockPending = record.LabelAdded
 	}
-	if record.Outcome == "interrupted" && record.ExecutionAgentAttempts != nil {
-		// Persist the interruption before removing the reserve. A missing
+	if (record.Outcome == "interrupted" || record.Outcome == "stopped") && record.ExecutionAgentAttempts != nil {
+		// Persist the outcome before removing the reserve. A missing
 		// reserve on an unfinished execution signals journal exhaustion.
 		if err := s.IssueClaims.Save(record); err != nil {
-			return fmt.Errorf("persist interrupted issue outcome: %w", err)
+			return fmt.Errorf("persist issue outcome before releasing execution reserve: %w", err)
 		}
 		if err := s.IssueClaims.ReleaseExecutionReserve(record.ID); err != nil {
-			return fmt.Errorf("release interrupted issue execution reserve: %w", err)
+			return fmt.Errorf("release issue execution reserve: %w", err)
 		}
 		record.ExecutionAgentAttempts = nil
 	}

@@ -113,7 +113,13 @@ func persistIssueControl(store *localruntime.IssueClaimStore, requestID, control
 	}
 	record := latestClaimForTask(records, requestID)
 	if record.Version == 2 {
-		return store.Update(record.ID, func(r *localruntime.IssueClaimRecord) error { r.Control = control; return nil })
+		return store.Update(record.ID, func(r *localruntime.IssueClaimRecord) error {
+			if r.Control == "stopped" && control != "stopped" {
+				return errTaskStoppedByOperator
+			}
+			r.Control = control
+			return nil
+		})
 	}
 	return nil
 }

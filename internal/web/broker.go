@@ -1962,6 +1962,24 @@ func (b *Broker) RecordReleaseFromTask(task Task, mergedAt string) {
 	b.notifySubscribersLocked()
 }
 
+func (b *Broker) recordRetainedIssueStop(requestID, prURL string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	now := b.now().UTC()
+	task := b.tasks[requestID]
+	if task == nil && prURL != "" {
+		// Keep checking the retained PR for an external merge.
+		task = b.ensureTaskLocked(requestID, now)
+	}
+	if task != nil && task.Status != "merged" {
+		b.updateTaskFromLineLocked(task, "task status=stopped", map[string]string{
+			"err":    "task was stopped by operator",
+			"pr_url": stringsx.FirstNonEmpty(task.PRURL, prURL),
+		}, now)
+	}
+	b.notifySubscribersLocked()
+}
+
 // MarkTaskPRMerged marks the originating task as done after its pull request merges.
 func (b *Broker) MarkTaskPRMerged(requestID string, mergedAt string) error {
 	if b == nil {

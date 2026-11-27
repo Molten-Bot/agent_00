@@ -2057,7 +2057,10 @@ func (s Server) withTaskControls(snapshot Snapshot) Snapshot {
 	}
 
 	for i := range snapshot.Tasks {
-		snapshot.Tasks[i].Controls = s.ResolveTaskControls(snapshot.Tasks[i].RequestID)
+		task := &snapshot.Tasks[i]
+		if controls := s.ResolveTaskControls(task.RequestID); controls != (TaskControls{}) {
+			task.Controls = controls
+		}
 	}
 	return snapshot
 }
@@ -2913,7 +2916,11 @@ func (s Server) handleTaskAction(w http.ResponseWriter, r *http.Request) {
 			},
 		)
 	case "stop":
-		s.handleTaskControl(w, r, decoded, "stop", "stopped", s.StopTask)
+		stopHandler := s.StopTask
+		if s.IssueClaims != nil && s.IssueRecovery != nil {
+			stopHandler = s.stopTask
+		}
+		s.handleTaskControl(w, r, decoded, "stop", "stopped", stopHandler)
 	default:
 		http.NotFound(w, r)
 	}

@@ -12371,6 +12371,25 @@
       return (tasks || []).map((task) => task.task_id || taskRequestID(task)).join("|");
     }
 
+    function renderTaskStopButton(task, requestID, busy) {
+      if (!task?.controls?.stop || isCompletedTask(task)) return null;
+      const stop = document.createElement("button");
+      stop.type = "button";
+      stop.className = "task-stop task-icon-button";
+      stop.title = "Stop this task";
+      stop.setAttribute("aria-label", "Stop task");
+      stop.appendChild(createTaskActionIcon("stop"));
+      const label = document.createElement("span");
+      label.className = "sr-only";
+      label.textContent = "Stop";
+      stop.appendChild(label);
+      stop.disabled = busy;
+      bindTaskActionButton(stop, () => {
+        controlTask(requestID, "stop");
+      });
+      return stop;
+    }
+
     function renderIssueTaskHistory(task, open) {
       if (!task.issue_attempts?.length) return null;
       const region = document.createElement("div");
@@ -12736,6 +12755,8 @@
         if (badge && !taskHistoryView && !collapsed) {
           topActions.appendChild(badge);
         }
+        const taskControlBusy = isTaskControlInFlight(requestID);
+        const stopAction = renderTaskStopButton(task, requestID, taskControlBusy);
 
         if (promptOnly) {
           node.classList.add("task-prompt-only");
@@ -12773,6 +12794,7 @@
           if (githubAction) {
             promptActions.appendChild(githubAction);
           }
+          if (stopAction) promptActions.appendChild(stopAction);
 
           const closeAction = renderTaskCloseButton(task, requestID);
           if (closeAction) {
@@ -12843,13 +12865,11 @@
           topActions.appendChild(cloneButton);
         }
 
-        const taskControlBusy = isTaskControlInFlight(requestID);
         const controls = task?.controls || {};
         const canPause = Boolean(controls.pause);
         const canRun = Boolean(controls.run);
         const canForceRun = Boolean(controls.force_run);
-        const canStop = Boolean(controls.stop);
-        if (!isCompletedTask(task) && (canPause || canRun || canForceRun || canStop)) {
+        if (!isCompletedTask(task) && (canPause || canRun || canForceRun)) {
           if (canForceRun) {
             const forceStart = document.createElement("button");
             forceStart.type = "button";
@@ -12887,25 +12907,8 @@
           if (canPause || canRun) {
             topActions.appendChild(pauseRun);
           }
-
-          if (canStop) {
-            const stop = document.createElement("button");
-            stop.type = "button";
-            stop.className = "task-stop task-icon-button";
-            stop.title = "Stop this task";
-            stop.setAttribute("aria-label", "Stop task");
-            stop.appendChild(createTaskActionIcon("stop"));
-            const stopLabel = document.createElement("span");
-            stopLabel.className = "sr-only";
-            stopLabel.textContent = "Stop";
-            stop.appendChild(stopLabel);
-            stop.disabled = taskControlBusy;
-            bindTaskActionButton(stop, () => {
-              controlTask(requestID, "stop");
-            });
-            topActions.appendChild(stop);
-          }
         }
+        if (stopAction) topActions.appendChild(stopAction);
 
         if (canRerunTask(task)) {
           const rerun = document.createElement("button");

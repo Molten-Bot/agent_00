@@ -502,3 +502,33 @@ func TestWorkflowReviewCooldownRetainsActivationAndRechecksHeadAfterRestart(t *t
 		})
 	}
 }
+
+// A retained stop takes precedence over GitHub cooldown and PR delivery work.
+func TestStoppedIssueReleasesWaitingWorkflow(t *testing.T) {
+	t.Parallel()
+	for _, status := range []string{"pending_issue", OutcomeChecksPending, "waiting", awaitingReview} {
+		t.Run(status, func(t *testing.T) {
+			w := definition("issue-stop")
+			e, _, _ := testEngine(t, w)
+			item := Item{Repository: w.Repository, Kind: "issue", Number: 42}
+			if err := e.transaction(func(s *State) error {
+				s.Runs = append(s.Runs, Run{
+					ID: "activation", Item: item, Workflow: w, Status: status,
+					GitHubRetryAt: time.Now().Add(time.Hour),
+				})
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			stopped := false
+			e.IssueTaskStopped = func(id string) bool { return id == "activation" && stopped }
+			if err := e.StopIssueTask(func() error { stopped = true; return nil }); err != nil {
+				t.Fatal(err)
+			}
+			tick(t, e)
+			if runs, err := e.Runs(); err != nil || len(runs) != 0 {
+				t.Fatalf("stopped workflow still reserves the issue: %+v (error %v)", runs, err)
+			}
+		})
+	}
+}
