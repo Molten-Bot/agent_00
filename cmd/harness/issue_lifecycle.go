@@ -129,6 +129,10 @@ func latestClaimForTask(records []localruntime.IssueClaimRecord, requestID strin
 	return latest
 }
 
+func retainMergedIssueLogs(record localruntime.IssueClaimRecord) bool {
+	return record.Outcome == "merged" && (record.PRVerification != "" || record.FailureDetail() != "")
+}
+
 func (e *issueExecution) finish(ctx context.Context, state string, result app.Result, waitForStorage func() bool) error {
 	defer e.lock.Close()
 	if state == "" {

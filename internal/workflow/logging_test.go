@@ -65,18 +65,20 @@ func TestWorkflowLifecycleLogsAreBoundedAndDoNotRepeat(t *testing.T) {
 func TestWorkflowTerminalTransitionDuration(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
-		name            string
-		outcome         Outcome
-		workflowRemoved bool
-		alreadyMerged   bool
-		hasReceipt      bool
-		elapsed         time.Duration
-		want            string
+		name             string
+		outcome          Outcome
+		workflowRemoved  bool
+		alreadyMerged    bool
+		mergeOnWriteback bool
+		hasReceipt       bool
+		elapsed          time.Duration
+		want             string
 	}{
 		{name: "success", outcome: Outcome{Status: "succeeded"}, elapsed: 3 * time.Second, want: "status=succeeded reason=succeeded duration_ms=3000"},
 		{name: "zero elapsed", outcome: Outcome{Status: "succeeded"}, want: "status=succeeded reason=succeeded duration_ms=0"},
 		{name: "archived review interrupted", outcome: Outcome{Status: "failed", ReviewInterrupted: true}, alreadyMerged: true, elapsed: time.Hour, want: "status=merged reason=external_merge duration_ms=3000"},
 		{name: "merged before review writeback", outcome: Outcome{Status: "succeeded", PendingReviewGate: &githubutil.PendingReviewGate{}}, alreadyMerged: true, hasReceipt: true, elapsed: 3 * time.Second, want: "status=merged reason=merge_unconfirmed duration_ms=3000"},
+		{name: "merged during review writeback", outcome: Outcome{Status: "succeeded", PendingReviewGate: &githubutil.PendingReviewGate{}}, alreadyMerged: true, mergeOnWriteback: true, hasReceipt: true, elapsed: time.Hour, want: "status=merged reason=merge_unconfirmed duration_ms=3000"},
 		{name: "merged before review writeback without receipt", outcome: Outcome{Status: "succeeded", PendingReviewGate: &githubutil.PendingReviewGate{}}, alreadyMerged: true, elapsed: 3 * time.Second, want: "status=merged reason=merge_unconfirmed duration_ms=3000"},
 		{name: "completed without merge", outcome: Outcome{Status: "succeeded", PendingReviewGate: &githubutil.PendingReviewGate{}}, workflowRemoved: true, elapsed: 3 * time.Second, want: "status=completed reason=completed duration_ms=3000"},
 	} {
@@ -113,10 +115,23 @@ func TestWorkflowTerminalTransitionDuration(t *testing.T) {
 					if !test.hasReceipt {
 						t.Fatal("ran full inspection without a usable review receipt")
 					}
+					if test.mergeOnWriteback {
+						return Item{Open: true, HeadSHA: test.outcome.ReviewReceipt.Head}, nil
+					}
 					return inspect(ctx, repo, url)
 				}
+				writeback := false
 				e.FinishReview = func(context.Context, githubutil.ReviewReceipt, *githubutil.PendingReviewGate) error {
-					t.Fatal("review writeback ran after merge")
+					if !test.mergeOnWriteback {
+						t.Fatal("review writeback ran after merge")
+					}
+					writeback = true
+					return githubutil.ErrReviewInterrupted
+				}
+				e.RecordMerge = func(_ Run, mergedAt time.Time) error {
+					if writeback != test.mergeOnWriteback || !mergedAt.Equal(start.Add(3*time.Second)) {
+						t.Fatalf("merge receipt timestamp = %v, writeback ran = %t", mergedAt, writeback)
+					}
 					return nil
 				}
 			}

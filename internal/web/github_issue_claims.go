@@ -951,14 +951,14 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		if err := pr.recoveryBlocker(claimedIssue); err != nil {
 			return issueRetryResult{}, http.StatusConflict, err
 		}
-		if previous.State == localruntime.IssueStateMergedUnverified {
-			return issueRetryResult{}, http.StatusConflict, errors.New(mergedUnverifiedIssueError)
-		}
 		if previous.Version == 2 && previous.InstanceID == remote.InstanceID && previous.InstanceID == s.instanceID() && pr.mergedUnverified(previous) {
-			if err := s.recordMergedUnverifiedIssuePR(previous, pr); err != nil {
+			if err := s.recordRecoveredIssueMerge(previous, pr); err != nil {
 				return issueRetryResult{}, http.StatusServiceUnavailable, err
 			}
-			return issueRetryResult{}, http.StatusConflict, errors.New(mergedUnverifiedIssueError)
+			return issueRetryResult{}, http.StatusConflict, fmt.Errorf("issue already has a merged pull request")
+		}
+		if previous.State == localruntime.IssueStateMergedUnverified {
+			return issueRetryResult{}, http.StatusConflict, fmt.Errorf("issue already has a merged pull request")
 		}
 		if metadataRetry {
 			if pr.URL == "" || !strings.EqualFold(pr.URL, previous.PRURL) ||

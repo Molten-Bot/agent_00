@@ -21,6 +21,26 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/web"
 )
 
+func TestRetainMergedIssueLogs(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name   string
+		record localruntime.IssueClaimRecord
+		want   bool
+	}{
+		{name: "clean merge", record: localruntime.IssueClaimRecord{Outcome: "merged"}},
+		{name: "unfinished verification", record: localruntime.IssueClaimRecord{Outcome: "merged", PRVerification: "Verify draft checks"}, want: true},
+		{name: "failed review", record: localruntime.IssueClaimRecord{Outcome: "merged", RunError: "review: interrupted"}, want: true},
+		{name: "no issue claim"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := retainMergedIssueLogs(test.record); got != test.want {
+				t.Fatalf("retainMergedIssueLogs() = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
 func TestIssueOwnershipCheckPublishesOperatorStop(t *testing.T) {
 	t.Parallel()
 

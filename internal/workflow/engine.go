@@ -297,6 +297,17 @@ func (e *Engine) Runs() ([]Run, error) {
 	return s.Runs, err
 }
 
+// ActivationStartedAt includes the saved retry start of a retired activation.
+func (e *Engine) ActivationStartedAt(id string) (time.Time, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	s, err := e.load()
+	if err != nil {
+		return time.Time{}, err
+	}
+	return s.retryStart(id, time.Time{}), nil
+}
+
 // save persists only runs that still need dispatch recovery or merge coordination.
 // Keep the caller's slice intact so it can log a terminal transition after saving.
 func (e *Engine) save(s State) error {
@@ -961,6 +972,15 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		r.Outcome = &outcome
 		switch {
 		case errors.Is(err, githubutil.ErrReviewInterrupted):
+			state, inspectErr := inspectState(ctx, r.Item.Repository, r.PRURL)
+			if inspectErr != nil {
+				waitForQuota(inspectErr)
+				return errors.Join(inspectErr, finish())
+			}
+			if !state.Merged {
+				return fmt.Errorf("GitHub did not confirm the interrupted review's pull request merged")
+			}
+			mergedAt = state.MergedAt
 			r.Status, r.Reason = "merged", externalMergeReason
 		case errors.Is(err, githubutil.ErrReviewThreadsPending):
 			r.Reason = "Waiting for unresolved review threads"

@@ -895,13 +895,17 @@ func runServer(args []string) int {
 			usage := localruntime.ReadRuntimeConfigLibraryTaskUsage(cfg.RuntimeConfigPath)
 			return library.OrderSummariesByUsage(catalog.Summaries(), usage), nil
 		}
-		cleanupTaskLogs := func(_ context.Context, requestID string) error {
+		cleanupTaskLogs := func(requestID string, automatic bool) error {
 			records, err := issueClaims.List()
 			if err != nil {
 				return err
 			}
-			if record := latestClaimForTask(records, requestID); record.ID != "" && !record.Fulfilled() {
+			record := latestClaimForTask(records, requestID)
+			if record.ID != "" && !record.Fulfilled() {
 				return fmt.Errorf("unresolved issue evidence is retained; resolve or explicitly abandon the issue before deleting it")
+			}
+			if automatic && retainMergedIssueLogs(record) {
+				return nil
 			}
 			var errs []error
 
@@ -1003,7 +1007,9 @@ func runServer(args []string) int {
 				return enqueueLocalRun(reqCtx, retryCfg, rerunSource, force)
 			})
 		}
-		uiServer.CloseTask = cleanupTaskLogs
+		uiServer.CloseTask = func(_ context.Context, requestID string) error {
+			return cleanupTaskLogs(requestID, false)
+		}
 		uiServer.ResolveTaskControls = localTaskController.Controls
 		uiServer.PauseTask = func(_ context.Context, requestID string) error {
 			if localTaskController.Controls(requestID).Pause {
@@ -1062,11 +1068,13 @@ func runServer(args []string) int {
 			return app.ExitSuccess
 		}
 		prMonitor := &web.PRMergeMonitor{
-			Cooldown:          githubCooldown,
-			Runner:            runner,
-			Broker:            monitorBroker,
-			Logf:              daemonLogger,
-			CleanupTask:       cleanupTaskLogs,
+			Cooldown: githubCooldown,
+			Runner:   runner,
+			Broker:   monitorBroker,
+			Logf:     daemonLogger,
+			CleanupTask: func(_ context.Context, requestID string) error {
+				return cleanupTaskLogs(requestID, true)
+			},
 			MemoryPressure:    memoryPressure,
 			RepositoryAllowed: uiServer.RepositoryAllowed,
 		}

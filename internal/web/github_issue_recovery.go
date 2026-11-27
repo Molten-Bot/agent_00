@@ -51,8 +51,6 @@ func (s Server) WakeIssueRecovery() {
 
 var errIssueRecoveryDeferred = errors.New("issue recovery deferred during memory pressure")
 
-const mergedUnverifiedIssueError = "pull request merged before draft verification passed"
-
 func (s Server) runIssueRecovery(ctx context.Context) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
@@ -305,14 +303,9 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	if record.Incident == workflowIssueRecoveryIncident && record.Outcome != "merged" {
 		return nil
 	}
-	if !record.UnlockPending {
-		if record.Fulfilled() {
-			s.publishVerifiedIssuePR(record)
-			return nil
-		}
-		if record.State == localruntime.IssueStateMergedUnverified {
-			return nil
-		}
+	if !record.UnlockPending && record.Fulfilled() {
+		s.publishVerifiedIssuePR(record)
+		return nil
 	}
 	if record.State == "blocked" && record.Incident == localruntime.IssueIncidentBranchRecovery && !record.UnlockPending {
 		return nil
@@ -529,7 +522,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 			return s.deferIssueUnlock(record.ID, err)
 		}
 	}
-	if cooling || record.Fulfilled() || record.State == localruntime.IssueStateMergedUnverified {
+	if cooling || record.Fulfilled() {
 		return nil
 	}
 	if app.IsWorkflowPRMetadataFailure(record.FailureDetail()) ||
@@ -553,10 +546,11 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 				return s.deferIssueRecord(record, err)
 			}
 		}
-		if ownsBranch && pr.URL != "" && !pr.Closed && pr.BaseBranch == issue.Claim.BaseBranch && !pr.resumesVerification(record) {
-			if pr.mergedUnverified(record) {
-				return s.recordMergedUnverifiedIssuePR(record, pr)
-			}
+		matchesClaim := ownsBranch && pr.URL != "" && !pr.Closed && pr.BaseBranch == issue.Claim.BaseBranch
+		if matchesClaim && pr.mergedUnverified(record) {
+			return s.recordRecoveredIssueMerge(record, pr)
+		}
+		if matchesClaim && record.State != localruntime.IssueStateMergedUnverified && !pr.resumesVerification(record) {
 			if record.Outcome == "interrupted" {
 				if err := s.verifyRecoveredIssuePR(ctx, record, pr); err != nil {
 					return s.deferIssueRecord(record, err)
@@ -564,6 +558,9 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 			}
 			return s.recordVerifiedIssuePR(record, pr)
 		}
+	}
+	if record.State == localruntime.IssueStateMergedUnverified {
+		return nil
 	}
 	// A restored owner can finalize a stopped attempt. Dispatch still requires
 	// an explicit retry.
@@ -757,28 +754,32 @@ func (s *Server) RecordWorkflowMerge(run workflow.Run, mergedAt time.Time) error
 			(current.PRURL != "" && !strings.EqualFold(current.PRURL, run.PRURL)) {
 			return nil
 		}
-		current.RunError = current.FailureDetail()
-		current.State, current.Outcome = "fulfilled", "merged"
-		current.PRURL = run.PRURL
-		current.Error = ""
-		current.ExitCode = 0
-		current.NextAttemptAt = time.Time{}
-		current.UnlockPending = current.UnlockPending || current.LabelAdded
-		if current.StoppedAt.IsZero() {
-			current.StoppedAt = mergedAt
-			if current.StoppedAt.IsZero() {
-				current.StoppedAt = time.Now().UTC()
-			}
-		}
-		if err := s.IssueClaims.Save(current); err != nil {
-			return err
-		}
-		if current.UnlockPending {
-			s.WakeIssueRecovery()
-		}
-		return nil
+		return s.settleIssueMerge(current, run.PRURL, mergedAt)
 	}
 	return listErr
+}
+
+func (s Server) settleIssueMerge(record localruntime.IssueClaimRecord, prURL string, mergedAt time.Time) error {
+	record.RunError = record.FailureDetail()
+	record.State, record.Outcome = "fulfilled", "merged"
+	record.PRURL = prURL
+	record.Error = ""
+	record.ExitCode = 0
+	record.NextAttemptAt = time.Time{}
+	record.UnlockPending = record.UnlockPending || record.LabelAdded
+	if record.StoppedAt.IsZero() {
+		record.StoppedAt = mergedAt
+		if record.StoppedAt.IsZero() {
+			record.StoppedAt = time.Now().UTC()
+		}
+	}
+	if err := s.IssueClaims.Save(record); err != nil {
+		return err
+	}
+	if record.UnlockPending {
+		s.WakeIssueRecovery()
+	}
+	return nil
 }
 
 func (s Server) recordVerifiedIssuePR(record localruntime.IssueClaimRecord, pr issuePullRequest) error {
@@ -795,16 +796,26 @@ func (s Server) recordVerifiedIssuePR(record localruntime.IssueClaimRecord, pr i
 	return nil
 }
 
-func (s Server) recordMergedUnverifiedIssuePR(record localruntime.IssueClaimRecord, pr issuePullRequest) error {
-	record.RunError = record.FailureDetail()
-	record.PRURL = pr.URL
+func (s Server) recordRecoveredIssueMerge(record localruntime.IssueClaimRecord, pr issuePullRequest) error {
 	record.PRTitle = strings.TrimSpace(pr.Title)
-	record.VerifiedAt = time.Time{}
-	record.State = localruntime.IssueStateMergedUnverified
-	record.Error = mergedUnverifiedIssueError
-	record.NextAttemptAt = time.Time{}
-	record.UnlockPending = record.LabelAdded
-	return s.IssueClaims.Save(record)
+	if record.PRVerification != "" {
+		record.VerifiedAt = time.Time{}
+	}
+	if err := s.settleIssueMerge(record, pr.URL, pr.MergedAt); err != nil {
+		return err
+	}
+	if s.Broker != nil {
+		var startedAt time.Time
+		if policy := record.Run.Workflow; policy != nil && !policy.IsDefaultExecution() && s.Workflows != nil {
+			var err error
+			startedAt, err = s.Workflows.ActivationStartedAt(policy.EventID)
+			if err != nil {
+				s.logf("localruntime.ui status=warn event=issue_merge_timing request_id=%q", record.RequestID)
+			}
+		}
+		s.Broker.recordRecoveredIssueMerge(record.RequestID, startedAt, pr.MergedAt)
+	}
+	return nil
 }
 
 func (s Server) publishVerifiedIssuePR(record localruntime.IssueClaimRecord) {
@@ -993,6 +1004,7 @@ type issuePullRequest struct {
 	BaseBranch string
 	Closed     bool
 	Merged     bool
+	MergedAt   time.Time
 }
 
 func (pr issuePullRequest) mergedUnverified(record localruntime.IssueClaimRecord) bool {
@@ -1155,6 +1167,9 @@ func (s Server) findIssuePR(ctx context.Context, issue *config.GitHubIssueConfig
 				BaseBranch: pr.Base.Ref,
 				Closed:     pr.State == "closed" && pr.MergedAt == nil,
 				Merged:     pr.MergedAt != nil,
+			}
+			if pr.MergedAt != nil {
+				match.MergedAt = *pr.MergedAt
 			}
 			if match.BaseBranch == issue.Claim.BaseBranch && (pr.State == "open" || match.Merged) {
 				return match, nil

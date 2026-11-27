@@ -927,13 +927,39 @@ func TestConfirmedWorkflowMergeSettlesIssueClaim(t *testing.T) {
 
 func TestIssueRecoveryPreservesFailedVerificationAfterExternalMerge(t *testing.T) {
 	t.Parallel()
-	for _, mode := range []string{"restart", "explicit retry", "legacy fulfilled record"} {
+	for _, mode := range []string{"live failed task", "restart", "explicit retry", "legacy fulfilled record", "legacy merged-unverified record"} {
 		t.Run(mode, func(t *testing.T) {
 			s, f := recoveryServer(t)
 			reconcileOrAdmitTestIssue(t.Context(), s)
 			record := completeRecoveryRecord(t, s, "error", 1)
 			const failure = "pr_verification: reviewed patch evidence is truncated"
 			const prURL = "https://github.com/acme/repo/pull/42"
+			const eventID = "workflow-activation"
+			startedAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+			doc, err := s.Workflows.Store.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			w := doc.Workflows[0]
+			record.Run.Workflow = &config.WorkflowRunConfig{ID: w.ID, EventID: eventID, PolicyHash: w.ExecutionPolicyHash()}
+			record.StartedAt = startedAt.Add(15 * time.Second)
+			engine := s.Workflows
+			engine.Now = func() time.Time { return startedAt }
+			engine.Reconcile = func(string) string { return record.RequestID }
+			engine.Fetch = func(context.Context, string, workflow.ScanNeeds) ([]workflow.Item, error) { return nil, nil }
+			item := workflow.Item{Repository: w.Repository, Kind: "issue", Number: record.Run.GitHubIssue.Number}
+			if err := engine.PrepareIssueRecovery(w.ID, w.ExecutionPolicyHash(), eventID, "", item, nil); err != nil {
+				t.Fatal(err)
+			}
+			if err := engine.Complete(eventID, workflow.Outcome{Status: "failed", PRURL: prURL, Reason: failure}); err != nil {
+				t.Fatal(err)
+			}
+			if err := engine.Tick(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if runs, err := engine.Runs(); err != nil || len(runs) != 0 {
+				t.Fatalf("failed activation was not retired: %+v, %v", runs, err)
+			}
 			record.PRVerification = "Verify CI and submitted review on the published head."
 			record.RunError, record.Error = failure, failure
 			record.PriorRunFailures = 1
@@ -948,21 +974,30 @@ func TestIssueRecoveryPreservesFailedVerificationAfterExternalMerge(t *testing.T
 				t.Fatalf("open draft lost its retry state: %+v", pending)
 			}
 			expireIssueRetry(t, s, record.ID)
-			if mode == "legacy fulfilled record" {
+			if mode == "legacy fulfilled record" || mode == "legacy merged-unverified record" {
 				if err := s.IssueClaims.Update(record.ID, func(r *localruntime.IssueClaimRecord) error {
-					r.State, r.PRURL, r.VerifiedAt = "fulfilled", prURL, time.Now()
+					r.PRURL = prURL
+					if mode == "legacy fulfilled record" {
+						r.State, r.VerifiedAt = "fulfilled", time.Now()
+					} else {
+						r.State = localruntime.IssueStateMergedUnverified
+					}
 					return nil
 				}); err != nil {
 					t.Fatal(err)
 				}
 			}
-			f.prs = recoveryPR("closed", `"2026-01-01T00:00:00Z"`, record.Run.GitHubIssue.Claim.Branch, "main")
+			f.prs = recoveryPR("closed", `"2026-01-01T00:02:00Z"`, record.Run.GitHubIssue.Claim.Branch, "main")
 			restarted := automationServer(t, f.automationGitHub)
 			restarted.IssueClaims = &localruntime.IssueClaimStore{Root: s.IssueClaims.Root}
 			restarted.GitHubIssueRunner, restarted.IssueRecovery, restarted.Workflows = f, s.IssueRecovery, s.Workflows
+			if mode == "live failed task" {
+				restarted.Broker.IngestLog("task status=start request_id=" + record.RequestID)
+				restarted.Broker.IngestLog("task status=error request_id=" + record.RequestID + " pr_url=" + prURL)
+			}
 			if mode == "explicit retry" {
 				if response := retryIssue(t, restarted, record.ID, true); response.Code != http.StatusConflict ||
-					!strings.Contains(response.Body.String(), mergedUnverifiedIssueError) {
+					!strings.Contains(response.Body.String(), "issue already has a merged pull request") {
 					t.Fatalf("retry after merge: status=%d body=%s", response.Code, response.Body.String())
 				}
 			}
@@ -972,11 +1007,21 @@ func TestIssueRecoveryPreservesFailedVerificationAfterExternalMerge(t *testing.T
 				}
 			}
 			got := latestRecoveryRecord(t, restarted)
-			if got.State != localruntime.IssueStateMergedUnverified || got.Error != mergedUnverifiedIssueError ||
-				got.ID != record.ID || got.RequestID != record.RequestID || got.Outcome != "error" || got.FailureDetail() != failure ||
+			if !got.Fulfilled() || got.State != "fulfilled" || got.Error != "" ||
+				got.ID != record.ID || got.RequestID != record.RequestID || got.Outcome != "merged" || got.FailureDetail() != failure ||
 				got.PRVerification != record.PRVerification || got.PRURL != prURL || !got.VerifiedAt.IsZero() || !got.NextAttemptAt.IsZero() ||
-				got.UnlockPending || issueRunFailures(got) != 2 || len(f.submissions) != 1 || len(restarted.Broker.verifiedTaskPRs) != 0 {
+				got.UnlockPending || issueRunFailures(got) != 0 || len(f.submissions) != 1 || len(restarted.Broker.verifiedTaskPRs) != 0 {
 				t.Fatalf("external merge lost failed verification history: %+v, submissions=%d", got, len(f.submissions))
+			}
+			response := httptest.NewRecorder()
+			restarted.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/status", nil))
+			var dashboard Snapshot
+			if err := json.Unmarshal(response.Body.Bytes(), &dashboard); err != nil {
+				t.Fatal(err)
+			}
+			if response.Code != http.StatusOK || dashboard.Stats.TotalSavedSeconds != 120 ||
+				len(dashboard.Tasks) != 1 || dashboard.Tasks[0].Status != "merged" || dashboard.Tasks[0].RetryAt != "" {
+				t.Fatalf("dashboard did not count the recovered workflow once: %s", response.Body.String())
 			}
 		})
 	}

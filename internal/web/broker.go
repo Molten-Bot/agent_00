@@ -2090,6 +2090,30 @@ func (b *Broker) applyWorkflowMergeLocked(requestID string, mergedTime, now time
 	}
 }
 
+func (b *Broker) recordRecoveredIssueMerge(requestID string, startedAt, mergedAt time.Time) {
+	if requestID == "" {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if _, forgotten := b.forgottenTasks[requestID]; forgotten {
+		return
+	}
+	timing := b.workflowTaskTimes[requestID]
+	if !startedAt.IsZero() && (timing.startedAt.IsZero() || startedAt.Before(timing.startedAt)) {
+		timing.startedAt = startedAt
+	}
+	if !timing.startedAt.IsZero() && !mergedAt.IsZero() {
+		timing.finishedAt = mergedAt
+		if b.workflowTaskTimes == nil {
+			b.workflowTaskTimes = make(map[string]workflowTiming)
+		}
+		b.workflowTaskTimes[requestID] = timing
+	}
+	b.applyWorkflowMergeLocked(requestID, mergedAt, b.now().UTC())
+	b.notifySubscribersLocked()
+}
+
 // TaskAttempts returns a copy of internal attempt records for requestID's root task.
 func (b *Broker) TaskAttempts(requestID string) []TaskAttempt {
 	if b == nil {
