@@ -790,6 +790,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			var dispatches, mergeReceipts int
 			if tc.delivery {
 				h.ResumeIssueWorkspace = true
+				h.IssueWorkspaceDir = filepath.Join(root, "issue-workspace")
 				passes := 10
 				if tc.repair {
 					passes = 1
@@ -974,6 +975,9 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				h.IssuePRVerification = savedRequirement
 				if !checksRetry {
 					cfg.GitHubIssue.Claim.Attempt++
+				}
+				if repairRetry {
+					h.Workspace.NewGUID = func() string { return "retry-run" }
 				}
 				result = h.Run(t.Context(), cfg)
 				if tc.retry {

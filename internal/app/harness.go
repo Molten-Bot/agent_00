@@ -240,6 +240,8 @@ type Harness struct {
 	SaveWorkflowPRResume func(string) error
 
 	ResumeIssueWorkspace bool
+	// IssueWorkspaceDir is the retained issue workspace for retry checkpoints.
+	IssueWorkspaceDir string
 	// IssueCheckoutComplete records that the preserved checkout finished.
 	IssueCheckoutComplete bool
 	// IssuePublicationReady records that a prior attempt accepted the agent result.
@@ -1445,13 +1447,13 @@ func (h Harness) checkPublishedPullRequest(
 			if h.ResumeIssueWorkspace {
 				policy := capturedReviewPolicy(cfg, h.FinalReviewPasses)
 				if repo.ReviewRepairPass == 0 {
-					repo.ReviewRepairPass, err = loadReviewRepairPass(*repo, checkHead, policy)
+					repo.ReviewRepairPass, err = h.loadReviewRepairPass(*repo, checkHead, policy)
 					if err != nil {
 						return ExitPR, "checks", err
 					}
 				} else {
 					progress := reviewRepairProgress{PRURL: repo.PRURL, Head: checkHead, Pass: repo.ReviewRepairPass, Policy: policy}
-					if err := saveReviewJournal(reviewRepairProgressPath(*repo), progress); err != nil {
+					if err := saveReviewJournal(h.reviewRepairProgressPath(*repo), progress); err != nil {
 						return ExitPR, "checks", fmt.Errorf("save published review repair: %w", err)
 					}
 				}

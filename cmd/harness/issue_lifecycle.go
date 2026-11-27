@@ -312,6 +312,7 @@ func (e *issueExecution) configure(ctx context.Context, h *app.Harness) (context
 	h.Workspace.Root = filepath.Dir(e.record.WorkspaceDir)
 	h.Workspace.NewGUID = func() string { return filepath.Base(e.record.WorkspaceDir) }
 	h.ResumeIssueWorkspace = true
+	h.IssueWorkspaceDir = e.record.WorkspaceDir
 	h.IssueCheckoutComplete = e.record.CheckoutComplete
 	h.IssuePublicationReady = e.record.PublicationReady
 	h.IssuePRVerification = e.record.PRVerification

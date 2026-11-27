@@ -309,13 +309,14 @@ type reviewRepairProgress struct {
 	Policy      githubutil.ReviewPolicy
 }
 
-func reviewRepairProgressPath(repo repoWorkspace) string {
-	return filepath.Join(filepath.Dir(repo.Dir), "review-repair.json")
+func (h Harness) reviewRepairProgressPath(repo repoWorkspace) string {
+	dir := stringsx.FirstNonEmpty(h.IssueWorkspaceDir, filepath.Dir(repo.Dir))
+	return filepath.Join(dir, "review-repair.json")
 }
 
 // Only continue the fix budget for the same published repair and policy.
-func loadReviewRepairPass(repo repoWorkspace, head string, policy githubutil.ReviewPolicy) (int, error) {
-	raw, err := os.ReadFile(reviewRepairProgressPath(repo))
+func (h Harness) loadReviewRepairPass(repo repoWorkspace, head string, policy githubutil.ReviewPolicy) (int, error) {
+	raw, err := os.ReadFile(h.reviewRepairProgressPath(repo))
 	if errors.Is(err, os.ErrNotExist) {
 		return 0, nil
 	}
