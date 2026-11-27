@@ -23,6 +23,9 @@ func (h Harness) ensurePullRequestMergeable(
 	runtime agentruntime.Runtime, codexDir string, codexOpts codexRunOptions,
 	codexBasePrompt, agentsPath, codexTargetLabel, agentStage string,
 ) (int, string, error) {
+	if repo.PRAlreadyMerged {
+		return ExitSuccess, "", nil
+	}
 	const maxChecks = 6
 	repaired := false
 	for check := 0; check < maxChecks; check++ {
@@ -50,7 +53,8 @@ func (h Harness) ensurePullRequestMergeable(
 			return ExitPR, "pr", fmt.Errorf("decode pull request mergeability: %w", err)
 		}
 		if strings.EqualFold(state.State, "MERGED") {
-			repo.ReviewStoppedOnMerge = true
+			h.logf("stage=pr status=ok action=observe_merge pr_url=%s", repo.PRURL)
+			h.recordObservedMerge(repo)
 			return ExitSuccess, "", nil
 		}
 		if !strings.EqualFold(state.State, "OPEN") {

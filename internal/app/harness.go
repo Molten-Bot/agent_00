@@ -198,7 +198,6 @@ type repoWorkspace struct {
 	PublishStrategy             string
 	PRCommentScreenshotBaseline map[string]string
 	PRCommentScreenshotFiles    []string
-	ReviewStoppedOnMerge        bool
 	PRAlreadyMerged             bool
 	ReviewInterrupted           bool
 	ReviewReceipt               *githubutil.ReviewReceipt
@@ -1040,13 +1039,8 @@ func (h Harness) finalizePullRequestReview(
 	if h.FinalReviewPasses <= 0 && !repo.ReviewRequired {
 		return ExitSuccess, "", nil
 	}
-	if repo.ReviewStoppedOnMerge {
-		repo.ReviewInterrupted = true
-		h.logFinalReviewStoppedForMergedPR(*repo, 0, h.FinalReviewPasses)
-		return stoppedDraftReview(*repo)
-	}
-	if err := h.requireWorkspace(ctx); err != nil {
-		return ExitWorkspace, "workspace", err
+	if repo.PRAlreadyMerged {
+		return ExitSuccess, "", nil
 	}
 	defer func() {
 		repo.ReviewedPatch.remove()
@@ -1056,8 +1050,12 @@ func (h Harness) finalizePullRequestReview(
 		ctx, cfg, repo, runtime, codexDir, codexOpts, codexBasePrompt,
 		agentsPath, codexTargetLabel, agentStage, multiRepo,
 	)
-	if repo.ReviewStoppedOnMerge {
-		return stoppedDraftReview(*repo)
+	if repo.PRAlreadyMerged {
+		return ExitSuccess, "", nil
+	}
+	if errors.Is(err, githubutil.ErrReviewInterrupted) {
+		h.recordObservedMerge(repo)
+		return ExitSuccess, "", nil
 	}
 	findingsRemain := errors.Is(err, errFinalReviewFindingsRemain)
 	if findingsRemain {
@@ -1072,10 +1070,8 @@ func (h Harness) finalizePullRequestReview(
 	if exitCode, stage, err := h.ensurePullRequestMergeable(ctx, cfg, repo, runtime, codexDir, codexOpts, codexBasePrompt, agentsPath, codexTargetLabel, agentStage); err != nil {
 		return exitCode, stage, err
 	}
-	if repo.ReviewStoppedOnMerge {
-		repo.ReviewInterrupted = true
-		h.logFinalReviewStoppedForMergedPR(*repo, 0, h.FinalReviewPasses)
-		return stoppedDraftReview(*repo)
+	if repo.PRAlreadyMerged {
+		return ExitSuccess, "", nil
 	}
 	if repo.CreateWorkBranch || repo.ResumeWorkflowPR {
 		hasNetDiff, diffErr := h.repoHasEffectivePullRequestDiff(ctx, *repo)
@@ -1126,10 +1122,9 @@ func (h Harness) finalizePullRequestReview(
 			// start new required checks without changing the reviewed head.
 			_, err = h.waitForDraftVerificationEvidence(ctx, *repo)
 		}
-		if errors.Is(err, errMergedBeforeDraftVerification) {
-			repo.PRAlreadyMerged = true
+		if errors.Is(err, githubutil.ErrReviewInterrupted) {
 			h.logf("stage=pr_verification status=ok action=observe_merge pr_url=%s", repo.PRURL)
-			h.suspendWorkspace()
+			h.recordObservedMerge(repo)
 			return ExitSuccess, "", nil
 		}
 		if err != nil {
@@ -1137,7 +1132,6 @@ func (h Harness) finalizePullRequestReview(
 			if !errors.Is(err, errDraftChecksPending) && !errors.Is(err, errDraftRestoring) && !errors.As(err, &rate) {
 				repo.ReviewReceipt = nil
 			}
-			repo.ReviewInterrupted = errors.Is(err, githubutil.ErrReviewInterrupted)
 			return ExitPR, "pr_verification", err
 		}
 		h.logf("stage=pr_verification status=ok")
@@ -1152,7 +1146,12 @@ func (h Harness) finalizePullRequestReview(
 		if errors.Is(err, ErrReviewHeadChanged) {
 			repo.ReviewReceipt = nil
 		}
-		return ExitPR, "review", h.reviewPublicationError(ctx, repo, 0, h.FinalReviewPasses, err)
+		err = h.reviewPublicationError(ctx, repo, 0, h.FinalReviewPasses, err)
+		if errors.Is(err, githubutil.ErrReviewInterrupted) {
+			h.recordObservedMerge(repo)
+			return ExitSuccess, "", nil
+		}
+		return ExitPR, "review", err
 	}
 	repo.PRVerificationPassed = repo.PRVerification != ""
 	return exitCode, stage, err
@@ -1438,12 +1437,13 @@ func (h Harness) checkPublishedPullRequest(
 			checkSummary string
 		)
 		noReportBudget := maxPRChecksNoReportRetries * prChecksNoReportRetryDelay
-		noReportPoll := newCheckPoll("checks", repo.PRURL)
+		// Check propagation and execution share one timing sample for this head.
+		poll := newCheckPoll("checks", repo.PRURL)
 		for noReportRetry := 0; ; noReportRetry++ {
 			requiredChecksOnly := false
 			confirmedFailure := false
 			h.logf("stage=checks status=start repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
-			checkRes, checkErr = h.runPRChecksWatch(ctx, repo.Dir, repo.PRURL)
+			checkRes, checkErr = h.runPRChecksWatch(ctx, prChecksCommand(repo.Dir, repo.PRURL), poll)
 			if errors.Is(checkErr, ErrChecksUnavailable) || ctx.Err() != nil {
 				return ExitPR, "checks", checkErr
 			}
@@ -1532,7 +1532,7 @@ func (h Harness) checkPublishedPullRequest(
 					)
 				}
 				requiredChecksOnly = false
-				checkRes, checkErr = h.runPRChecksAnyWatch(ctx, repo.Dir, repo.PRURL)
+				checkRes, checkErr = h.runPRChecksWatch(ctx, prChecksAnyCommand(repo.Dir, repo.PRURL), poll)
 				if errors.Is(checkErr, ErrChecksUnavailable) || ctx.Err() != nil {
 					return ExitPR, "checks", checkErr
 				}
@@ -1641,7 +1641,7 @@ func (h Harness) checkPublishedPullRequest(
 				if recreated {
 					noReportRetry = -1
 					noReportBudget = maxPRChecksNoReportRetries * prChecksNoReportRetryDelay
-					noReportPoll = newCheckPoll("checks", repo.PRURL)
+					poll = newCheckPoll("checks", repo.PRURL)
 					continue
 				}
 			}
@@ -1747,7 +1747,8 @@ func (h Harness) checkPublishedPullRequest(
 				break
 			}
 
-			delay := min(noReportBudget, max(prChecksNoReportRetryDelay, noReportPoll.delay(h)))
+			poll.waited = true
+			delay := min(noReportBudget, max(prChecksNoReportRetryDelay, poll.delay(h)))
 			h.logf(
 				"stage=checks status=waiting action=wait_for_github_checks reason=no_checks_reported repo=%s repo_dir=%s pr_url=%s attempt=%d retry=%d/%d last_github_refresh=%q next_poll_s=%d",
 				repo.URL,
@@ -4766,6 +4767,9 @@ func (h Harness) runFinalReviewCycle(
 	// error); a redundant bound would leave an unreachable statement after
 	// the loop for Go's terminating-statement check to flag.
 	for pass := 1; ; pass++ {
+		if err := h.requireWorkspace(ctx); err != nil {
+			return ExitWorkspace, "workspace", err
+		}
 		patch.remove()
 		patch = nil
 		reviewMode := finalReviewMode(h.FinalReviewPasses)
@@ -4804,9 +4808,8 @@ func (h Harness) runFinalReviewCycle(
 			return ExitPR, "review", err
 		}
 		if strings.EqualFold(strings.TrimSpace(metadata.State), "merged") {
-			repo.ReviewStoppedOnMerge = true
-			repo.ReviewInterrupted = true
 			h.logFinalReviewStoppedForMergedPR(*repo, pass, passLabelTotal)
+			h.recordObservedMerge(repo)
 			return ExitSuccess, "", nil
 		}
 		if metadata.HeadRefOID == "" || metadata.HeadRefOID != headBefore {
@@ -4868,8 +4871,7 @@ func (h Harness) runFinalReviewCycle(
 			return ExitCodex, agentStage, err
 		}
 		if h.finalReviewPullRequestMerged(ctx, *repo, pass, passLabelTotal) {
-			repo.ReviewStoppedOnMerge = true
-			repo.ReviewInterrupted = true
+			h.recordObservedMerge(repo)
 			return ExitSuccess, "", nil
 		}
 		if err := h.validateEnforcedNonDefaultBranch(ctx, *repo); err != nil {
@@ -4975,8 +4977,7 @@ func (h Harness) runFinalReviewCycle(
 			return ExitCodex, agentStage, err
 		}
 		if h.finalReviewPullRequestMerged(ctx, *repo, pass, h.FinalReviewPasses) {
-			repo.ReviewStoppedOnMerge = true
-			repo.ReviewInterrupted = true
+			h.recordObservedMerge(repo)
 			return ExitSuccess, "", nil
 		}
 		if err := h.validateEnforcedNonDefaultBranch(ctx, *repo); err != nil {
@@ -5103,7 +5104,7 @@ func (h Harness) finalReviewPullRequestMerged(ctx context.Context, repo repoWork
 		)
 		return false
 	}
-	if strings.TrimSpace(state.MergedAt) == "" && !strings.EqualFold(strings.TrimSpace(state.State), "merged") {
+	if !pullRequestStateIsMerged(state) {
 		return false
 	}
 	h.logFinalReviewStoppedForMergedPR(repo, pass, total)
@@ -5119,6 +5120,12 @@ func (h Harness) logFinalReviewStoppedForMergedPR(repo repoWorkspace, pass, tota
 		repo.RelDir,
 		repo.PRURL,
 	)
+}
+
+func (h Harness) recordObservedMerge(repo *repoWorkspace) {
+	repo.PRAlreadyMerged = true
+	repo.ReviewInterrupted = false
+	h.suspendWorkspace()
 }
 
 func finalReviewMode(passes int) string {
@@ -6193,19 +6200,11 @@ func diskSpaceExhaustionError(cmd execx.Command, res execx.Result, err error) er
 	)
 }
 
-func (h Harness) runPRChecksWatch(ctx context.Context, repoDir, prURL string) (execx.Result, error) {
-	return h.runPRChecksWatchCommand(ctx, prChecksCommand(repoDir, prURL), prURL)
-}
-
-func (h Harness) runPRChecksAnyWatch(ctx context.Context, repoDir, prURL string) (execx.Result, error) {
-	return h.runPRChecksWatchCommand(ctx, prChecksAnyCommand(repoDir, prURL), prURL)
-}
-
-func (h Harness) runPRChecksWatchCommand(ctx context.Context, cmd execx.Command, prURL string) (execx.Result, error) {
+func (h Harness) runPRChecksWatch(ctx context.Context, cmd execx.Command, poll checkPoll) (execx.Result, error) {
 	waitForReset := h.WaitForGitHub && !h.ResumeIssueWorkspace
 	h.WaitForGitHub = false
 	for {
-		res, err := h.watchPRChecks(ctx, cmd, prURL)
+		res, err := h.watchPRChecks(ctx, cmd, poll)
 		var rate *githubutil.RateLimitError
 		if !waitForReset || !errors.As(err, &rate) {
 			return res, err
@@ -6218,7 +6217,7 @@ func (h Harness) runPRChecksWatchCommand(ctx context.Context, cmd execx.Command,
 	}
 }
 
-func (h Harness) watchPRChecks(ctx context.Context, cmd execx.Command, prURL string) (execx.Result, error) {
+func (h Harness) watchPRChecks(ctx context.Context, cmd execx.Command, poll checkPoll) (execx.Result, error) {
 	watchCtx := ctx
 	if timeout := h.prChecksWatchTimeout(); timeout > 0 {
 		var cancel context.CancelFunc
@@ -6231,7 +6230,7 @@ func (h Harness) watchPRChecks(ctx context.Context, cmd execx.Command, prURL str
 		// Give each check read its own permit so gh cannot keep polling
 		// internally after another client has observed a cooldown.
 		cmd.Args = cmd.Args[:3]
-		res, err = h.pollPRChecks(watchCtx, cmd, prURL)
+		res, err = h.pollPRChecks(watchCtx, cmd, poll)
 	} else {
 		h.suspendWorkspace()
 		res, err = h.runCheckQuery(watchCtx, "checks", cmd, 0)
@@ -6242,24 +6241,22 @@ func (h Harness) watchPRChecks(ctx context.Context, cmd execx.Command, prURL str
 	return res, err
 }
 
-func (h Harness) pollPRChecks(ctx context.Context, cmd execx.Command, prURL string) (execx.Result, error) {
+func (h Harness) pollPRChecks(ctx context.Context, cmd execx.Command, poll checkPoll) (execx.Result, error) {
 	sleep := h.Sleep
 	if sleep == nil {
 		sleep = sleepWithContext
 	}
-	poll := newCheckPoll("checks", prURL)
-	waited := false
 	for {
 		res, err := h.runCheckQuery(ctx, "checks", cmd, checkQueryTimeout)
 		snapshot, _ := latestCheckSnapshotFromText(res.Stdout)
 		// gh pr checks exits 8 while checks are still pending.
 		if !checkWatchPending(err) {
-			if waited && (err == nil || snapshot.HasFailures) {
+			if poll.waited && (err == nil || snapshot.HasFailures) {
 				poll.finish(h, true)
 			}
 			return res, err
 		}
-		waited = true
+		poll.waited = true
 		h.suspendWorkspace()
 		delay := poll.delay(h)
 		poll.report(h, "wait_for_github_checks", "", snapshot.Pending, time.Now(), delay)

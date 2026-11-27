@@ -20,13 +20,6 @@ var errDraftChecksPending = fmt.Errorf("%w: %w: waiting for checks on the review
 var errDraftRestoring = fmt.Errorf("%w: %w: waiting for the pull request to return to draft", ErrReviewPending, ErrChecksUnavailable)
 var errMergedBeforeDraftVerification = fmt.Errorf("pull request merged before draft verification passed: %w", githubutil.ErrReviewInterrupted)
 
-func stoppedDraftReview(repo repoWorkspace) (int, string, error) {
-	if repo.PRVerification != "" {
-		return ExitPR, "pr_verification", errMergedBeforeDraftVerification
-	}
-	return ExitSuccess, "", nil
-}
-
 const (
 	draftHandoffPrefix       = "Draft handoff:"
 	maxPRVerificationLength  = 4096

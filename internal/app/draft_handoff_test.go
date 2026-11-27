@@ -166,6 +166,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 		baseMoved              bool
 		baseMovedAfterEvidence bool
 		publishedBaseMoved     bool
+		mergedAtReview         string
 		mergedDuringEvidence   bool
 		mergedOnEvidencePoll   bool
 		reviewStale            bool
@@ -233,6 +234,9 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			wantEvidenceError: "reviewed patch evidence has a stale draft base"},
 		{name: "base changed during offline verification", answer: localSuccess, change: true, baseMovedAfterEvidence: true, wantExit: ExitPR},
 		{name: "published base moves while PR metadata is stale", answer: localSuccess, change: true, publishedBaseMoved: true, wantExit: ExitPR},
+		{name: "external merge at initial mergeability check", answer: localSuccess, change: true, mergedAtReview: "before"},
+		{name: "external merge during final review", answer: localSuccess, change: true, mergedAtReview: "during"},
+		{name: "external merge at final mergeability check", answer: localSuccess, change: true, mergedAtReview: "after"},
 		{name: "external merge during offline verification", answer: localSuccess, change: true, mergedDuringEvidence: true},
 		{name: "external merge while polling for draft checks", answer: localSuccess, change: true, pendingChecks: 1, mergedOnEvidencePoll: true},
 		{name: "submitted review stale", answer: localSuccess, change: true, reviewStale: true, wantExit: ExitPR},
@@ -543,6 +547,14 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 					case strings.HasPrefix(args, "pr view "):
 						head := api.head
 						state := "OPEN"
+						if slices.Contains(cmd.Args, "state,mergeable,baseRefName,headRefName") &&
+							(tc.mergedAtReview == "before" || (tc.mergedAtReview == "after" && api.posts > 0)) {
+							state = "MERGED"
+						}
+						if tc.mergedAtReview == "during" && reviewerRuns > 0 &&
+							slices.Contains(cmd.Args, "url,title,state,mergedAt,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner") {
+							state = "MERGED"
+						}
 						fileEvidence := ""
 						rollup := `[{"name":"CI","conclusion":"SUCCESS"}]`
 						if strings.Contains(args, "statusCheckRollup") && strings.Contains(args, "changedFiles,files") {
@@ -603,6 +615,9 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				return execx.Result{}, fmt.Errorf("unexpected command %s %s", cmd.Name, args)
 			})
 			h := New(runner)
+			workspaceHeld := true
+			h.ReleaseWorkspace = func() { workspaceHeld = false }
+			h.AcquireWorkspace = func(context.Context) error { workspaceHeld = true; return nil }
 			h.PRChecksWatchTimeout = 10 * time.Second
 			if tc.earlyReady && !tc.readyOnPassingPoll {
 				h.PRChecksWatchTimeout = 20 * time.Second
@@ -738,14 +753,19 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				}
 				return
 			}
-			if tc.mergedDuringEvidence || tc.mergedOnEvidencePoll {
+			if tc.mergedAtReview != "" || tc.mergedDuringEvidence || tc.mergedOnEvidencePoll {
+				wantPosts := 1
+				if tc.mergedAtReview == "before" || tc.mergedAtReview == "during" {
+					wantPosts = 0
+				}
 				wantVerifications := 0
 				if tc.mergedDuringEvidence {
 					wantVerifications = 1
 				}
-				if creates != 1 || api.posts != 1 || verifications != wantVerifications || ready != 0 ||
+				if workspaceHeld || creates != 1 || api.posts != wantPosts || verifications != wantVerifications || ready != 0 ||
 					result.Err != nil || result.PRURL != prURL || !result.PRAlreadyMerged || result.ReviewInterrupted || result.PRVerificationPassed {
-					t.Fatalf("external merge must complete the task on the same PR: verifications=%d, ready=%d, result=%+v", verifications, ready, result)
+					t.Fatalf("external merge must complete the task and release its workspace: held=%t, verifications=%d, ready=%d, result=%+v",
+						workspaceHeld, verifications, ready, result)
 				}
 				return
 			}

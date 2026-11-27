@@ -67,7 +67,7 @@ func TestPRCheckWatchReportsChecksWithSchedulerReleased(t *testing.T) {
 	}
 	var logs []string
 	h.Logf = func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }
-	if _, err := h.runPRChecksWatch(t.Context(), "/checkout", url); err != nil {
+	if _, err := h.runPRChecksWatch(t.Context(), prChecksCommand("/checkout", url), newCheckPoll("checks", url)); err != nil {
 		t.Fatal(err)
 	}
 	got := strings.Join(logs, "\n")
@@ -86,17 +86,17 @@ func TestResumedCheckWaitUsesOnlyGitHubUntilChecksSettle(t *testing.T) {
 	const url = "https://github.com/example/repo/pull/42"
 	cmd := prStateViewCommand("", url, "statusCheckRollup")
 	for _, tc := range []struct {
-		name, final string
-		merged      bool
-		want        error
+		name, initial, final string
+		merged               bool
 	}{
-		{"passing", `{"state":"OPEN","statusCheckRollup":[{"name":"CI","conclusion":"SUCCESS"}]}`, false, nil},
-		{"merged", `{"state":"MERGED"}`, true, nil},
+		{"pending then passing", `[{"name":"CI","status":"IN_PROGRESS"}]`, `{"state":"OPEN","statusCheckRollup":[{"name":"CI","conclusion":"SUCCESS"}]}`, false},
+		{"empty then passing", `[]`, `{"state":"OPEN","statusCheckRollup":[{"name":"CI","conclusion":"SUCCESS"}]}`, false},
+		{"review only then merged", `[{"name":"agent00 / review-policy","conclusion":"SUCCESS"}]`, `{"state":"MERGED"}`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			runner := &fakeRunner{t: t, exps: []expectedRun{
-				{cmd: cmd, res: execx.Result{Stdout: `{"state":"OPEN","statusCheckRollup":[{"name":"CI","status":"IN_PROGRESS"}]}`}},
+				{cmd: cmd, res: execx.Result{Stdout: `{"state":"OPEN","statusCheckRollup":` + tc.initial + `}`}},
 				{cmd: cmd, res: execx.Result{Stdout: tc.final}},
 			}}
 			h := New(runner)
@@ -115,8 +115,8 @@ func TestResumedCheckWaitUsesOnlyGitHubUntilChecksSettle(t *testing.T) {
 				t.Fatal("remote check wait tried to acquire workspace")
 				return nil
 			}
-			if merged, err := h.waitForResumedChecks(t.Context(), url); merged != tc.merged || !errors.Is(err, tc.want) {
-				t.Fatalf("remote check wait = (%t, %v), want (%t, %v)", merged, err, tc.merged, tc.want)
+			if merged, err := h.waitForResumedChecks(t.Context(), url); merged != tc.merged || err != nil || len(runner.exps) != 0 {
+				t.Fatalf("remote check wait = (%t, %v), want (%t, nil), with %d queries remaining", merged, err, tc.merged, len(runner.exps))
 			}
 			if got := h.CheckTimings.average(key); got != estimate {
 				t.Fatalf("resumed wait changed build estimate to %v, want %v", got, estimate)
@@ -129,10 +129,11 @@ func TestResumedCheckWaitDeadlineIncludesQueriesAndRetries(t *testing.T) {
 	t.Parallel()
 	const url = "https://github.com/example/repo/pull/42"
 	for _, tc := range []struct {
-		name string
-		fail bool
+		name, rollup string
+		fail         bool
 	}{
-		{name: "pending check"},
+		{name: "pending check", rollup: `[{"name":"CI","status":"IN_PROGRESS"}]`},
+		{name: "no checks reported", rollup: `[]`},
 		{name: "transient query failure", fail: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -154,7 +155,7 @@ func TestResumedCheckWaitDeadlineIncludesQueriesAndRetries(t *testing.T) {
 						return execx.Result{}, ctx.Err()
 					}
 					time.Sleep(3 * time.Second)
-					return execx.Result{Stdout: `{"state":"OPEN","statusCheckRollup":[{"name":"CI","status":"IN_PROGRESS"}]}`}, nil
+					return execx.Result{Stdout: `{"state":"OPEN","statusCheckRollup":` + tc.rollup + `}`}, nil
 				}))
 				h.PRChecksWatchTimeout = timeout
 				merged, err := h.waitForResumedChecks(t.Context(), url)
@@ -184,7 +185,8 @@ func TestNoReportedCheckRetriesTightenWithoutReadmittingWorkspace(t *testing.T) 
 			err: errors.New("exit status 1"),
 		}
 		runner := &fakeRunner{t: t, exps: []expectedRun{
-			noChecks, noChecks, noChecks,
+			noChecks, noChecks,
+			{cmd: noChecks.cmd, res: execx.Result{Stdout: "CI\tpending\n"}, err: pendingCheckExit{}},
 			{cmd: noChecks.cmd, res: execx.Result{Stdout: "CI\tpass\n"}},
 			{cmd: prMergeabilityCommand(repo.Dir, url), res: execx.Result{Stdout: `{"state":"OPEN","mergeable":"MERGEABLE"}`}},
 		}}
@@ -215,7 +217,10 @@ func TestNoReportedCheckRetriesTightenWithoutReadmittingWorkspace(t *testing.T) 
 			t.Fatalf("%s: %v", stage, err)
 		}
 		if len(delays) != 3 || delays[0] != 45*time.Second || delays[1] != 22500*time.Millisecond || delays[2] != 11250*time.Millisecond {
-			t.Fatalf("no-check polling delays = %v, want [45s 22.5s 11.25s]", delays)
+			t.Fatalf("polling delays = %v, want [45s 22.5s 11.25s]", delays)
+		}
+		if got := h.CheckTimings.average("example/repo/checks"); got != 87187500*time.Microsecond {
+			t.Fatalf("learned duration = %v, want 87.1875s including the no-check wait", got)
 		}
 		if len(runner.exps) != 0 {
 			t.Fatalf("unconsumed commands = %d", len(runner.exps))

@@ -70,6 +70,7 @@ func checkPollDelay(expected, elapsed time.Duration) time.Duration {
 type checkPoll struct {
 	stage, key string
 	started    time.Time
+	waited     bool
 }
 
 func newCheckPoll(stage, prURL string) checkPoll {
@@ -120,7 +121,7 @@ func (h Harness) requireWorkspace(ctx context.Context) error {
 }
 
 // Check a retained PR from outside its checkout before disk admission. This
-// only defers work while checks are pending. The regular path still verifies
+// defers work while CI is pending or has yet to report. The regular path verifies
 // branches, the checked-out head, and all required gates before proceeding.
 func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) (merged bool, err error) {
 	poll := newCheckPoll("checks", prURL)
@@ -154,19 +155,7 @@ func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) (merged
 			return true, nil
 		}
 		passed, failed := githubutil.CIStatus(pr.StatusCheckRollup)
-		var names []string
-		if pullRequestStateIsOpen(pr.prStateView) && !failed {
-			for _, check := range pr.StatusCheckRollup {
-				name := stringsx.FirstNonEmpty(check.Name, check.Context)
-				if name == "" || name == githubutil.ReviewCheckName {
-					continue
-				}
-				if passed, _ := githubutil.CIStatus([]githubutil.StatusCheck{check}); !passed {
-					names = append(names, name)
-				}
-			}
-		}
-		if len(names) == 0 {
+		if !pullRequestStateIsOpen(pr.prStateView) || passed || failed {
 			if pending && (passed || failed) {
 				// A resumed wait sees only the tail of a build.
 				poll.finish(h, false)
@@ -177,6 +166,16 @@ func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) (merged
 			return false, ErrChecksUnavailable
 		}
 		pending = true
+		var names []string
+		for _, check := range pr.StatusCheckRollup {
+			name := stringsx.FirstNonEmpty(check.Name, check.Context)
+			if name == "" || check.Name == githubutil.ReviewCheckName || check.Context == githubutil.ReviewCheckName {
+				continue
+			}
+			if passed, _ := githubutil.CIStatus([]githubutil.StatusCheck{check}); !passed {
+				names = append(names, name)
+			}
+		}
 		slices.Sort(names)
 		deadline, _ := ctx.Deadline()
 		delay := min(time.Until(deadline), poll.delay(h))
