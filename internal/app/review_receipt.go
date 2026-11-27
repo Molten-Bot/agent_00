@@ -314,6 +314,14 @@ func (h Harness) reviewRepairProgressPath(repo repoWorkspace) string {
 	return filepath.Join(dir, "review-repair.json")
 }
 
+func (h Harness) savePublishedReviewRepair(repo repoWorkspace, head string, policy githubutil.ReviewPolicy) error {
+	progress := reviewRepairProgress{PRURL: repo.PRURL, Head: head, Pass: repo.ReviewRepairPass, Policy: policy}
+	if err := saveReviewJournal(h.reviewRepairProgressPath(repo), progress); err != nil {
+		return fmt.Errorf("save published review repair: %w", err)
+	}
+	return nil
+}
+
 // Only continue the fix budget for the same published repair and policy.
 func (h Harness) loadReviewRepairPass(repo repoWorkspace, head string, policy githubutil.ReviewPolicy) (int, error) {
 	raw, err := os.ReadFile(h.reviewRepairProgressPath(repo))

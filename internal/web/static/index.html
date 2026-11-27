@@ -11708,6 +11708,8 @@
         reviewSteps: new Map(),
         currentRepoDir: "",
         activeReviewStepID: "",
+        activeMergeConflictStepID: "",
+        hasPreReviewMergeConflict: false,
         hasAutoMergeSeen: false,
         currentAgentMode: "",
         hasReviewConfigSeen: false,
@@ -11733,6 +11735,8 @@
       clone.reviewSteps = new Map(signals.reviewSteps);
       clone.currentRepoDir = signals.currentRepoDir;
       clone.activeReviewStepID = signals.activeReviewStepID;
+      clone.activeMergeConflictStepID = String(signals?.activeMergeConflictStepID || "");
+      clone.hasPreReviewMergeConflict = Boolean(signals?.hasPreReviewMergeConflict);
       clone.hasAutoMergeSeen = Boolean(signals?.hasAutoMergeSeen);
       clone.currentAgentMode = String(signals?.currentAgentMode || "");
       clone.hasReviewConfigSeen = Boolean(signals?.hasReviewConfigSeen);
@@ -11762,7 +11766,30 @@
       if (repoDir && repoDir !== signals.currentRepoDir) {
         signals.currentRepoDir = repoDir;
         signals.activeReviewStepID = "";
+        signals.activeMergeConflictStepID = "";
         signals.currentAgentMode = "";
+      }
+      const status = parseTaskProgressField(line, "status");
+      if (stage === "merge_conflict" && status === "start") {
+        const parent = signals.activeReviewStepID;
+        if (parent) {
+          const id = `merge_conflict:${parent}`;
+          if (!signals.activeMergeConflictStepID) {
+            signals.reviewSteps.set(id, { ...TASK_PROGRESS_STEP_DEFS.merge_conflict, id, repoDir });
+          }
+          signals.activeMergeConflictStepID = id;
+        } else {
+          signals.hasPreReviewMergeConflict = true;
+          signals.activeMergeConflictStepID = "merge_conflict";
+        }
+      }
+      if (stage === "checks" && status === "start" && signals.activeMergeConflictStepID) {
+        const repair = signals.reviewSteps.get(signals.activeMergeConflictStepID);
+        if (repair) {
+          signals.reviewSteps.set(repair.id, { ...repair, done: true });
+          if (!signals.activeReviewStepID.startsWith("review_checks:")) signals.activeReviewStepID = "";
+        }
+        signals.activeMergeConflictStepID = "";
       }
       const reviewStart = taskReviewProgressStart(log);
       if (reviewStart) {
@@ -11822,7 +11849,7 @@
             signals.reviewSteps.set(id, { ...step, id, repoDir, reviewChecksID, label: `${step.label} (attempt ${attempt})` });
             signals.activeReviewStepID = id;
           }
-        } else if (repairStart && signals.activeReviewStepID.startsWith("review:")) {
+        } else if (repairStart && !signals.activeMergeConflictStepID && signals.activeReviewStepID.startsWith("review:")) {
           const id = `merge_conflict:${signals.activeReviewStepID}`;
           signals.reviewSteps.set(id, { ...TASK_PROGRESS_STEP_DEFS.merge_conflict, id, repoDir });
           signals.activeReviewStepID = id;
@@ -11978,6 +12005,9 @@
       }
 
       stepIDs.push("agent", "commit", "pr");
+      if (signals.hasPreReviewMergeConflict) {
+        stepIDs.push("merge_conflict");
+      }
       if (status !== "no_changes") {
         stepIDs.push("checks");
       }
@@ -11991,7 +12021,7 @@
       ) {
         if (signals.reviewSteps.size) {
           for (const step of signals.reviewSteps.values()) {
-            const done = step.reviewChecksID === currentStepID ||
+            const done = step.done || step.reviewChecksID === currentStepID ||
               Boolean(step.repoDir && signals.currentRepoDir && step.repoDir !== signals.currentRepoDir);
             steps.push({ ...step, done });
           }
@@ -12058,6 +12088,10 @@
       if (stage === "pr_verification" ||
           (TASK_PROGRESS_AGENT_STAGES.has(stage) && signals.currentAgentMode === "pr_verification")) {
         return "pr_verification";
+      }
+      if (signals.activeMergeConflictStepID &&
+          (stage === "merge_conflict" || stage === "git" || stage === "pr" || TASK_PROGRESS_AGENT_STAGES.has(stage))) {
+        return signals.activeMergeConflictStepID;
       }
       // GitHub and agent status logs can arrive within a pass or conflict repair without starting a new step.
       if (signals.activeReviewStepID) {

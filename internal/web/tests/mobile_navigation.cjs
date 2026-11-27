@@ -455,6 +455,13 @@ test('issue task adds review and fix markers as each pass starts', async t => {
 
   await card.locator('.task-progress-step[title^="Review: upcoming"]').waitFor();
   assert.equal(await reviewMarkers.count(), 1);
+  await stage('merge_conflict', 'status=start action=detect head=original repo_dir=.', 'Resolve Merge Conflicts');
+  await stage('claude', 'status=start mode=base_sync_conflict attempt=1 repo_dir=.', 'Resolve Merge Conflicts');
+  assert.equal(await current.locator('img').getAttribute('src'), '/static/logos/claude-code.svg');
+  await stage('merge_conflict', 'status=ok action=publish_repair head=repaired repo_dir=.', 'Resolve Merge Conflicts');
+  await stage('checks', 'status=start repo_dir=.', 'Checks');
+  await card.locator('.task-progress-step.done[title^="Resolve Merge Conflicts:"]').waitFor();
+
   await stage('review', 'status=start action=pass pass=1 repo_dir=.', 'Review (pass 1)');
   await current.locator('svg.lucide-clipboard-check').waitFor();
   assert.equal(await reviewMarkers.count(), 1);
@@ -504,12 +511,13 @@ test('issue task adds review and fix markers as each pass starts', async t => {
 
   await stage('review', 'status=ok action=pass pass=3 findings=0 repo_dir=.', 'Review (pass 3)');
   await stage('git', 'status=start action=check_mergeability', 'Review (pass 3)');
+  await stage('merge_conflict', 'status=start action=detect repo_dir=.', 'Resolve Merge Conflicts');
   await stage('claude', 'status=start mode=base_sync_conflict attempt=1 repo_dir=.', 'Resolve Merge Conflicts');
   assert.equal(await current.locator('img').getAttribute('src'), '/static/logos/claude-code.svg');
   assert.match(await reviewMarkers.last().getAttribute('title'), /^Review \(pass 3\): done/);
   await stage('git', 'status=start action=sync_base_commit repo_dir=.', 'Resolve Merge Conflicts');
   await stage('claude', 'status=start mode=remote_branch_sync_conflict attempt=1 repo_dir=.', 'Resolve Merge Conflicts');
-  assert.equal(await card.locator('.task-progress-step[title^="Resolve Merge Conflicts:"]').count(), 1);
+  assert.equal(await card.locator('.task-progress-step[title^="Resolve Merge Conflicts:"]').count(), 2);
 
   task.status = 'completed';
   task.logs.push(...Array.from({ length: 510 }, () => ({ stream: 'stdout', text: 'Agent output' })));

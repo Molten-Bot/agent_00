@@ -85,6 +85,7 @@ type draftVerificationEvidence struct {
 		BaseRefOID        string          `json:"baseRefOid,omitempty"`
 		HeadRefName       string          `json:"headRefName"`
 		HeadRefOID        string          `json:"headRefOid"`
+		Mergeable         string          `json:"mergeable,omitempty"`
 		ReviewDecision    json.RawMessage `json:"reviewDecision,omitempty"`
 		Labels            json.RawMessage `json:"labels,omitempty"`
 		StatusCheckRollup json.RawMessage `json:"statusCheckRollup,omitempty"`
@@ -174,7 +175,7 @@ func (h Harness) collectDraftVerificationEvidence(ctx context.Context, repo repo
 		return res.Stdout, err
 	}
 	rawMetadata, err := readGH(ctx, "pr", "view", repo.PRURL,
-		"--json", "number,url,state,isDraft,baseRefName,headRefName,headRefOid,statusCheckRollup,reviewDecision,labels,changedFiles,files")
+		"--json", "number,url,state,isDraft,baseRefName,headRefName,headRefOid,statusCheckRollup,reviewDecision,labels,mergeable,changedFiles,files")
 	if err != nil {
 		return nil, fmt.Errorf("load draft pull request evidence: %w", err)
 	}
@@ -198,6 +199,14 @@ func (h Harness) collectDraftVerificationEvidence(ctx context.Context, repo repo
 	}
 	if state.HeadRefOID != receipt.Head {
 		return nil, fmt.Errorf("draft head changed after review; collect a clean review and check results on the current head: %w", ErrReviewHeadChanged)
+	}
+	switch state.Mergeable {
+	case "CONFLICTING":
+		return nil, errPRMergeConflict
+	case "UNKNOWN":
+		if err := h.checkForPRConflict(ctx, repo, receipt.Head); err != nil {
+			return nil, err
+		}
 	}
 	if !state.IsDraft {
 		if err := h.ensurePullRequestDraft(ctx, repo, "pr_verification"); err != nil {

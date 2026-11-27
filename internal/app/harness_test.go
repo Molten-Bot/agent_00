@@ -58,7 +58,7 @@ func (f *fakeRunner) Run(_ context.Context, cmd execx.Command) (execx.Result, er
 	if len(f.exps) == 0 {
 		// Most harness tests focus on unrelated publishing behavior. Explicit
 		// expectations take precedence in the mergeability regression tests.
-		if cmd.Name == "gh" && slices.Contains(cmd.Args, "state,mergeable,baseRefName,headRefName") {
+		if cmd.Name == "gh" && slices.Contains(cmd.Args, "state,mergeable,baseRefName,headRefName,headRefOid") {
 			f.calls = append(f.calls, cmd)
 			return execx.Result{Stdout: `{"state":"OPEN","mergeable":"MERGEABLE"}`}, nil
 		}
@@ -87,7 +87,7 @@ func (f *fakeRunner) Run(_ context.Context, cmd execx.Command) (execx.Result, er
 	if matchIndex < 0 {
 		// Most harness tests focus on unrelated publishing behavior. Explicit
 		// expectations take precedence in the mergeability regression tests.
-		if cmd.Name == "gh" && slices.Contains(cmd.Args, "state,mergeable,baseRefName,headRefName") {
+		if cmd.Name == "gh" && slices.Contains(cmd.Args, "state,mergeable,baseRefName,headRefName,headRefOid") {
 			f.calls = append(f.calls, cmd)
 			return execx.Result{Stdout: `{"state":"OPEN","mergeable":"MERGEABLE"}`}, nil
 		}
@@ -4017,7 +4017,7 @@ func TestRunTreatsAnyChecksWatchTimeoutSnapshotQueryFailureAsUnavailable(t *test
 		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stdout: prURL + "\n"}},
 		{cmd: prChecksCommand(repoDir, prURL), res: execx.Result{Stderr: noRequired + "\n"}, err: errors.New("checks unavailable")},
 		{cmd: requiredStatusChecksCommand(repoDir, "acme/repo", "main"), res: execx.Result{Stdout: `{"contexts":["test"],"checks":[]}`}},
-		{cmd: prChecksAnyCommand(repoDir, prURL), err: errPRChecksWatchTimeout},
+		{cmd: prChecksCommand(repoDir, prURL), err: errPRChecksWatchTimeout},
 		{cmd: prChecksJSONCommand(repoDir, prURL, false), err: snapshotErr},
 	}}
 
@@ -4671,7 +4671,7 @@ func TestRunNoRequiredChecksFallsBackToAllChecks(t *testing.T) {
 		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stdout: prURL + "\n"}},
 		{cmd: prChecksCommand(repoDir, prURL), res: execx.Result{Stderr: noRequired + "\n"}, err: errors.New("checks unavailable")},
 		{cmd: requiredStatusChecksCommand(repoDir, "acme/repo", "main"), res: execx.Result{Stdout: `{"contexts":["test"],"checks":[]}`}},
-		{cmd: prChecksAnyCommand(repoDir, prURL)},
+		{cmd: prChecksCommand(repoDir, prURL)},
 	}}
 
 	sleepCalls := 0
@@ -6053,7 +6053,7 @@ func TestCommandBuilders(t *testing.T) {
 	}
 
 	checks := prChecksCommand(repoDir, "https://github.com/acme/repo/pull/42")
-	wantChecks := []string{"pr", "checks", "42", "--watch", "--interval", "10"}
+	wantChecks := []string{"pr", "checks", "42"}
 	if checks.Name != "gh" || checks.Dir != repoDir || !reflect.DeepEqual(checks.Args, wantChecks) {
 		t.Fatalf("pr checks command unexpected: %+v", checks)
 	}
@@ -6062,12 +6062,6 @@ func TestCommandBuilders(t *testing.T) {
 	wantEditTitle := []string{"api", "--method", "PATCH", "repos/acme/repo/pulls/42", "-f", "title=fix: repair CI"}
 	if editTitle.Name != "gh" || editTitle.Dir != repoDir || !reflect.DeepEqual(editTitle.Args, wantEditTitle) {
 		t.Fatalf("pr edit title command unexpected: %+v", editTitle)
-	}
-
-	allChecks := prChecksAnyCommand(repoDir, "https://github.com/acme/repo/pull/42")
-	wantAllChecks := []string{"pr", "checks", "42", "--watch", "--interval", "10"}
-	if allChecks.Name != "gh" || allChecks.Dir != repoDir || !reflect.DeepEqual(allChecks.Args, wantAllChecks) {
-		t.Fatalf("pr checks any command unexpected: %+v", allChecks)
 	}
 
 	jsonChecks := prChecksJSONCommand(repoDir, "https://github.com/acme/repo/pull/42", true)
