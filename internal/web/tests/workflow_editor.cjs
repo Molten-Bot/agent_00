@@ -368,7 +368,7 @@ test('schedule sliders select bounded counts and preserve minute and month inter
  await page.screenshot({path:join(tmpdir(),'agent00-schedule-scale-mobile.png'),fullPage:true});
 });
 
-test('editing a scheduled workflow preserves its legacy count until the slider moves', async t => {
+test('editing a scheduled workflow and focusing its slider preserve the legacy count', async t => {
  const {page,getDocument}=await openEditor(t);
  await selectRepository(page,'acme/repo');
  await page.getByRole('button',{name:'Scheduled task',exact:true}).click();
@@ -384,7 +384,13 @@ test('editing a scheduled workflow preserves its legacy count until the slider m
  await page.getByLabel('Workflow name').fill('Renamed scheduled workflow');
  await waitForSaved(page);
  assert.equal(getDocument().workflows[0].trigger.intervalHours,10*24);
- await amount.press('ArrowLeft');
+ const revision=getDocument().revision;
+ await page.getByText('Repeat every (days)',{exact:true}).click();
+ assert.equal(await amount.evaluate(el=>el===document.activeElement),true);
+ await waitForSaved(page);
+ assert.equal(getDocument().revision,revision);
+ assert.equal(await page.getByText('10 (saved)',{exact:true}).isVisible(),true);
+ await page.keyboard.press('ArrowLeft');
  await waitForSaved(page);
  assert.equal(getDocument().workflows[0].trigger.intervalHours,6*24);
  assert.equal(await page.getByText('10 (saved)',{exact:true}).count(),0);

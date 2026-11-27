@@ -47,7 +47,11 @@ export function ScheduleInterval({ hours, onChange }) {
         aria-label="Repeat interval scale" aria-valuetext={unit.name}
         onChange={(e) => selectUnit(Number(e.target.value))} />
       <div className="wf-interval-amount">
-        <label htmlFor={id}>Repeat every ({unit.name})</label>
+        <label htmlFor={id} onClick={(e) => {
+          // Focus without forwarding a click that could apply the slider limit.
+          e.preventDefault();
+          e.currentTarget.control.focus();
+        }}>Repeat every ({unit.name})</label>
         <span>{amount}{savedValue && " (saved)"}</span>
         <input id={id} type="range" min={unit.min} max={unit.max} step="1" value={sliderValue}
           aria-valuetext={savedValue ? `${sliderValue} ${unit.name} (${amount} saved)` : `${amount}`}
