@@ -7,6 +7,7 @@ const presets = [
   { count: 2, Icon: SignalMedium },
   { count: 4, Icon: SignalHigh },
   { count: 8, Icon: Signal },
+  { count: 10, Icon: Signal },
 ];
 
 export function ReviewPasses({ value, onChange }) {
@@ -14,7 +15,7 @@ export function ReviewPasses({ value, onChange }) {
   const index = presets.reduce((best, { count }, i) =>
     Math.abs(count - value) < Math.abs(presets[best].count - value) ? i : best, 0);
   const savedValue = presets[index].count !== value;
-  const label = value === 0 ? "Off · 0 passes" : `${value} ${value === 1 ? "pass" : "passes"}`;
+  const label = value === 0 ? "Inherit default" : `${value} ${value === 1 ? "pass" : "passes"}`;
   return (
     <div className="wf-review-slider">
       <label htmlFor={id}>Review passes</label>

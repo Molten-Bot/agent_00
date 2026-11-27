@@ -17,6 +17,8 @@
 .wf-editor button.wf-primary:hover { filter: brightness(1.12); }
 .wf-workspace { display: grid; grid-template-columns: 205px minmax(0,1fr) 248px; flex: 1; min-height: 0; }
 .wf-palette { padding: 24px 14px; border-right: 1px solid var(--border); overflow: auto; }
+.wf-default-execution { margin-bottom: 20px; padding: 10px; border: 1px solid var(--border); border-radius: 7px; }
+.wf-default-execution summary { cursor: pointer; font-size: 12px; font-weight: 600; }
 .wf-section-label { font-size: 9px; letter-spacing: 0.1em; font-weight: 600; color: var(--muted); }
 .wf-muted { font-size: 11px; color: var(--muted); line-height: 1.65; margin: 8px 0 16px; }
 .wf-search { display: flex; align-items: center; gap: 7px; border: 1px solid var(--border); border-radius: 6px; padding: 8px; color: var(--muted); margin: 20px 0 12px; }
@@ -123,5 +125,5 @@
 .wf-review-slider > label { color: var(--text-soft); font-size: 11px; }
 .wf-editor .wf-review-slider input[type="range"] { display: block; width: 100%; height: 32px; margin: 0; padding: 0; accent-color: var(--accent); cursor: ew-resize; }
 .wf-review-stops { display: flex; justify-content: space-between; gap: 2px; }
-.wf-editor .wf-review-stops button { padding: 6px; min-width: 32px; border: 0; border-radius: 6px; background: transparent; color: var(--text-soft); }
+.wf-editor .wf-review-stops button { flex: 1; padding: 6px 2px; min-width: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-soft); }
 .wf-editor .wf-review-stops button[aria-pressed="true"] { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }

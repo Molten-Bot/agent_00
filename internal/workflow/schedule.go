@@ -62,7 +62,7 @@ func (e *Engine) ScheduleStatus() ([]ScheduleStatus, error) {
 	}
 	return out, nil
 }
-func (e *Engine) tickSchedule(ctx context.Context, w Definition, snapshot State) error {
+func (e *Engine) tickSchedule(ctx context.Context, w Definition, execution *ExecutionPolicy, snapshot State) error {
 	if !e.StillEnabled(w) {
 		return nil
 	}
@@ -87,7 +87,7 @@ func (e *Engine) tickSchedule(ctx context.Context, w Definition, snapshot State)
 		occurrence := cursor.NextRunAt
 		cursor.NextRunAt = now.Add(time.Duration(math.Round(w.Trigger.IntervalHours*60)) * time.Minute)
 		s.Schedules[w.ID] = cursor
-		run = Run{ID: digest([]any{w.ID, cursor.Policy, occurrence}), Workflow: w, Item: item, Status: "dispatching", Reason: "Schedule due at " + occurrence.Format(time.RFC3339), StartedAt: &now, UpdatedAt: now}
+		run = Run{ID: digest([]any{w.ID, cursor.Policy, occurrence}), Workflow: w, Execution: execution, Item: item, Status: "dispatching", Reason: "Schedule due at " + occurrence.Format(time.RFC3339), StartedAt: &now, UpdatedAt: now}
 		s.Runs = append(s.Runs, run)
 		return nil
 	})

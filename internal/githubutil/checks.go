@@ -80,7 +80,7 @@ func VerifyReviewedHeadCI(ctx context.Context, gh ReviewCommand, receipt ReviewR
 	raw, err := gh(ctx, "pr", "view", PullRequestSelector(receipt.PRURL), "--repo", PullRequestRepository(receipt.PRURL),
 		"--json", "state,headRefOid,statusCheckRollup")
 	if err != nil {
-		return fmt.Errorf("verify checks before merging: %w", err)
+		return fmt.Errorf("verify checks on the reviewed head: %w", err)
 	}
 	var pr struct {
 		State, HeadRefOID string
@@ -92,11 +92,14 @@ func VerifyReviewedHeadCI(ctx context.Context, gh ReviewCommand, receipt ReviewR
 	if pr.State == "MERGED" {
 		return ErrReviewInterrupted
 	}
-	if pr.State != "OPEN" || pr.HeadRefOID != receipt.Head {
-		return fmt.Errorf("pull request is closed or head changed before verifying checks")
+	if pr.State != "OPEN" {
+		return fmt.Errorf("pull request is closed before verifying checks")
+	}
+	if pr.HeadRefOID != receipt.Head {
+		return ErrReviewHeadChanged
 	}
 	if passed, _ := CIStatus(pr.StatusCheckRollup); !passed {
-		return fmt.Errorf("waiting for successful checks before merging")
+		return fmt.Errorf("waiting for successful checks on the reviewed head")
 	}
 	return nil
 }

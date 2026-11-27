@@ -30,6 +30,7 @@ const (
 	defaultClosedTaskRetention = 24 * time.Hour
 	verifiedTaskPRRetention    = time.Hour
 	defaultMaxReleases         = 100
+	reviewFindingsWarning      = "Post-task review findings remain. Pull request left in draft for human review."
 )
 
 var (
@@ -70,6 +71,7 @@ type TaskStatusTransition struct {
 }
 
 type Task struct {
+	ReviewPolicy      TaskReviewPolicy       `json:"review_policy,omitzero"`
 	Complexity        string                 `json:"complexity,omitempty"`
 	ResolvedModel     string                 `json:"resolved_model,omitempty"`
 	CLIVersion        string                 `json:"cli_version,omitempty"`
@@ -114,6 +116,16 @@ type Task struct {
 	CanRerun          bool                   `json:"can_rerun,omitempty"`
 	Controls          TaskControls           `json:"controls,omitempty"`
 	Logs              []TaskLog              `json:"logs"`
+
+	PublishedPRURLs      []string `json:"-"`
+	ReviewFindingsRemain bool     `json:"-"`
+	ReviewStarted        bool     `json:"-"`
+}
+
+type TaskReviewPolicy struct {
+	Name       string `json:"name"`
+	FixPasses  int    `json:"fix_passes"`
+	Complexity string `json:"complexity"`
 }
 
 // PromptImage captures one prompt image attachment shown in task views.
@@ -320,6 +332,7 @@ type Broker struct {
 }
 
 type taskState struct {
+	ReviewPolicy      TaskReviewPolicy
 	ResolvedModel     string
 	CLIVersion        string
 	ModelResolution   string
@@ -348,6 +361,8 @@ type taskState struct {
 	Branch            string
 	GitHubIssueURL    string
 	PRURL             string
+	PublishedPRs      map[string]string
+	ReviewStarted     bool
 	PRTitles          map[string]taskPRTitleMetadata
 	CreatedPRURLs     map[string]bool
 	TitledPRURLs      []string
@@ -593,6 +608,7 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 		status := normalizeTaskTerminalStatus(t.Status)
 		prTitle, prTitleURL := taskPRTitle(t)
 		snapshot.Tasks = append(snapshot.Tasks, Task{
+			ReviewPolicy:      t.ReviewPolicy,
 			RequestID:         t.RequestID,
 			Source:            t.Source,
 			Prompt:            t.Prompt,
@@ -740,6 +756,7 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 		Branch:            t.Branch,
 		GitHubIssueURL:    t.GitHubIssueURL,
 		PRURL:             t.PRURL,
+		ReviewPolicy:      t.ReviewPolicy,
 		Complexity:        b.runConfigFieldsLocked(t.RequestID).complexity,
 		ResolvedModel:     t.ResolvedModel,
 		CLIVersion:        t.CLIVersion,
@@ -758,6 +775,10 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 		DurationSeconds:   taskDuration(t.StartedAt, t.UpdatedAt, now, status).Seconds(),
 		CanRerun:          canRerun,
 		Logs:              append([]TaskLog(nil), t.Logs...),
+
+		PublishedPRURLs:      slices.Sorted(maps.Values(t.PublishedPRs)),
+		ReviewFindingsRemain: t.Warning == reviewFindingsWarning,
+		ReviewStarted:        t.ReviewStarted,
 	}, true
 }
 
@@ -944,6 +965,12 @@ func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON [
 	if t != nil && t.WorkflowTriggered != workflowTriggered {
 		t.WorkflowTriggered = workflowTriggered
 		changed = true
+	}
+	if t != nil {
+		if policy := b.runConfigFieldsLocked(requestID).reviewPolicy; t.ReviewPolicy != policy {
+			t.ReviewPolicy = policy
+			changed = true
+		}
 	}
 	if prURL != "" && t != nil && t.PRURL != prURL {
 		t.PRURL = prURL
@@ -1730,6 +1757,7 @@ func normalizedGroupName(name, fallback string) string {
 // runConfigFields holds the values ensureTaskLocked derives from a stored run
 // config payload. Every field is a pure function of the payload bytes.
 type runConfigFields struct {
+	reviewPolicy TaskReviewPolicy
 	complexity   string
 	raw          []byte
 	images       []PromptImage
@@ -1756,7 +1784,9 @@ func (b *Broker) runConfigFieldsLocked(requestID string) runConfigFields {
 		return cached
 	}
 	var requested struct {
-		Complexity string `json:"complexity"`
+		Complexity string                    `json:"complexity"`
+		Workflow   *config.WorkflowRunConfig `json:"workflow"`
+		Review     *config.ReviewConfig      `json:"review"`
 	}
 	_ = json.Unmarshal(raw, &requested)
 	fields := runConfigFields{
@@ -1772,6 +1802,12 @@ func (b *Broker) runConfigFieldsLocked(requestID string) runConfigFields {
 		prURL:        prURLFromRunConfigJSON(raw),
 		issueTitle:   issueTitleFromRunConfigJSON(raw),
 		autoMerge:    autoMergeFromRunConfigJSON(raw),
+	}
+	if w := requested.Workflow; w != nil {
+		fields.reviewPolicy = TaskReviewPolicy{Name: w.Name, FixPasses: w.ReviewCycles, Complexity: w.ReviewAgent.Complexity}
+		if requested.Review != nil || fields.workflow == "code-review" {
+			fields.reviewPolicy.FixPasses = 0
+		}
 	}
 	if b.runConfigFieldCache == nil {
 		b.runConfigFieldCache = map[string]runConfigFields{}
@@ -2165,6 +2201,9 @@ func (b *Broker) ensureTaskLocked(requestID string, now time.Time) *taskState {
 			existing.PromptIsUserInput = promptIsUserInputForTask(requestID, existing.Prompt)
 		}
 		fields := b.runConfigFieldsLocked(requestID)
+		if existing.ReviewPolicy == (TaskReviewPolicy{}) {
+			existing.ReviewPolicy = fields.reviewPolicy
+		}
 		if len(existing.Assets) == 0 {
 			existing.Assets = slices.Clone(fields.assets)
 		}
@@ -2201,6 +2240,7 @@ func (b *Broker) ensureTaskLocked(requestID string, now time.Time) *taskState {
 	prompt := b.taskPromptLocked(requestID)
 	fields := b.runConfigFieldsLocked(requestID)
 	t := &taskState{
+		ReviewPolicy:      fields.reviewPolicy,
 		RequestID:         requestID,
 		Source:            stringsx.FirstNonEmpty(fields.source, defaultTaskSourceForRequestID(requestID)),
 		Prompt:            prompt,
@@ -2240,6 +2280,11 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 
 	t.UpdatedAt = now
 	t.LiveAppURL = stringsx.FirstNonEmpty(taskLiveAppURLFromFields(fields), t.LiveAppURL)
+	if isFinalTaskLifecycleLine(fields) {
+		for _, target := range splitCommaSeparatedNonEmpty(fields["pr_urls"]) {
+			t.recordPublishedPR(target)
+		}
+	}
 
 	// Recovery reuses the task ID. Clear the previous terminal state before
 	// the new workflow activation starts polling the queued task.
@@ -2260,6 +2305,7 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 
 	if strings.HasPrefix(line, "task status=start") {
 		t.Status = "running"
+		t.ReviewStarted = false
 		t.explicitTerminal = fields["explicit_terminal"] == "true"
 		t.Warning = ""
 		t.ReviewURL = ""
@@ -2395,6 +2441,13 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 		}
 		t.Branch = stringsx.FirstNonEmpty(fields["branch"], t.Branch)
 		t.PRURL = stringsx.FirstNonEmpty(taskPRURLFromFields(fields), t.PRURL)
+		reviewPass := fields["stage"] == "review" && fields["action"] == "pass"
+		if reviewPass || (fields["stage"] == "review" && fields["action"] == "review_published") {
+			t.ReviewStarted = true
+		}
+		if (fields["stage"] == "pr" && fields["status"] == "ok") || reviewPass {
+			t.recordPublishedPR(fields["pr_url"])
+		}
 		if fields["stage"] == "pr" && fields["status"] == "ok" && fields["action"] == "recreate_closed_pr" {
 			oldPRURL := fields["old_pr_url"]
 			delete(t.PRTitles, oldPRURL)
@@ -2417,7 +2470,7 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 			t.ReviewGate = "Waiting for a submitted clean review on the current pull request head."
 		}
 		if fields["stage"] == "review" && fields["status"] == "warn" && fields["action"] == "leave_draft" && fields["reason"] == "fix_passes_exhausted" {
-			t.Warning = "Post-task review findings remain. Pull request left in draft for human review."
+			t.Warning = reviewFindingsWarning
 		}
 		if fields["stage"] == "review" && fields["status"] == "warn" && fields["action"] == "stop" && fields["reason"] == "pr_merged" {
 			t.Warning = "Pull request merged externally during review. Review interrupted."
@@ -2454,6 +2507,15 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 			Stream: "meta",
 			Text:   line,
 		})
+	}
+}
+
+func (t *taskState) recordPublishedPR(target string) {
+	if repo := strings.ToLower(githubutil.PullRequestRepository(target)); repo != "" {
+		if t.PublishedPRs == nil {
+			t.PublishedPRs = make(map[string]string)
+		}
+		t.PublishedPRs[repo] = target
 	}
 }
 
@@ -3322,12 +3384,13 @@ func workflowFromRunConfigJSON(runConfigJSON []byte) string {
 func workflowTriggeredFromRunConfigJSON(runConfigJSON []byte) bool {
 	var raw struct {
 		Workflow *struct {
+			ID         string `json:"id"`
 			EventID    string `json:"eventId"`
 			PolicyHash string `json:"policyHash"`
 		} `json:"workflow"`
 	}
 	return json.Unmarshal(runConfigJSON, &raw) == nil && raw.Workflow != nil &&
-		raw.Workflow.EventID != "" && raw.Workflow.PolicyHash != ""
+		raw.Workflow.ID != config.DefaultExecutionWorkflowID && raw.Workflow.EventID != "" && raw.Workflow.PolicyHash != ""
 }
 
 func agentHarnessFromRunConfigJSON(runConfigJSON []byte) string {

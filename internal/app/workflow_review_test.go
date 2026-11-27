@@ -330,6 +330,9 @@ func testWorkflowRepairConfirmation(t *testing.T, threadID string) {
 			if args == "--help" {
 				return reply("")
 			}
+			if args == "--version" {
+				return reply("codex-cli 0.120.0")
+			}
 			if nativeFinding && (!strings.Contains(cmd.Stdin, threadID) || !strings.Contains(cmd.Stdin, "Handle division by zero")) {
 				t.Fatalf("agent prompt lacked original thread identity and finding")
 			}
@@ -375,6 +378,15 @@ func testWorkflowRepairConfirmation(t *testing.T, threadID string) {
 				}
 			case strings.Contains(args, "closingIssuesReferences"):
 				return reply("1")
+			case strings.Contains(args, "/protection/required_status_checks"):
+				return reply(`{"contexts":["CI"]}`)
+			case strings.Contains(args, "isRequired(pullRequestId: $id)"):
+				conclusion := "PENDING"
+				if ciPassed {
+					conclusion = "SUCCESS"
+				}
+				return reply(checkRollupPageJSON("feature", api.head, api.head,
+					fmt.Sprintf(`[{"name":"CI","conclusion":%q,"isRequired":true}]`, conclusion), false, ""))
 			case strings.Contains(args, "/pulls/42/merge"):
 				if (threadID != "" && !resolved) || draft || !ciPassed || !slices.Contains(cmd.Args, "sha="+api.head) {
 					t.Fatalf("merge attempted before resolution, readiness, and current-head CI")
@@ -390,7 +402,7 @@ func testWorkflowRepairConfirmation(t *testing.T, threadID string) {
 				if ciPassed {
 					conclusion = "SUCCESS"
 				}
-				return reply(fmt.Sprintf(`{"number":42,"url":%q,"state":%q,"baseRefName":"main","headRefName":"feature","headRefOid":%q,"reviewDecision":"","isDraft":%t,"mergeable":"MERGEABLE","statusCheckRollup":[{"name":"CI","conclusion":%q}]}`, prURL, state, api.head, draft, conclusion))
+				return reply(fmt.Sprintf(`{"id":"PR_id","number":42,"url":%q,"state":%q,"baseRefName":"main","headRefName":"feature","headRefOid":%q,"reviewDecision":"","isDraft":%t,"mergeable":"MERGEABLE","statusCheckRollup":[{"name":"CI","conclusion":%q}]}`, prURL, state, api.head, draft, conclusion))
 			case strings.HasPrefix(args, "pr checks "):
 				return reply("CI\tpass\n")
 			case strings.HasPrefix(args, "pr ready "):
@@ -470,8 +482,10 @@ func testWorkflowRepairConfirmation(t *testing.T, threadID string) {
 					h := New(runner)
 					h.Workspace = testWorkspaceManager("repair")
 					h.Workspace.Root = root
+					policy := r.ReviewPolicy()
 					cfg := config.Config{RepoURL: repoURL, BaseBranch: "feature", Prompt: "Repair PR feedback.", RequiresNonDefaultBranch: true,
-						Workflow: &config.WorkflowRunConfig{ID: r.Workflow.ID, EventID: r.ID, PolicyHash: r.Workflow.ExecutionPolicyHash(), RepairPRURL: prURL}}
+						Workflow: &config.WorkflowRunConfig{ID: r.Workflow.ID, EventID: r.ID, PolicyHash: r.Workflow.ExecutionPolicyHash(), RepairPRURL: prURL,
+							DefaultApplied: true, ReviewCycles: policy.ReviewCycles, ReviewAgent: policy.ReviewAgent}}
 					result := h.Run(ctx, cfg)
 					if result.Err != nil {
 						t.Fatal(result.Err)
@@ -485,8 +499,8 @@ func testWorkflowRepairConfirmation(t *testing.T, threadID string) {
 					}
 					outcome.ReviewReceipt, outcome.ReviewRequired, outcome.PendingReviewGate = result.ReviewReceipt, result.ReviewRequired, result.PendingReviewGate
 					if outcome.ReviewReceipt == nil || !outcome.ReviewReceipt.Clean() || outcome.ReviewReceipt.Head != api.head ||
-						outcome.ReviewReceipt.Pass != 1 || outcome.ReviewReceipt.Policy.FixPasses != 0 || !outcome.ReviewRequired ||
-						len(outcome.ReviewReceipt.VerifiedThreads) != wantVerified || (outcome.PendingReviewGate != nil) != (threadID != "") {
+						outcome.ReviewReceipt.Pass != 1 || outcome.ReviewReceipt.Policy.FixPasses != policy.ReviewCycles || !outcome.ReviewRequired ||
+						len(outcome.ReviewReceipt.VerifiedThreads) != wantVerified || outcome.PendingReviewGate == nil {
 						t.Fatalf("repair did not hand off head-bound evidence: %+v", outcome)
 					}
 				}
@@ -525,7 +539,7 @@ func testWorkflowRepairConfirmation(t *testing.T, threadID string) {
 		engine = newEngine()
 		tick(engine) // Recover the acknowledgement from the live thread.
 	}
-	tick(engine) // Completed writeback still waits for current-head CI.
+	tick(engine) // Readiness waits for current-head CI.
 	if threadID != "" && !nativeFinding {
 		ciPassed = true
 		tick(engine)
@@ -537,14 +551,14 @@ func testWorkflowRepairConfirmation(t *testing.T, threadID string) {
 		}
 		return
 	}
-	if resolutions != wantVerified || readyCalls != 1 || merges != 0 {
+	if resolutions != wantVerified || readyCalls != 0 || merges != 0 {
 		t.Fatalf("unexpected progress before CI: %d/%d/%d", resolutions, readyCalls, merges)
 	}
 	ciPassed = true
 	pagesBeforeMerge := pageReads
 	tick(engine)
 	tick(engine)
-	if merges != 1 || api.posts != 1+wantVerified || pageReads <= pagesBeforeMerge {
-		t.Fatalf("merges=%d, reviews=%d, merge thread pages=%d", merges, api.posts, pageReads-pagesBeforeMerge)
+	if readyCalls != 1 || merges != 1 || api.posts != 1+wantVerified || pageReads <= pagesBeforeMerge {
+		t.Fatalf("ready=%d, merges=%d, reviews=%d, merge thread pages=%d", readyCalls, merges, api.posts, pageReads-pagesBeforeMerge)
 	}
 }

@@ -16,11 +16,22 @@ type Store struct {
 	mu   sync.Mutex
 }
 
+func (s *Store) DefaultExecution() (*ExecutionPolicy, error) {
+	if s == nil {
+		return nil, fmt.Errorf("default execution policy store is unavailable")
+	}
+	doc, err := s.Load()
+	if err != nil {
+		return nil, fmt.Errorf("load default execution policy: %w", err)
+	}
+	return doc.DefaultExecution, doc.DefaultExecution.Validate()
+}
+
 func (s *Store) Load() (Document, error) { s.mu.Lock(); defer s.mu.Unlock(); return s.load() }
 func (s *Store) load() (Document, error) {
 	data, err := os.ReadFile(s.Path)
 	if errors.Is(err, os.ErrNotExist) {
-		return Document{Version: Version, Workflows: []Definition{}}, nil
+		return Document{Version: Version, DefaultExecution: initialExecutionPolicy(), Workflows: []Definition{}}, nil
 	}
 	if err != nil {
 		return Document{}, err
@@ -36,6 +47,12 @@ func (s *Store) Save(d Document) (Document, error) {
 	}
 	if old.Revision != d.Revision {
 		return old, ErrConflict
+	}
+	if d.DefaultExecution == nil {
+		d.DefaultExecution = old.DefaultExecution
+	}
+	if err := d.DefaultExecution.Validate(); err != nil {
+		return old, err
 	}
 	if err = d.Validate(); err != nil {
 		return old, err
@@ -78,6 +95,12 @@ func (s *Store) Initialize(d Document) error {
 		_, err = s.load()
 		return err
 	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if d.DefaultExecution == nil {
+		d.DefaultExecution = initialExecutionPolicy()
+	}
+	if err := d.DefaultExecution.Validate(); err != nil {
 		return err
 	}
 	if err := d.Validate(); err != nil {

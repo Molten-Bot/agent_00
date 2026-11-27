@@ -513,7 +513,9 @@ func (s Server) injectBottomDockComponent(ctx context.Context, data []byte) []by
 		jsonEnabled = settingsErr == nil && settings.JSONEnabled
 		githubIssuesEnabled = settingsErr == nil && settings.GitHubIssuesEnabled
 	}
-	if workflowEnabled {
+	if s.Workflows != nil {
+		dock = bytes.Replace(dock, []byte(`id="workflow-dock-link" class="prompt-mode-link site-dock-link hidden"`), []byte(`id="workflow-dock-link" data-default-execution-editor class="prompt-mode-link site-dock-link"`), 1)
+	} else if workflowEnabled {
 		dock = bytes.Replace(dock, []byte(`id="workflow-dock-link" class="prompt-mode-link site-dock-link hidden"`), []byte(`id="workflow-dock-link" class="prompt-mode-link site-dock-link"`), 1)
 	}
 	if !chatEnabled {
@@ -3067,11 +3069,13 @@ func (s Server) handleTaskRerun(w http.ResponseWriter, r *http.Request, requestI
 		return
 	}
 
-	s.Broker.RecordTaskRerunAttempt(requestID, newRequestID)
+	if newRequestID != requestID {
+		s.Broker.RecordTaskRerunAttempt(requestID, newRequestID)
+	}
 	if sourceTaskFound {
 		s.Broker.RecordTaskSource(newRequestID, sourceTask.Source)
 	}
-	if sourceTaskFound && isCompletedTaskStatus(sourceTask.Status) {
+	if sourceTaskFound && newRequestID != requestID && isCompletedTaskStatus(sourceTask.Status) {
 		if err := s.Broker.CloseTask(requestID); err != nil {
 			s.logf("localruntime.ui status=warn event=task_rerun_close_source request_id=%s rerun_request_id=%s err=%q", requestID, newRequestID, err)
 		}

@@ -34,7 +34,7 @@ func capturedReviewPolicy(cfg config.Config, passes int) githubutil.ReviewPolicy
 	policy := githubutil.ReviewPolicy{FixPasses: passes, Complexity: cfg.Complexity}
 	if cfg.Workflow != nil {
 		policy.Hash = cfg.Workflow.PolicyHash
-		if passes > 0 && cfg.Workflow.ReviewAgent.Complexity != "" {
+		if (passes > 0 || cfg.Workflow.DefaultApplied) && cfg.Workflow.ReviewAgent.Complexity != "" {
 			policy.Complexity = cfg.Workflow.ReviewAgent.Complexity
 		}
 	}
@@ -317,9 +317,11 @@ func withFindingVerification(prompt string, findings map[string]githubutil.Nativ
 }
 
 func (h Harness) completeCleanReviewGate(ctx context.Context, cfg config.Config, repo *repoWorkspace, markReady bool) error {
-	gate := githubutil.PendingReviewGate{MarkReady: markReady, Sanitize: repo.ReviewSanitize}
+	managed := cfg.Workflow != nil && cfg.Workflow.DefaultApplied
+	journaled := cfg.Workflow != nil && !cfg.Workflow.IsDefaultExecution() && !cfg.Workflow.DetachedReview
+	gate := githubutil.PendingReviewGate{MarkReady: markReady, Sanitize: repo.ReviewSanitize, VerifyHeadChecks: managed && markReady}
 	receipt := *repo.ReviewReceipt
-	if cfg.Workflow != nil && len(receipt.VerifiedThreads) > 0 {
+	if journaled && len(receipt.VerifiedThreads) > 0 {
 		// Let the coordinator journal the proof before mutating GitHub.
 		repo.PendingReviewGate = &gate
 		return nil
@@ -330,7 +332,7 @@ func (h Harness) completeCleanReviewGate(ctx context.Context, cfg config.Config,
 	gateHarness.WaitForGitHub = false
 	err := gateHarness.resumeReviewGate(ctx, *repo, receipt, &gate)
 	var rate *githubutil.RateLimitError
-	if cfg.Workflow != nil && (errors.As(err, &rate) || errors.Is(err, githubutil.ErrReviewThreadsPending) || errors.Is(err, githubutil.ErrReviewChangesRequested)) {
+	if journaled && (errors.As(err, &rate) || errors.Is(err, githubutil.ErrReviewThreadsPending) || errors.Is(err, githubutil.ErrReviewChangesRequested) || errors.Is(err, ErrReviewPending)) {
 		repo.PendingReviewGate = &gate
 		return nil
 	}
@@ -340,6 +342,9 @@ func (h Harness) completeCleanReviewGate(ctx context.Context, cfg config.Config,
 			return errors.Join(err, waitErr)
 		}
 		err = gateHarness.resumeReviewGate(ctx, *repo, receipt, &gate)
+	}
+	if managed && (errors.Is(err, githubutil.ErrReviewThreadsPending) || errors.Is(err, githubutil.ErrReviewChangesRequested)) {
+		return errors.Join(ErrReviewPending, err)
 	}
 	return err
 }
@@ -363,6 +368,11 @@ func (h Harness) resumeReviewGate(ctx context.Context, repo repoWorkspace, recei
 		return err
 	}
 	if gate.MarkReady {
+		if gate.VerifyHeadChecks {
+			if err := h.confirmHeadChecks(ctx, repo, receipt.Head, true); err != nil {
+				return errors.Join(ErrReviewPending, err)
+			}
+		}
 		return h.markPullRequestReadyForReview(ctx, repo)
 	}
 	return nil

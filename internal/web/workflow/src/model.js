@@ -6,6 +6,7 @@ export const events = [
   "app.prompt",
   "app.json",
   "app.chat",
+  "app.library",
   "issue.opened",
   "issue.assigned",
   "issue.labeled",
