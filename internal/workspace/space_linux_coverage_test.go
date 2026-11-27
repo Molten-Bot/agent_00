@@ -4,6 +4,8 @@ package workspace
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -106,5 +108,32 @@ func TestWorkspacePreflightChecksFreeInodes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCheckNoMountsWithinProtectsBindMount(t *testing.T) {
+	dir := t.TempDir()
+	mountTable := filepath.Join(dir, "mountinfo")
+	original := procSelfMountInfoPath
+	procSelfMountInfoPath = mountTable
+	t.Cleanup(func() { procSelfMountInfoPath = original })
+
+	run := filepath.Join(dir, "workspace")
+	other := filepath.Join(dir, "workspace-other")
+	for _, path := range []string{run, other} {
+		if err := os.Mkdir(path, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mount := filepath.Join(run, "repo", "cache")
+	entries := fmt.Sprintf("24 1 8:1 / / rw - ext4 /dev/fixture rw\n25 24 8:1 /shared/cache %s rw - ext4 /dev/fixture rw\n", mount)
+	if err := os.WriteFile(mountTable, []byte(entries), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckNoMountsWithin(run); err == nil || !strings.Contains(err.Error(), mount) {
+		t.Fatalf("nested mount check = %v", err)
+	}
+	if err := CheckNoMountsWithin(other); err != nil {
+		t.Fatalf("sibling workspace check = %v", err)
 	}
 }

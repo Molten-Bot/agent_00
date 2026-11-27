@@ -187,3 +187,31 @@ func assertLogFileContent(t *testing.T, path string, want []string) {
 		t.Fatalf("content of %s = %q, want %q", path, string(content), expected)
 	}
 }
+
+func TestMaintainAggregatePreservesTaskLogs(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(t.TempDir(), logDirectoryName)
+	mirror, err := newTaskLogMirror(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mirror.Close()
+	first := "task status=completed request_id=issue-example"
+	mirror.WriteLine(first)
+	if err := mirror.maintainAggregate(1); err != nil {
+		t.Fatal(err)
+	}
+	second := "task status=retry_wait request_id=issue-other"
+	mirror.WriteLine(second)
+	for path, want := range map[string]string{
+		filepath.Join(root, logFileName):                             second,
+		filepath.Join(root, logFileName+".previous"):                 first,
+		filepath.Join(root, "issue", "example", logFileName):         first,
+		filepath.Join(root, "issue", "other", legacyTaskLogFileName): second,
+	} {
+		data, err := os.ReadFile(path)
+		if err != nil || string(data) != want+"\n" {
+			t.Errorf("read %s = %q, %v; want %q", path, data, err, want+"\n")
+		}
+	}
+}

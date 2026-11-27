@@ -6,6 +6,7 @@ import (
 	"hash/fnv"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 
@@ -17,6 +18,7 @@ const (
 	logDirectoryName    = ".log"
 	maxLogFileOpenMode  = 0o600
 	maxOpenTaskLogFiles = 128
+	maxAggregateLogSize = 64 * 1024 * 1024
 )
 
 const (
@@ -170,6 +172,49 @@ func (m *taskLogMirror) Sync() error {
 		}
 	}
 	return errors.Join(append(problems, m.writeErr)...)
+}
+
+// maintainAggregate bounds the shared diagnostic log. Per-task mirrors keep
+// their own retention rules because they contain delivery and recovery evidence.
+func (m *taskLogMirror) maintainAggregate(limit int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for path, file := range m.taskFiles {
+		current, err := os.Stat(path)
+		saved, statErr := file.Stat()
+		if !errors.Is(err, os.ErrNotExist) && (err != nil || statErr != nil || os.SameFile(current, saved)) {
+			continue
+		}
+		// Release disk blocks for task logs unlinked by maintenance.
+		_ = file.Close()
+		delete(m.taskFiles, path)
+		m.taskFileOrder = slices.DeleteFunc(m.taskFileOrder, func(name string) bool { return name == path })
+	}
+	if m.aggregate == nil {
+		return nil
+	}
+	info, err := m.aggregate.Stat()
+	if err != nil || info.Size() < limit {
+		return err
+	}
+	current := filepath.Join(m.rootDir, logFileName)
+	previous := current + ".previous"
+	next, err := os.CreateTemp(m.rootDir, ".aggregate-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(next.Name())
+	if err := os.Rename(current, previous); err != nil {
+		next.Close()
+		return err
+	}
+	if err := os.Rename(next.Name(), current); err != nil {
+		next.Close()
+		return errors.Join(err, os.Rename(previous, current))
+	}
+	old := m.aggregate
+	m.aggregate = next
+	return old.Close()
 }
 
 func (m *taskLogMirror) Close() error {

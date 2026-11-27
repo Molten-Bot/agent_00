@@ -229,9 +229,6 @@ func (q *issueRepairQueue) reconcile(ctx context.Context, enqueue localRunEnqueu
 		}
 	}
 	q.releaseSharedBlockedRepairReceipts(claimBlocked)
-	if err := retainIssueEvidence(q.claims, q.store, q.logRoot, time.Now()); err != nil {
-		q.logf("event=issue_evidence_retention status=error err=%q", err)
-	}
 }
 
 func issueRepairDispatchFinished(record localruntime.IssueRepairRecord) bool {
@@ -581,95 +578,6 @@ func (q *issueRepairQueue) verifyPR(record localruntime.IssueRepairRecord) error
 	}
 	if pr.URL != record.PRURL || pr.HeadRefName != record.Branch || (!strings.EqualFold(pr.State, "OPEN") && pr.MergedAt == "") {
 		return fmt.Errorf("repair PR is not open or merged on its recorded branch")
-	}
-	return nil
-}
-
-// Resolved evidence has a 30-day retention. Never remove a workspace still
-// referenced by an unresolved attempt or repair. The journal itself is retained.
-func retainIssueEvidence(claims *localruntime.IssueClaimStore, repairs *localruntime.IssueRepairStore, logRoot string, now time.Time) error {
-	records, err := claims.List()
-	if err != nil {
-		return err
-	}
-	repairRecords, err := repairs.List()
-	if err != nil {
-		return err
-	}
-	blockedRepairs := map[string]bool{}
-	for _, repair := range repairRecords {
-		if repair.State == "completed" {
-			continue
-		}
-		// Repairs skipped before dispatch follow the fulfilled issue's retention window.
-		if isSkippedRolloutRepair(repair) || (repair.State == "blocked" && repair.Error == issueRepairSourceFulfilledReason) {
-			continue
-		}
-		blockedRepairs[repair.RequestID] = true
-	}
-	protectedIssues := map[string]bool{}
-	latest := map[string]localruntime.IssueClaimRecord{}
-	for _, record := range records {
-		key := localruntime.IssueExecutionKey(record.Run.GitHubIssue)
-		if blockedRepairs[record.RepairRequestID] {
-			protectedIssues[key] = true
-		}
-		old, ok := latest[key]
-		if !ok || record.Run.GitHubIssue.Claim.Attempt > old.Run.GitHubIssue.Claim.Attempt {
-			latest[key] = record
-		}
-	}
-	root, err := filepath.Abs(filepath.Join(filepath.Dir(claims.Root), "issue-workspaces"))
-	if err != nil {
-		return err
-	}
-	for _, record := range records {
-		key := localruntime.IssueExecutionKey(record.Run.GitHubIssue)
-		last := latest[key]
-		if protectedIssues[key] || !last.Fulfilled() || last.VerifiedAt.IsZero() || now.Sub(last.VerifiedAt) < 30*24*time.Hour {
-			continue
-		}
-		err := func() error {
-			lock, err := claims.TryLock(key)
-			if err != nil {
-				return err
-			}
-			if lock == nil {
-				return nil
-			}
-			defer lock.Close()
-			fresh, err := claims.List()
-			if err != nil {
-				return err
-			}
-			for _, current := range fresh {
-				if localruntime.IssueExecutionKey(current.Run.GitHubIssue) == key && current.Run.GitHubIssue.Claim.Attempt > last.Run.GitHubIssue.Claim.Attempt {
-					return nil
-				}
-			}
-			if record.WorkspaceDir != "" {
-				path, err := filepath.Abs(record.WorkspaceDir)
-				if err != nil {
-					return err
-				}
-				rel, err := filepath.Rel(root, path)
-				if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
-					return fmt.Errorf("refusing cleanup outside persistent issue workspaces")
-				}
-				if err := os.RemoveAll(path); err != nil {
-					return err
-				}
-			}
-			if path, ok := taskLogDir(logRoot, record.RequestID); ok {
-				if err := os.RemoveAll(path); err != nil {
-					return err
-				}
-			}
-			return nil
-		}()
-		if err != nil {
-			return err
-		}
 	}
 	return nil
 }
