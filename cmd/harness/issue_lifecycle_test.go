@@ -338,7 +338,8 @@ func TestIssueCheckWaitResumesSameClaimAndPreservesBackoff(t *testing.T) {
 	h := app.Harness{}
 	ctx, done := next.configure(t.Context(), &h)
 	defer done()
-	if h.IssueChecksPRURL != prURL || !h.IssueCheckoutComplete || next.record.Run.Workflow.EventID != record.Run.Workflow.EventID ||
+	if h.IssueChecksPRURL != prURL || !h.IssueCheckoutComplete || h.IssueWorkspaceDir != record.WorkspaceDir ||
+		next.record.Run.Workflow.EventID != record.Run.Workflow.EventID ||
 		next.record.RequestID != record.RequestID || next.record.ID != record.ID {
 		t.Fatalf("retry lost issue, task, workflow or PR identity: %+v", next.record)
 	}

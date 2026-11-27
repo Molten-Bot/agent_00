@@ -17,6 +17,8 @@ import (
 // current check evidence.
 var ErrChecksUnavailable = errors.New("waiting for GitHub check verification")
 
+var errCheckHeadMismatch = fmt.Errorf("%w: pull request head changed or is still propagating", ErrChecksUnavailable)
+
 const checkQueryTimeout = 30 * time.Second
 
 type checkQueryRunner struct {
@@ -161,6 +163,25 @@ func (h Harness) requireCheckHead(ctx context.Context, repo repoWorkspace, expec
 	return checkHeadMatches(state, expected)
 }
 
+// Give GitHub a short window to catch up after publication. A watch on the
+// previous head could otherwise trigger a repair using stale CI results.
+func (h Harness) waitForPublishedCheckHead(ctx context.Context, repo repoWorkspace, expected string) error {
+	sleep := h.Sleep
+	if sleep == nil {
+		sleep = sleepWithContext
+	}
+	for attempt := 0; ; attempt++ {
+		err := h.requireCheckHead(ctx, repo, expected)
+		if !errors.Is(err, errCheckHeadMismatch) || expected == "" || attempt == 5 {
+			return err
+		}
+		h.logf("stage=checks status=waiting action=wait_for_published_head expected_head=%s retry=%d/5", expected, attempt+1)
+		if err := sleep(ctx, 2*time.Second); err != nil {
+			return err
+		}
+	}
+}
+
 func checkHeadMatches(state prStateView, expected string) error {
 	if pullRequestStateIsMerged(state) {
 		return githubutil.ErrReviewInterrupted
@@ -172,7 +193,7 @@ func checkHeadMatches(state prStateView, expected string) error {
 		return fmt.Errorf("pull request must be open to verify checks")
 	}
 	if expected == "" || state.HeadRefOID != expected {
-		return fmt.Errorf("%w: pull request head changed or is still propagating", ErrChecksUnavailable)
+		return errCheckHeadMismatch
 	}
 	return nil
 }
