@@ -50,7 +50,17 @@ export function ScheduleInterval({ hours, onChange }) {
         <label htmlFor={id}>Repeat every ({unit.name})</label>
         <span>{amount}{savedValue && " (saved)"}</span>
         <input id={id} type="range" min={unit.min} max={unit.max} step="1" value={sliderValue}
-          aria-valuetext={savedValue ? `${amount} ${unit.name}, saved value; move slider to change` : `${amount}`}
+          aria-valuetext={savedValue ? `${sliderValue} ${unit.name} (${amount} saved)` : `${amount}`}
+          // Choosing the current thumb position does not fire onChange.
+          onClick={() => {
+            if (savedValue) onChange(sliderValue * unit.hours);
+          }}
+          onKeyDown={(e) => {
+            if (!savedValue) return;
+            if ((e.key === "Home" && sliderValue === unit.min) || (e.key === "End" && sliderValue === unit.max)) {
+              onChange(sliderValue * unit.hours);
+            }
+          }}
           onChange={(e) => onChange(Number(e.target.value) * unit.hours)} />
       </div>
       {index === 4 && <p className="wf-interval-hint">One month is a fixed 30-day interval.</p>}

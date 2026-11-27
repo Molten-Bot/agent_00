@@ -390,6 +390,30 @@ test('editing a scheduled workflow preserves its legacy count until the slider m
  assert.equal(await page.getByText('10 (saved)',{exact:true}).count(),0);
 });
 
+test('legacy schedule limits can be applied directly from the slider', async t => {
+ const {page,getDocument}=await openEditor(t);
+ await selectRepository(page,'acme/repo');
+ await page.getByRole('button',{name:'Scheduled task',exact:true}).click();
+ await waitForSaved(page);
+ const {id}=getDocument().workflows[0];
+ for (const [hours,unit,limit,expected,apply] of [
+  [1/60,'minutes','5',5/60,slider=>slider.press('Home')],
+  [10*24,'days','7',7*24,slider=>slider.press('End')],
+  [1/60,'minutes','5',5/60,slider=>slider.click({position:{x:8,y:12}})],
+ ]) {
+  getDocument().workflows[0].trigger.intervalHours=hours;
+  await page.goto(`${baseURL}/#workflow/${id}`);
+  await page.reload();
+  await page.locator('[data-id="trigger"]').click();
+  const slider=page.getByRole('slider',{name:`Repeat every (${unit})`,exact:true});
+  assert.equal(await slider.inputValue(),limit);
+  assert.equal(getDocument().workflows[0].trigger.intervalHours,hours);
+  await apply(slider);
+  await waitForSaved(page);
+  assert.equal(getDocument().workflows[0].trigger.intervalHours,expected);
+ }
+});
+
 test('in-app workflows keep defaults opt-in and compose review and merge steps', async t => {
  const {page,getDocument}=await openEditor(t);
  await selectRepository(page,'acme/repo');
