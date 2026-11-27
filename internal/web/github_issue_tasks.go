@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"slices"
@@ -14,12 +15,71 @@ import (
 )
 
 type issueTaskAttempt struct {
-	Number    int      `json:"number"`
-	RequestID string   `json:"request_id,omitempty"`
-	Status    string   `json:"status"`
-	Stage     string   `json:"stage,omitempty"`
-	Stages    []string `json:"stages,omitempty"`
-	Error     string   `json:"error,omitempty"`
+	Number       int      `json:"number"`
+	RequestID    string   `json:"request_id,omitempty"`
+	Status       string   `json:"status"`
+	Stage        string   `json:"stage,omitempty"`
+	Stages       []string `json:"stages,omitempty"`
+	Error        string   `json:"error,omitempty"`
+	Detail       string   `json:"detail,omitempty"`
+	ReviewDetail string   `json:"review_detail,omitempty"`
+}
+
+// RecordMonitoredIssueMerge persists the receipt before the broker retires the task.
+func (s Server) RecordMonitoredIssueMerge(ctx context.Context, task Task, title string, mergedAt time.Time) (bool, error) {
+	if s.IssueClaims == nil {
+		return false, nil
+	}
+	records, listErr := s.IssueClaims.List()
+	var latest localruntime.IssueClaimRecord
+	for _, record := range records {
+		if record.RequestID == task.RequestID &&
+			(latest.ID == "" || record.Run.GitHubIssue.Claim.Attempt > latest.Run.GitHubIssue.Claim.Attempt) {
+			latest = record
+		}
+	}
+	if latest.ID == "" {
+		if listErr != nil && (task.GitHubIssueURL != "" || task.Source == "github_issues") {
+			return true, listErr
+		}
+		return false, nil
+	}
+	pr := issuePullRequest{URL: task.PRURL, Title: title, MergedAt: mergedAt}
+	if err := s.saveMergedIssuePR(latest, pr, "", false); err != nil {
+		return true, err
+	}
+	s.Broker.notifyIssueTaskUpdate()
+	return true, s.reconcileIssueRecord(ctx, latest)
+}
+
+// RecordIssueMerge persists the linked PR merge and workflow gate on the matching attempt.
+func (s *Server) RecordIssueMerge(run workflow.Run, pr workflow.Item, mergedByApp bool) error {
+	if s.IssueClaims == nil {
+		return nil
+	}
+	records, listErr := s.IssueClaims.List()
+	var latest localruntime.IssueClaimRecord
+	for _, record := range records {
+		if record.Run.Workflow == nil || record.Run.Workflow.EventID != run.ID ||
+			(run.RequestID != "" && record.RequestID != run.RequestID) {
+			continue
+		}
+		if latest.ID == "" || record.Run.GitHubIssue.Claim.Attempt > latest.Run.GitHubIssue.Claim.Attempt ||
+			(record.Run.GitHubIssue.Claim.Attempt == latest.Run.GitHubIssue.Claim.Attempt && record.UpdatedAt.After(latest.UpdatedAt)) {
+			latest = record
+		}
+	}
+	if latest.ID == "" {
+		return listErr
+	}
+	if known := s.knownIssuePR(latest); known != "" && !strings.EqualFold(known, pr.URL) {
+		return nil
+	}
+	if latest.PRMerged() && (run.Reason == "" || latest.ReviewDetail == run.Reason) &&
+		(pr.MergedAt.IsZero() || latest.PRMergedAt.Equal(pr.MergedAt)) && (!mergedByApp || latest.PRMergedByApp) {
+		return nil
+	}
+	return s.saveMergedIssuePR(latest, issuePullRequest{URL: pr.URL, Title: pr.Title, MergedAt: pr.MergedAt}, run.Reason, mergedByApp)
 }
 
 func issueTaskID(issue *config.GitHubIssueConfig, policy *config.WorkflowRunConfig) string {
@@ -79,9 +139,8 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 		latest := attempts[len(attempts)-1]
 		requestID := stringsx.FirstNonEmpty(latest.RequestID, "issue-"+latest.ID)
 		task, live := byRequest[requestID]
-		if !live && (latest.Version != 2 || s.Broker.issueTaskClosed(requestID, latest.ID) ||
-			(isCompletedTaskStatus(latest.Outcome) && latest.State != "blocked" &&
-				latest.State != "retry_wait" && time.Since(latest.UpdatedAt) >= defaultClosedTaskRetention)) {
+		task.CanRerun = task.CanRerun && isCompletedTaskStatus(task.Status)
+		if !live && s.issueTaskHistoryHidden(latest, requestID) {
 			continue
 		}
 		issue := latest.Run.GitHubIssue
@@ -92,6 +151,13 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 		task.Repo = stringsx.FirstNonEmpty(task.Repo, latest.Run.RepoURL)
 		task.Source = stringsx.FirstNonEmpty(task.Source, "github_issues")
 		task.IssueState = latest.State
+		if latest.PRRecoveryBlocker != "" {
+			task.IssueState = "blocked"
+			task.IssuePRRecoveryBlocker = latest.PRRecoveryBlocker
+			task.CanRerun = false
+		} else if latest.State == "blocked" && requiresIssueBranchRecovery(latest) {
+			task.CanRerun = false
+		}
 		task.IssuePlanningStatus = latest.PlanningStatus
 		task.RetryAt = formatTimeOrEmpty(latest.NextAttemptAt)
 		if latest.Fulfilled() && (latest.Outcome == "error" || latest.Outcome == "interrupted") {
@@ -103,16 +169,30 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 			task.ReviewPolicy = taskReviewPolicy(latest.Run.Workflow, latest.Run.Review != nil || latest.Run.LibraryTaskName == "code-review")
 		}
 		task.PRURL = stringsx.FirstNonEmpty(latest.PRURL, task.PRURL)
+		merged := latest.PRMerged() || latest.PlanningStatus == issueDone || task.Status == "merged"
 		if latest.Run.Workflow != nil && !latest.Run.Workflow.IsDefaultExecution() {
 			task.WorkflowID, task.WorkflowName = latest.Run.Workflow.ID, latest.Run.Workflow.Name
 			task.WorkflowTriggered = true
-			if run := delivery[latest.Run.Workflow.EventID]; run.RequestID == latest.RequestID {
+			if run := delivery[latest.Run.Workflow.EventID]; run.ID != "" && run.RequestID == latest.RequestID &&
+				(latest.PRURL == "" || strings.EqualFold(latest.PRURL, run.LinkedPRURL())) {
+				knownPR := stringsx.FirstNonEmpty(task.PRURL, latest.Run.Workflow.ResumePRURL)
+				if prURL := run.LinkedPRURL(); run.PRMergeConfirmed() && prURL != "" &&
+					(knownPR == "" || strings.EqualFold(knownPR, prURL)) {
+					merged = true
+					task.PRURL = stringsx.FirstNonEmpty(task.PRURL, prURL)
+					if run.Status != "merged" {
+						latest.ReviewDetail = stringsx.FirstNonEmpty(latest.ReviewDetail, run.Reason)
+					}
+				}
 				switch run.Status {
 				case "waiting", "awaiting_review":
-					task.IssueState = run.Status
-					task.ReviewGate = run.Reason
-					task.RetryAt = stringsx.FirstNonEmpty(formatTimeOrEmpty(run.GitHubRetryAt), task.RetryAt)
-					task.PRURL = stringsx.FirstNonEmpty(task.PRURL, run.PRURL)
+					switch task.IssueState {
+					case "", "verifying", "fulfilled", "review_pending":
+						task.IssueState = run.Status
+						task.ReviewGate = run.Reason
+						task.RetryAt = stringsx.FirstNonEmpty(formatTimeOrEmpty(run.GitHubRetryAt), task.RetryAt)
+						task.PRURL = stringsx.FirstNonEmpty(task.PRURL, run.PRURL)
+					}
 				}
 			}
 		}
@@ -133,27 +213,20 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 		if latest.UpdatedAt.After(parseTimeOrZero(task.UpdatedAt)) {
 			task.UpdatedAt = formatTimeOrEmpty(latest.UpdatedAt)
 		}
-		switch {
-		case latest.PlanningStatus == issueDone:
-			task.Status, task.Error, task.ReviewGate = "merged", "", ""
-		case task.IssueState == "retry_wait" || task.IssueState == localruntime.IssueChecksPending ||
-			task.IssueState == "waiting" || task.IssueState == "awaiting_review":
+		if (task.IssueState == "" || task.IssueState == "verifying" || task.IssueState == "fulfilled") &&
+			latest.Outcome == workflow.OutcomeReviewPending {
+			task.IssueState = workflow.OutcomeReviewPending
+		}
+		switch task.IssueState {
+		case "retry_wait", localruntime.IssueChecksPending, workflow.OutcomeReviewPending, "waiting", "awaiting_review":
 			if isCompletedTaskStatus(task.Status) || !live {
 				task.Status = "queued"
 			}
 			task.Error = stringsx.FirstNonEmpty(latest.Error, task.Error)
-		case task.IssueState == "blocked" || task.IssueState == localruntime.IssueStateMergedUnverified:
+		case "blocked":
 			task.Status = "error"
-			task.Error = stringsx.FirstNonEmpty(latest.Error, latest.RunError, task.Error)
+			task.Error = stringsx.FirstNonEmpty(latest.PRRecoveryBlocker, latest.Error, latest.RunError, task.Error)
 		}
-		if !live && isCompletedTaskStatus(task.Status) {
-			task.DeleteScope = s.Broker.completedAttemptGenerations(requestID)
-			if task.DeleteScope[requestID] == "" {
-				// The claim ID is also the broker generation assigned at dispatch.
-				task.DeleteScope[requestID] = issue.Claim.ID
-			}
-		}
-
 		for i, attempt := range attempts {
 			stage := attempt.Step
 			status := stringsx.FirstNonEmpty(attempt.Outcome, attempt.State, attempt.Phase)
@@ -161,10 +234,31 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 				stage = stringsx.FirstNonEmpty(stage, task.Stage)
 				status = stringsx.FirstNonEmpty(attempt.Outcome, task.Status, status)
 			}
+			if i == len(attempts)-1 {
+				attempt.ReviewDetail = latest.ReviewDetail
+			}
 			task.IssueAttempts = append(task.IssueAttempts, issueTaskAttempt{
 				Number: attempt.Run.GitHubIssue.Claim.Attempt, RequestID: attempt.RequestID,
-				Status: status, Stage: stage, Stages: attempt.Stages, Error: attempt.FailureDetail(),
+				Status: status, Stage: stage, Stages: attempt.Stages, Error: attempt.FailureDetail(), Detail: attempt.Error,
+				ReviewDetail: attempt.ReviewDetail,
 			})
+		}
+		if merged {
+			task.Status, task.IssueState, task.RetryAt = "merged", localruntime.IssueStateMerged, ""
+			task.Stage, task.StageStatus, task.ExitCode = "finalize", "merged", 0
+			task.CanRerun, task.Controls = false, TaskControls{}
+			task.Error, task.ReviewGate, task.Warning = "", "", ""
+			task.IssuePRRecoveryBlocker = ""
+			if task.PRTitleURL != "" && !strings.EqualFold(task.PRTitleURL, task.PRURL) {
+				task.PRTitle, task.PRTitleURL, task.PRTitleUpdatedAt = "", "", ""
+			}
+		}
+		if !live && isCompletedTaskStatus(task.Status) {
+			task.DeleteScope = s.Broker.completedAttemptGenerations(requestID)
+			if task.DeleteScope[requestID] == "" {
+				// The claim ID is also the broker generation assigned at dispatch.
+				task.DeleteScope[requestID] = issue.Claim.ID
+			}
 		}
 		for i := len(attempts) - 1; task.PRURL == "" && i >= 0; i-- {
 			task.PRURL = stringsx.FirstNonEmpty(attempts[i].PRURL, byRequest[attempts[i].RequestID].PRURL)
@@ -179,6 +273,12 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 	})
 	snapshot.Tasks = tasks
 	return snapshot
+}
+
+func (s Server) issueTaskHistoryHidden(record localruntime.IssueClaimRecord, requestID string) bool {
+	return record.Version != 2 || s.Broker.issueTaskClosed(requestID, record.ID) ||
+		((record.PRMerged() || isCompletedTaskStatus(record.Outcome)) && record.State != "blocked" &&
+			record.State != "retry_wait" && s.Broker.now().Sub(record.UpdatedAt) >= defaultClosedTaskRetention)
 }
 
 func (s Server) forgetRestoredIssueTask(requestID string, generations map[string]string) (bool, error) {

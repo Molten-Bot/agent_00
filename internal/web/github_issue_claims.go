@@ -24,10 +24,11 @@ import (
 )
 
 type issueAutomationState struct {
-	mu         sync.Mutex
-	admission  sync.Mutex
-	status     issueAutomationStatus
-	instanceID string
+	mu                sync.Mutex
+	admission         sync.Mutex
+	status            issueAutomationStatus
+	instanceID        string
+	linkedPRPollAfter map[string]time.Time
 }
 
 type issueAutomationStatus struct {
@@ -863,6 +864,9 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		if !strings.EqualFold(issue.Repository, repository) || issue.Number != number {
 			continue
 		}
+		if record.PRMerged() && (issue.Claim.ID == remote.Claim.ID || remote.Claim.ID == "") {
+			return issueRetryResult{}, http.StatusConflict, errors.New("issue task pull request is already merged")
+		}
 		if record.Version == 2 && record.InstanceID == s.instanceID() {
 			stopped, err := localruntime.IssueProcessesStopped(record)
 			if !stopped && (err == nil || automatic) {
@@ -941,21 +945,38 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 	var verificationPRURL string
 	if s.IssueRecovery != nil && remote.Claim.ID != "" {
 		claimedIssue := &config.GitHubIssueConfig{Repository: repository, Number: number, Claim: &remote.Claim}
-		pr, err := s.findIssuePR(ctx, claimedIssue)
+		var pr issuePullRequest
+		knownPR, err := s.resolveIssuePR(previous)
+		if err != nil {
+			return issueRetryResult{}, http.StatusServiceUnavailable, err
+		}
+		if knownPR != "" {
+			pr, err = s.linkedIssuePR(ctx, repository, knownPR)
+			if previous.PRURL == "" && strings.EqualFold(pr.URL, knownPR) {
+				previous.PRURL = pr.URL
+			}
+		} else {
+			pr, err = s.findIssuePR(ctx, claimedIssue)
+		}
 		if err != nil {
 			return issueRetryResult{}, 502, err
+		}
+		if pr.Merged {
+			if previous.Version == 2 && previous.InstanceID == remote.InstanceID && previous.InstanceID == s.instanceID() {
+				if err := s.recordMergedIssuePR(ctx, previous, pr); err != nil {
+					return issueRetryResult{}, http.StatusServiceUnavailable, err
+				}
+			}
+			return issueRetryResult{}, http.StatusConflict, errors.New("issue task pull request is already merged")
 		}
 		if err := pr.recoveryBlocker(claimedIssue); err != nil {
 			return issueRetryResult{}, http.StatusConflict, err
 		}
-		if previous.State == localruntime.IssueStateMergedUnverified {
-			return issueRetryResult{}, http.StatusConflict, errors.New(mergedUnverifiedIssueError)
-		}
-		if previous.Version == 2 && previous.InstanceID == remote.InstanceID && previous.InstanceID == s.instanceID() && pr.mergedUnverified(previous) {
-			if err := s.recordMergedUnverifiedIssuePR(previous, pr); err != nil {
+		if !automatic && previous.PRRecoveryBlocker != "" && knownPR != "" && strings.EqualFold(pr.URL, knownPR) {
+			if err := s.recordIssuePRBlocker(&previous, pr, nil); err != nil {
 				return issueRetryResult{}, http.StatusServiceUnavailable, err
 			}
-			return issueRetryResult{}, http.StatusConflict, errors.New(mergedUnverifiedIssueError)
+			s.Broker.notifyIssueTaskUpdate()
 		}
 		if metadataRetry {
 			if pr.URL == "" || !strings.EqualFold(pr.URL, previous.PRURL) ||

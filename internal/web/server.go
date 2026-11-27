@@ -99,6 +99,7 @@ type Server struct {
 	RunTask                 func(context.Context, string) error
 	ForceRunTask            func(context.Context, string) error
 	StopTask                func(context.Context, string) error
+	CancelMergedTask        func(string)
 	ResolveTaskControls     func(string) TaskControls
 	CustomLibrarySources    *localruntime.CustomLibrarySources
 	LoadLibraryTasks        func() ([]library.TaskSummary, error)
@@ -2057,6 +2058,9 @@ func (s Server) withTaskControls(snapshot Snapshot) Snapshot {
 	}
 
 	for i := range snapshot.Tasks {
+		if snapshot.Tasks[i].IssueState == localruntime.IssueStateMerged {
+			continue
+		}
 		snapshot.Tasks[i].Controls = s.ResolveTaskControls(snapshot.Tasks[i].RequestID)
 	}
 	return snapshot
