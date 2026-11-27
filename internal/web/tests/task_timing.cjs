@@ -25,8 +25,11 @@ test('Studio history displays timing from both attempts', async t => {
     return route.continue();
   });
   await page.goto(`${baseURL}/#current-work`);
-  const timing = page.locator('#task-list .task[data-request-id="delivery"] .task-stage-timing');
-  await timing.getByText('Stage timing', { exact: true }).click({ timeout: 5000 });
+  const task = page.locator('#task-list .task[data-request-id="delivery"]');
+  const timing = task.locator('.task-stage-timing');
+  const timingSummary = timing.getByText('Stage timing', { exact: true });
+  const attemptHistory = task.locator('.task-issue-history details');
+  await timingSummary.click({ timeout: 5000 });
   await expect(timing.getByText('Attempt 1')).toBeVisible();
   await expect(timing.getByText('Attempt 2')).toBeVisible();
   await expect(timing.getByText('Implementation · 5,000 ms · Agent 3,000 ms')).toBeVisible();
@@ -34,5 +37,11 @@ test('Studio history displays timing from both attempts', async t => {
   await expect(timing.getByText('Mark ready · Unknown')).toBeVisible();
   await expect(timing.getByText('Workflow total · 60,000 ms')).toBeVisible();
   await expect(timing.locator('time[datetime="2026-11-27T12:01:00Z"]')).toBeVisible();
+  await expect(attemptHistory).toHaveJSProperty('open', false);
+  await attemptHistory.getByText('Attempt history (2)', { exact: true }).click();
+  await expect(timing.getByText('Workflow total · 60,000 ms')).toBeVisible();
+  await timingSummary.click();
+  await expect(attemptHistory).toHaveJSProperty('open', true);
+  await expect(timing).toHaveJSProperty('open', false);
   assert.deepEqual(errors, []);
 });

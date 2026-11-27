@@ -857,10 +857,12 @@ test('Studio keeps issue retries and completion under one task', async t => {
   const { page } = await openPage(t, 'current-work', { width: 430, height: 932 }, true, [first]);
   const cards = page.locator('#task-list .task');
   const task = cards.locator('xpath=self::*[@data-task-id="issue-workflow-42"]');
+  const attemptHistory = task.locator('.task-issue-history details');
+  const attemptSummary = attemptHistory.locator('summary');
   await task.getByText('Blocked', { exact: true }).waitFor();
   await task.getByRole('button', { name: 'Retry task' }).waitFor();
   assert.equal(await task.getByText(/Pull request head changed/).isVisible(), false);
-  await task.locator('summary').click();
+  await attemptSummary.click();
   await task.getByText(/Pull request head changed/).waitFor();
   assert.equal(await task.getByText(/Pull request head changed/).count(), 1);
 
@@ -889,7 +891,7 @@ test('Studio keeps issue retries and completion under one task', async t => {
     await update({ status: 'queued', issue_state: 'waiting', review_gate });
     const currentStatus = task.locator('.task-issue-status').filter({ hasText: review_gate });
     assert.equal(await currentStatus.innerText(), review_gate);
-    assert.equal(await task.locator('details').getByText(review_gate, { exact: true }).count(), 0);
+    assert.equal(await attemptHistory.getByText(review_gate, { exact: true }).count(), 0);
   }
   await update({
     status: 'queued', issue_state: 'checks_pending', error: '',
@@ -920,7 +922,7 @@ test('Studio keeps issue retries and completion under one task', async t => {
   await page.locator('#task-history-toggle').click();
   await task.getByText('Merged', { exact: true }).waitFor();
   assert.equal(await task.getByRole('button', { name: /rerun|re-run|retry|resume|recover/i }).count(), 0);
-  if (await task.locator('details').getAttribute('open') === null) await task.locator('summary').click();
+  if (await attemptHistory.getAttribute('open') === null) await attemptSummary.click();
   await task.getByText(/Pull request merged before draft verification passed/).waitFor();
   assert.equal(await cards.count(), 1);
   assert.equal(await task.getByRole('link', { name: 'Open issue on GitHub.' }).getAttribute('href'), first.github_issue_url);
