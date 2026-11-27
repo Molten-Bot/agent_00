@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -19,6 +20,8 @@ type GitHub struct {
 	Cooldown *githubutil.Cooldown
 	Logf     func(string, ...any)
 }
+
+var errAppMergeVerificationPending = errors.New("could not verify the app merge")
 
 // pullRequestSnapshotError preserves the complete issue snapshot when a pull
 // request listed by GitHub cannot be inspected.
@@ -272,7 +275,7 @@ func (g GitHub) inspect(ctx context.Context, repo, selector string, needs ScanNe
 	if !repoPattern.MatchString(repo) {
 		return Item{}, fmt.Errorf("invalid repository")
 	}
-	fields := "number,title,body,url,author,labels,assignees,reviewRequests,baseRefName,headRefName,headRefOid,isDraft,state"
+	fields := "number,title,body,url,author,labels,assignees,reviewRequests,baseRefName,headRefName,headRefOid,isDraft,state,mergedAt"
 	if needs.Reviews {
 		fields += ",reviewDecision"
 	}
@@ -286,6 +289,7 @@ func (g GitHub) inspect(ctx context.Context, repo, selector string, needs ScanNe
 	var p struct {
 		Number                                                                        int
 		Title, Body, URL, BaseRefName, HeadRefName, HeadRefOid, ReviewDecision, State string
+		MergedAt                                                                      time.Time
 		IsDraft                                                                       bool
 		Author                                                                        struct {
 			Login string
@@ -303,7 +307,7 @@ func (g GitHub) inspect(ctx context.Context, repo, selector string, needs ScanNe
 		return Item{}, fmt.Errorf("pull request response is missing its number")
 	}
 	if p.State == "MERGED" || p.State == "CLOSED" {
-		return Item{Repository: repo, Number: p.Number, Kind: "pr", URL: p.URL, HeadSHA: p.HeadRefOid, Merged: p.State == "MERGED"}, nil
+		return Item{Repository: repo, Number: p.Number, Kind: "pr", URL: p.URL, Title: p.Title, HeadSHA: p.HeadRefOid, Merged: p.State == "MERGED", MergedAt: p.MergedAt}, nil
 	}
 	// Older gh versions do not expose closingIssuesReferences in pr view's
 	// JSON field list. Ask GraphQL directly for the relationship count.
@@ -379,18 +383,25 @@ func (g GitHub) Merge(ctx context.Context, r Run) error {
 	if _, err = g.command(ctx, args...); err != nil {
 		return err
 	}
-	if !r.requiresReview() && appID == 0 {
+	if r.Item.Kind != "issue" && !r.requiresReview() && appID == 0 {
 		return nil
 	}
 	raw, err := g.command(ctx, "pr", "view", r.PRURL, "--repo", r.Item.Repository, "--json", "state")
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", errAppMergeVerificationPending, err)
 	}
 	var pr struct{ State string }
-	if err := json.Unmarshal([]byte(raw), &pr); err != nil || pr.State != "MERGED" {
-		return fmt.Errorf("GitHub did not confirm the pull request merged")
+	if err := json.Unmarshal([]byte(raw), &pr); err != nil {
+		return fmt.Errorf("%w: %w", errAppMergeVerificationPending, err)
 	}
-	return nil
+	switch pr.State {
+	case "MERGED":
+		return nil
+	case "OPEN", "CLOSED":
+		return errors.New("GitHub did not confirm the pull request merged")
+	default:
+		return errAppMergeVerificationPending
+	}
 }
 
 // CanonicalRepository accepts the forms used by the harness's run config.

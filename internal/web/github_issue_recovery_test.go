@@ -37,6 +37,19 @@ func (f *recoveryGitHub) Run(ctx context.Context, cmd execx.Command) (execx.Resu
 	if strings.Contains(args, "/pulls?") {
 		return execx.Result{Stdout: f.prs}, nil
 	}
+	if _, number, ok := strings.Cut(args, "/pulls/"); ok {
+		var prs []json.RawMessage
+		if err := json.Unmarshal([]byte(f.prs), &prs); err != nil {
+			return execx.Result{}, err
+		}
+		for _, raw := range prs {
+			var pr struct{ Number int }
+			if json.Unmarshal(raw, &pr) == nil && fmt.Sprint(pr.Number) == number {
+				return execx.Result{Stdout: string(raw)}, nil
+			}
+		}
+		return execx.Result{Stdout: "{}"}, nil
+	}
 	if strings.Contains(args, "--method DELETE") {
 		f.deletes++
 		if f.deleteError {
@@ -630,7 +643,7 @@ func TestIssueRecoveryVerifiesPRDespiteFailure(t *testing.T) {
 				t.Fatal(err)
 			}
 			got := latestRecoveryRecord(t, s)
-			if (got.State == "fulfilled") != tc.fulfilled {
+			if (got.Fulfilled() || got.PRMerged()) != tc.fulfilled || got.PRMerged() != (tc.merged != "null") {
 				t.Fatalf("state=%s", got.State)
 			}
 			if tc.fulfilled && got.PRURL != prURL {
@@ -653,13 +666,13 @@ func TestIssueRecoveryVerifiesPRDespiteFailure(t *testing.T) {
 				if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "reopen the existing pull request") || len(f.submissions) != 1 {
 					t.Fatalf("closed PR retry: status=%d body=%s submissions=%d", response.Code, response.Body.String(), len(f.submissions))
 				}
-				expireIssueRetry(t, s, record.ID)
-				if err := s.ReconcileIssueWork(t.Context()); !errors.Is(err, app.ErrIssueBranchRecovery) {
+				if err := s.ReconcileIssueWork(t.Context()); err != nil {
 					t.Fatalf("automatic retry with closed PR: %v", err)
 				}
-				if blocked := latestRecoveryRecord(t, s); blocked.ID != record.ID || blocked.State != "blocked" ||
+				if blocked := latestRecoveryRecord(t, s); blocked.ID != record.ID || blocked.PRURL != prURL ||
+					!strings.Contains(blocked.PRRecoveryBlocker, "reopen the existing pull request") ||
 					!blocked.NextAttemptAt.IsZero() || len(f.submissions) != 1 {
-					t.Fatalf("closed PR did not stop retries: state=%s next attempt=%v submissions=%d", blocked.State, blocked.NextAttemptAt, len(f.submissions))
+					t.Fatalf("closed PR did not stop retries: blocker=%q next attempt=%v submissions=%d", blocked.PRRecoveryBlocker, blocked.NextAttemptAt, len(f.submissions))
 				}
 				if tc.base != "main" {
 					f.prs = recoveryPR("open", "null", tc.head, tc.base)
@@ -687,12 +700,22 @@ func TestIssueRecoveryKeepsExistingMergeTarget(t *testing.T) {
 	if err := s.ReconcileIssueWork(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := latestRecoveryRecord(t, s); got.State != "fulfilled" || got.PRURL != "https://github.com/acme/repo/pull/42" {
-		t.Fatalf("recovery state = %q, PR = %q, want fulfilled with PR 42", got.State, got.PRURL)
+	if got := latestRecoveryRecord(t, s); got.PRMerged() || (got.PRURL != "" && got.PRURL != trackedURL) {
+		t.Fatalf("recovery adopted sibling PR: state = %q, PR = %q", got.State, got.PRURL)
 	}
 	task, ok := s.Broker.Task(record.RequestID)
 	if !ok || task.PRURL != trackedURL || task.Status != "completed" {
 		t.Fatalf("task after recovery = %+v, want completed with PR %q", task, trackedURL)
+	}
+	f.prs = strings.Replace(f.prs, `"number":42`, `"number":41`, 1)
+	if err := s.ReconcileIssueWork(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := latestRecoveryRecord(t, s)
+	releases := s.Broker.Snapshot().Releases
+	if !got.PRMerged() || got.PRURL != trackedURL || len(releases) != 1 || releases[0].PRURL != trackedURL ||
+		releases[0].MergedAt != "2026-01-01T00:00:00Z" {
+		t.Fatalf("tracked merge or release missing: state=%q PR=%q releases=%+v", got.State, got.PRURL, releases)
 	}
 }
 
@@ -917,7 +940,7 @@ func TestIssueRecoveryPreservesFailedVerificationAfterExternalMerge(t *testing.T
 			restarted.GitHubIssueRunner, restarted.IssueRecovery, restarted.Workflows = f, s.IssueRecovery, s.Workflows
 			if mode == "explicit retry" {
 				if response := retryIssue(t, restarted, record.ID, true); response.Code != http.StatusConflict ||
-					!strings.Contains(response.Body.String(), mergedUnverifiedIssueError) {
+					!strings.Contains(response.Body.String(), "pull request is already merged") {
 					t.Fatalf("retry after merge: status=%d body=%s", response.Code, response.Body.String())
 				}
 			}
@@ -934,6 +957,72 @@ func TestIssueRecoveryPreservesFailedVerificationAfterExternalMerge(t *testing.T
 				t.Fatalf("external merge lost failed verification history: %+v, submissions=%d", got, len(f.submissions))
 			}
 		})
+	}
+}
+
+func TestMergedIssueStopsChecksAndReleasesReservation(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	reconcileOrAdmitTestIssue(t.Context(), s)
+	record := latestRecoveryRecord(t, s)
+	record.PRURL = "https://github.com/acme/repo/pull/42"
+	record.PRVerification = "Verify draft on the current head."
+	record.State, record.Outcome = "queued", localruntime.IssueChecksPending
+	record.NextAttemptAt = time.Now().Add(time.Hour)
+	if err := s.IssueClaims.BeginExecution(record); err != nil {
+		t.Fatal(err)
+	}
+	reserve := filepath.Join(s.IssueClaims.Root, ".storage-reserve-"+record.ID)
+	if _, err := os.Stat(reserve); err != nil {
+		t.Fatal(err)
+	}
+	s.Broker.IngestLog("task status=queued request_id=" + record.RequestID)
+	s.StopTask = func(context.Context, string) error {
+		t.Fatal("merge cleanup used operator stop")
+		return nil
+	}
+	s.CancelMergedTask = func(requestID string) {
+		s.Broker.IngestLog("task status=stopped request_id=" + requestID)
+	}
+	// The exact linked PR still identifies the task after a branch rename.
+	f.prs = recoveryPR("closed", `"2026-01-01T00:00:00Z"`, "renamed-branch", "main")
+	lock, err := s.IssueClaims.TryLock(localruntime.IssueExecutionKey(record.Run.GitHubIssue))
+	if err != nil || lock == nil {
+		t.Fatalf("acquire queued worker lock: %v", err)
+	}
+	defer lock.Close()
+	corrupt := filepath.Join(s.IssueClaims.Root, strings.Repeat("c", 32)+".json")
+	if err := os.WriteFile(corrupt, []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReconcileIssueWork(t.Context()); err == nil || !strings.Contains(err.Error(), filepath.Base(corrupt)) {
+		t.Fatalf("reconcile did not report corrupt claim: %v", err)
+	}
+	queued, err := s.IssueClaims.Load(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, _ := s.Broker.Task(record.RequestID)
+	if !queued.PRMerged() || task.Status != "stopped" || f.deletes != 0 {
+		t.Fatalf("locked continuation did not stop before cleanup: state=%s task=%s deletes=%d", queued.State, task.Status, f.deletes)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReconcileIssueWork(t.Context()); err == nil || !strings.Contains(err.Error(), filepath.Base(corrupt)) {
+		t.Fatalf("reconcile did not report corrupt claim: %v", err)
+	}
+	got, err := s.IssueClaims.Load(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, ok := s.Broker.Task(record.RequestID)
+	if !got.PRMerged() || got.PRVerification != record.PRVerification || !got.NextAttemptAt.IsZero() ||
+		got.LabelAdded || got.UnlockPending || f.deletes != 1 || len(f.submissions) != 1 || !ok || task.Status != "merged" {
+		t.Fatalf("merge left queued checks or lost history: record=%+v task=%+v", got, task)
+	}
+	if _, err := os.Stat(reserve); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("execution reserve still exists: %v", err)
 	}
 }
 
@@ -1627,14 +1716,17 @@ func TestIssueRecoveryBlocksReservedBranchConflictsAcrossRestart(t *testing.T) {
 func TestIssueRecoveryVerifiesReopenedPRBeforeCheckout(t *testing.T) {
 	t.Parallel()
 	t.Run("no pending verification", func(t *testing.T) {
-		testIssueRecoveryReopenedPR(t, "")
+		testIssueRecoveryCorrectedPR(t, "", "closed", "main", "reopen")
 	})
 	t.Run("pending verification", func(t *testing.T) {
-		testIssueRecoveryReopenedPR(t, "Verify CI on the published head.")
+		testIssueRecoveryCorrectedPR(t, "Verify CI on the published head.", "closed", "main", "reopen")
+	})
+	t.Run("retargeted PR", func(t *testing.T) {
+		testIssueRecoveryCorrectedPR(t, "", "open", "other", "retarget")
 	})
 }
 
-func testIssueRecoveryReopenedPR(t *testing.T, verification string) {
+func testIssueRecoveryCorrectedPR(t *testing.T, verification, blockedState, blockedBase, action string) {
 	t.Helper()
 	s, f := recoveryServer(t)
 	reconcileOrAdmitTestIssue(t.Context(), s)
@@ -1643,14 +1735,16 @@ func testIssueRecoveryReopenedPR(t *testing.T, verification string) {
 	record.ExitCode = app.ExitClone
 	record.PRVerification = verification
 	record.WorkspaceDir = t.TempDir()
+	record.PRURL = "https://github.com/acme/repo/pull/42"
+	record.PRRecoveryBlocker = action + " the existing pull request before using Recover / retry"
 	if err := s.IssueClaims.Save(record); err != nil {
 		t.Fatal(err)
 	}
 	branch := record.Run.GitHubIssue.Claim.Branch
-	f.prs = recoveryPR("closed", "null", branch, "main")
+	f.prs = recoveryPR(blockedState, "null", branch, blockedBase)
 	if response := retryIssue(t, s, record.ID, true); response.Code != http.StatusConflict ||
-		!strings.Contains(response.Body.String(), "reopen the existing pull request") {
-		t.Fatalf("closed PR: status=%d body=%s", response.Code, response.Body.String())
+		!strings.Contains(response.Body.String(), action+" the existing pull request") {
+		t.Fatalf("blocked PR: status=%d body=%s", response.Code, response.Body.String())
 	}
 	f.prs = recoveryPR("open", "null", branch, "main")
 	openPR := f.prs
@@ -1661,6 +1755,13 @@ func testIssueRecoveryReopenedPR(t *testing.T, verification string) {
 	}
 	f.prs = openPR
 	response := retryIssue(t, s, record.ID, true)
+	previous, err := s.IssueClaims.Load(record.ID)
+	if err != nil || previous.PRRecoveryBlocker != "" {
+		t.Fatalf("explicit recovery retained obsolete PR blocker: blocker=%q err=%v", previous.PRRecoveryBlocker, err)
+	}
+	if tasks := s.snapshot().Tasks; len(tasks) != 1 || tasks[0].IssuePRRecoveryBlocker != "" {
+		t.Fatalf("task card still exposes an obsolete PR blocker: %+v", tasks)
+	}
 	if verification != "" {
 		got := latestRecoveryRecord(t, s)
 		if response.Code != http.StatusAccepted || len(f.submissions) != 2 || got.ID == record.ID ||
@@ -1729,6 +1830,93 @@ func TestIssueRecoveryCleansUpLabelWhenAdmissionIsBlocked(t *testing.T) {
 				githubIssueHasAnyLabel(f.issue, []string{record.Run.GitHubIssue.Claim.ExclusionLabel}) {
 				t.Fatalf("blocked claim did not clean up its label: state=%s unlock=%t label=%t deletes=%d submissions=%d",
 					cleaned.State, cleaned.UnlockPending, cleaned.LabelAdded, f.deletes, len(f.submissions))
+			}
+		})
+	}
+}
+
+func TestIssueRecoveryCleansUpLabelWithUnreadableWorkflowJournal(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"pending cleanup", "stopped worker", "worker exited before recording outcome"} {
+		t.Run(name, func(t *testing.T) {
+			s, f := recoveryServer(t)
+			reconcileOrAdmitTestIssue(t.Context(), s)
+			record := completeRecoveryRecord(t, s, "error", 1)
+			record.PRURL, record.UnlockPending = "", name == "pending cleanup"
+			if name == "worker exited before recording outcome" {
+				record.StoppedAt, record.Outcome = time.Time{}, ""
+			}
+			record.NextAttemptAt = time.Now().Add(time.Hour)
+			if err := s.IssueClaims.Save(record); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(s.Workflows.StatePath, []byte("{"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.ReconcileIssueWork(t.Context()); err == nil || !strings.Contains(err.Error(), "read workflow journal") {
+				t.Fatalf("journal failure was lost: %v", err)
+			}
+			got := latestRecoveryRecord(t, s)
+			if got.UnlockPending || got.LabelAdded || f.deletes != 1 || len(f.submissions) != 1 ||
+				!got.NextAttemptAt.Equal(record.NextAttemptAt) {
+				t.Fatalf("journal failure blocked cleanup or changed retry state: %+v", got)
+			}
+		})
+	}
+}
+
+func TestIssueRecoveryBoundsRetainedLinkedPRPolling(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ claimState, prState string }{
+		{"fulfilled", "open"},
+		{"blocked", "open"},
+		{"verifying", "closed"},
+	} {
+		t.Run(tc.claimState+"/"+tc.prState, func(t *testing.T) {
+			s, f := recoveryServer(t)
+			reconcileOrAdmitTestIssue(t.Context(), s)
+			record := completeRecoveryRecord(t, s, "completed", 1)
+			record.State, record.PRURL = tc.claimState, "https://github.com/acme/repo/pull/42"
+			if err := s.IssueClaims.Save(record); err != nil {
+				t.Fatal(err)
+			}
+			f.prs = recoveryPR(tc.prState, "null", record.Run.GitHubIssue.Claim.Branch, "main")
+			now := time.Now()
+			s.Broker = NewBroker()
+			s.Broker.now = func() time.Time { return now }
+			polls := 0
+			s.GitHubIssueRunner = githubIssueRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+				if strings.Contains(strings.Join(cmd.Args, " "), "/pulls/42") {
+					polls++
+				}
+				return f.Run(ctx, cmd)
+			})
+			for range 3 {
+				if err := s.ReconcileIssueWork(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				now = now.Add(time.Minute)
+			}
+			if polls != 1 || f.deletes != 1 {
+				t.Fatalf("retained pull request polled %d times, label removed %d times", polls, f.deletes)
+			}
+			if tc.claimState == "fulfilled" {
+				now = now.Add(defaultClosedTaskRetention)
+				if len(s.snapshot().Tasks) != 0 {
+					t.Fatal("fulfilled task card did not expire")
+				}
+				if err := s.ReconcileIssueWork(t.Context()); err != nil || polls != 1 {
+					t.Fatalf("expired task still polled: polls=%d err=%v", polls, err)
+				}
+				return
+			}
+			now = now.Add(retainedIssuePRPollInterval)
+			f.prs = recoveryPR("closed", `"2026-01-01T00:00:00Z"`, record.Run.GitHubIssue.Claim.Branch, "main")
+			if err := s.ReconcileIssueWork(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if polls != 2 || !latestRecoveryRecord(t, s).PRMerged() {
+				t.Fatalf("deferred poll missed a later merge: polls=%d", polls)
 			}
 		})
 	}
@@ -2632,5 +2820,230 @@ func TestDisabledRepositoryPausesMonitorAndRetainedClaimAcrossRestart(t *testing
 	restarted.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/github/issues/17?repo=acme/repo", nil))
 	if response.Code != http.StatusOK {
 		t.Fatalf("reenabled repository detail returned %d: %s", response.Code, response.Body)
+	}
+}
+
+func TestIssueRecoveryRecordsReleaseWithoutMergeTimestamp(t *testing.T) {
+	t.Parallel()
+	for _, state := range []string{localruntime.IssueStateMerged, localruntime.IssueStateMergedUnverified} {
+		t.Run(state, func(t *testing.T) {
+			t.Parallel()
+			s, _ := recoveryServer(t)
+			reconcileOrAdmitTestIssue(t.Context(), s)
+			record := completeRecoveryRecord(t, s, "error", 1)
+			record.PRURL = "https://github.com/acme/repo/pull/42"
+			verified := state == localruntime.IssueStateMerged
+			if !verified {
+				record.PRVerification = "Draft verification incomplete"
+			}
+			record.State = state
+			if err := s.IssueClaims.Save(record); err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now().UTC().Truncate(time.Second)
+			s.Broker.now = func() time.Time { return now }
+			s.Broker.RecordTaskRunConfig(record.RequestID, []byte(`{}`))
+			s.Broker.IngestLog("task status=error request_id=" + record.RequestID + " pr_url=" + record.PRURL)
+			cleanups := 0
+			s.CloseTask = func(_ context.Context, requestID string) error {
+				if requestID != record.RequestID {
+					t.Fatalf("cleanup targeted another task: %s", requestID)
+				}
+				cleanups++
+				return nil
+			}
+			for range 2 {
+				if err := s.ReconcileIssueWork(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, hasConfig := s.Broker.TaskRunConfig(record.RequestID)
+			if (cleanups == 1) != verified || cleanups > 1 || hasConfig == verified {
+				t.Fatalf("verified=%t cleanups=%d run config retained=%t", verified, cleanups, hasConfig)
+			}
+			task, _ := s.Broker.Task(record.RequestID)
+			releases := s.Broker.Snapshot().Releases
+			if task.Status != "merged" || len(releases) != 1 || releases[0].PRURL != record.PRURL ||
+				releases[0].MergedAt != now.Format(time.RFC3339) {
+				t.Fatalf("merge without timestamp lost its release: task=%+v releases=%+v", task, releases)
+			}
+		})
+	}
+}
+
+func TestIssueRecoveryBoundsMergeTimestampBackfill(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	reconcileOrAdmitTestIssue(t.Context(), s)
+	record := completeRecoveryRecord(t, s, "error", 1)
+	record.State = localruntime.IssueStateMerged
+	record.PRURL = "https://github.com/acme/repo/pull/42"
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	s.Broker.now = func() time.Time { return now }
+	polls := 0
+	s.GitHubIssueRunner = githubIssueRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+		if strings.Contains(strings.Join(cmd.Args, " "), "/pulls/42") {
+			polls++
+			return execx.Result{}, errors.New("merge timestamp unavailable")
+		}
+		return f.Run(ctx, cmd)
+	})
+	for _, step := range []struct {
+		advance time.Duration
+		polls   int
+	}{
+		{0, 1},
+		{time.Minute, 1},
+		{retainedIssuePRPollInterval, 2},
+		{defaultClosedTaskRetention, 2},
+	} {
+		now = now.Add(step.advance)
+		if err := s.ReconcileIssueWork(t.Context()); err != nil || polls != step.polls {
+			t.Fatalf("backfill after %v: polls=%d want=%d err=%v", step.advance, polls, step.polls, err)
+		}
+	}
+	if tasks := s.snapshot().Tasks; len(tasks) != 0 {
+		t.Fatalf("terminal task card did not expire: %+v", tasks)
+	}
+}
+
+func TestIssueRecoveryDisablesTaskRetryWhenLinkedPRBlocksRecovery(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	reconcileOrAdmitTestIssue(t.Context(), s)
+	record := completeRecoveryRecord(t, s, "error", 1)
+	record.PRURL = "https://github.com/acme/repo/pull/42"
+	record.State, record.Incident = "blocked", localruntime.IssueIncidentHumanAction
+	record.RunError = "worker requires human action"
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(record.Run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Broker.RecordTaskRunConfig(record.RequestID, body)
+	s.Broker.IngestLog("task status=error request_id=" + record.RequestID + " pr_url=" + record.PRURL)
+	now := time.Now().Add(-time.Second)
+	s.Broker.now = func() time.Time { return now }
+	for i, tc := range []struct{ state, base, blocker string }{
+		{"closed", "main", "reopen the existing pull request"},
+		{"open", "other", "retarget the existing pull request"},
+		{"open", "main", ""},
+	} {
+		t.Run(tc.state+"/"+tc.base, func(t *testing.T) {
+			if i > 0 {
+				now = now.Add(retainedIssuePRPollInterval)
+			}
+			f.prs = recoveryPR(tc.state, "null", record.Run.GitHubIssue.Claim.Branch, tc.base)
+			if err := s.ReconcileIssueWork(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			tasks := s.snapshot().Tasks
+			if len(tasks) != 1 || tasks[0].CanRerun != (tc.blocker == "") || !strings.Contains(tasks[0].Error, tc.blocker) ||
+				tasks[0].IssueAttempts[0].Error != record.RunError {
+				t.Fatalf("wrong retry eligibility or missing attempt evidence: %+v", tasks)
+			}
+		})
+	}
+}
+
+func TestIssueRecoveryResumesChecksOnlyAfterLinkedPRBlockerClears(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	reconcileOrAdmitTestIssue(t.Context(), s)
+	record := completeRecoveryRecord(t, s, localruntime.IssueChecksPending, 1)
+	record.PRURL = "https://github.com/acme/repo/pull/42"
+	record.State, record.UnlockPending = localruntime.IssueChecksPending, false
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	s.Broker.now = func() time.Time { return now }
+
+	for _, tc := range []struct{ state, base, blocker string }{
+		{"closed", "main", "reopen the existing pull request"},
+		{"open", "other", "retarget the existing pull request"},
+		{"open", "main", ""},
+	} {
+		t.Run(tc.state+"/"+tc.base, func(t *testing.T) {
+			now = now.Add(retainedIssuePRPollInterval)
+			f.prs = recoveryPR(tc.state, "null", record.Run.GitHubIssue.Claim.Branch, tc.base)
+			before := len(f.submissions)
+			if err := s.ReconcileIssueWork(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			claim := latestRecoveryRecord(t, s)
+			delta := len(f.submissions) - before
+			if tc.blocker == "" {
+				if delta != 1 || claim.PRRecoveryBlocker != "" || claim.RequestID != record.RequestID {
+					t.Fatalf("corrected PR did not resume the same task: claim=%+v, submissions=%d", claim, delta)
+				}
+				return
+			}
+			tasks := s.snapshot().Tasks
+			if delta != 0 || !strings.Contains(claim.PRRecoveryBlocker, tc.blocker) || len(tasks) != 1 ||
+				tasks[0].IssueState != "blocked" || tasks[0].CanRerun || !strings.Contains(tasks[0].Error, tc.blocker) {
+				t.Fatalf("blocked PR resumed or rendered as active: blocker=%q, submissions=%d, tasks=%+v", claim.PRRecoveryBlocker, delta, tasks)
+			}
+		})
+	}
+}
+
+func TestIssueRecoveryPausesFailedAttemptWhileLinkedPRIsBlocked(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		state, base, action string
+		linked              bool
+	}{
+		{"closed", "main", "reopen the existing pull request", true},
+		{"open", "other", "retarget the existing pull request", true},
+		{"closed", "main", "reopen the existing pull request", false},
+		{"open", "other", "retarget the existing pull request", false},
+	} {
+		t.Run(fmt.Sprintf("%s/%s/linked=%t", tc.state, tc.base, tc.linked), func(t *testing.T) {
+			t.Parallel()
+			s, f := recoveryServer(t)
+			reconcileOrAdmitTestIssue(t.Context(), s)
+			record := completeRecoveryRecord(t, s, "error", 1)
+			const prURL = "https://github.com/acme/repo/pull/42"
+			if tc.linked {
+				record.PRURL = prURL
+			}
+			record.PRVerification = "Verify the draft checks."
+			record.RunError = "previous verification attempt failed"
+			record.NextAttemptAt = time.Now().Add(-time.Minute)
+			if err := s.IssueClaims.Save(record); err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now()
+			s.Broker.now = func() time.Time { return now }
+			f.prs = recoveryPR(tc.state, "null", record.Run.GitHubIssue.Claim.Branch, tc.base)
+			if err := s.ReconcileIssueWork(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			got := latestRecoveryRecord(t, s)
+			if len(f.submissions) != 1 || got.PRURL != prURL || got.Incident != record.Incident || got.RunError != record.RunError ||
+				!strings.Contains(got.PRRecoveryBlocker, tc.action) {
+				t.Fatalf("linked PR blocker changed the failed attempt or dispatched a retry: %+v", got)
+			}
+			tasks := s.snapshot().Tasks
+			if len(tasks) != 1 || tasks[0].CanRerun || tasks[0].IssuePRRecoveryBlocker != got.PRRecoveryBlocker {
+				t.Fatalf("blocked task is missing its recovery action: %+v", tasks)
+			}
+			f.prs = recoveryPR("open", "null", record.Run.GitHubIssue.Claim.Branch, "main")
+			now = now.Add(retainedIssuePRPollInterval)
+			if err := s.ReconcileIssueWork(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			got = latestRecoveryRecord(t, s)
+			if len(f.submissions) != 2 || got.PRRecoveryBlocker != "" || got.PRURL != prURL ||
+				issueTaskID(got.Run.GitHubIssue, got.Run.Workflow) != issueTaskID(record.Run.GitHubIssue, record.Run.Workflow) {
+				t.Fatalf("corrected PR did not resume the same issue task: %+v", got)
+			}
+		})
 	}
 }

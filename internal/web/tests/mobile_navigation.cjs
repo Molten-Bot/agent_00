@@ -848,7 +848,7 @@ test('Studio keeps issue retries and completion under one task', async t => {
     workflow_name: 'Issue delivery', issue_planning_status: 'In review',
     github_issue_url: 'https://github.com/example/project/issues/42',
     pr_url: 'https://github.com/example/project/pull/43', repo: 'example/project',
-    started_at: now, updated_at: now, status: 'error', issue_state: 'blocked',
+    started_at: now, updated_at: now, status: 'error', issue_state: 'blocked', can_rerun: true,
     error: 'Pull request head changed', issue_attempts: [{
       number: 1, request_id: 'issue-first', status: 'review_pending', stage: 'review',
       error: 'Pull request head changed',
@@ -857,33 +857,71 @@ test('Studio keeps issue retries and completion under one task', async t => {
   const { page } = await openPage(t, 'current-work', { width: 430, height: 932 }, true, [first]);
   const cards = page.locator('#task-list .task');
   const task = cards.locator('xpath=self::*[@data-task-id="issue-workflow-42"]');
-  await task.getByText('Pull request head changed', { exact: true }).waitFor();
+  await task.getByText('Blocked', { exact: true }).waitFor();
+  await task.getByRole('button', { name: 'Retry task' }).waitFor();
+  assert.equal(await task.getByText(/Pull request head changed/).isVisible(), false);
   await task.locator('summary').click();
+  await task.getByText(/Pull request head changed/).waitFor();
+  assert.equal(await task.getByText(/Pull request head changed/).count(), 1);
 
   const update = changes => page.evaluate(next => {
-    queueStreamSnapshot(JSON.stringify({ ...state.snapshot, tasks: [next] }));
+    render({ ...state.snapshot, tasks: [next] });
   }, { ...first, ...changes });
+  const blocker = 'Reopen the existing pull request before using Recover / retry.';
+  await update({ issue_pr_recovery_blocker: blocker, can_rerun: false, error: blocker });
+  await task.locator('.task-issue-current').getByText(blocker, { exact: true }).waitFor();
+  assert.equal(await task.getByText(blocker, { exact: true }).count(), 1);
+  await task.getByRole('link', { name: 'Open pull request on GitHub.' }).waitFor();
+  assert.equal(await task.getByRole('button', { name: 'Retry task' }).count(), 0);
+  await update({});
+  await task.getByRole('button', { name: 'Retry task' }).waitFor();
+  assert.equal(await task.getByText(blocker, { exact: true }).count(), 0);
   const attempts = [...first.issue_attempts, {
-    number: 2, request_id: 'issue-retry', status: 'running', stages: ['checks', 'review', 'pr_verification'],
+    number: 2, request_id: 'issue-retry', status: 'running', stage: 'review', stages: ['checks', 'review', 'pr_verification', 'review'],
   }];
+  await update({ status: 'queued', issue_state: 'awaiting_review' });
+  await task.getByText('Waiting for review on the current head', { exact: true }).waitFor();
+  for (const review_gate of [
+    'Waiting for the trusted review policy check on the current pull request head',
+    'Waiting for human approval',
+    'Waiting for unresolved review threads',
+  ]) {
+    await update({ status: 'queued', issue_state: 'waiting', review_gate });
+    const currentStatus = task.locator('.task-issue-status').filter({ hasText: review_gate });
+    assert.equal(await currentStatus.innerText(), review_gate);
+    assert.equal(await task.locator('details').getByText(review_gate, { exact: true }).count(), 0);
+  }
+  await update({
+    status: 'queued', issue_state: 'checks_pending', error: '',
+    issue_attempts: [{
+      number: 1, status: 'checks_pending', stage: 'checks_pending',
+      stages: ['checks', 'checks_pending'],
+    }],
+  });
+  await task.getByText('Waiting for GitHub checks', { exact: true }).waitFor();
+  await task.getByText('Attempt 1 · checks → checks pending', { exact: true }).waitFor();
   await update({
     request_id: 'issue-retry', status: 'queued', issue_state: 'retry_wait', error: 'GitHub checks unavailable',
     retry_at: new Date(Date.now() + 60_000).toISOString(), issue_attempts: attempts,
   });
   await task.getByText(/Waiting to retry/).waitFor();
   await task.getByText(/GitHub checks unavailable.*Retry after/).waitFor();
-  await task.getByText(/Attempt 2.*checks.*pr verification/).waitFor();
+  await task.getByText('Attempt 2 · running · checks → review → pr verification', { exact: true }).waitFor();
   assert.equal(await cards.count(), 1);
   assert.equal(await task.getByRole('link', { name: 'Open pull request on GitHub.' }).getAttribute('href'), first.pr_url);
 
   await update({
-    request_id: 'issue-retry', status: 'merged', issue_state: 'fulfilled',
-    issue_planning_status: 'Done', error: '', issue_attempts: [
-      attempts[0], { ...attempts[1], status: 'completed' },
+    request_id: 'issue-retry', status: 'merged', issue_state: 'merged',
+    error: '', can_rerun: false, issue_attempts: [
+      attempts[0], { ...attempts[1], status: 'error', error: 'Pull request merged before draft verification passed' },
     ],
   });
+  await task.waitFor({ state: 'hidden' });
   await page.locator('#task-history-toggle').click();
-  await task.getByText(/Issue delivery · Done · Attempt history \(2\)/).waitFor();
+  await task.getByText('Merged', { exact: true }).waitFor();
+  assert.equal(await task.getByRole('button', { name: /rerun|re-run|retry|resume|recover/i }).count(), 0);
+  if (await task.locator('details').getAttribute('open') === null) await task.locator('summary').click();
+  await task.getByText(/Pull request merged before draft verification passed/).waitFor();
   assert.equal(await cards.count(), 1);
   assert.equal(await task.getByRole('link', { name: 'Open issue on GitHub.' }).getAttribute('href'), first.github_issue_url);
 });

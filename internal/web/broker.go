@@ -72,14 +72,15 @@ type TaskStatusTransition struct {
 }
 
 type Task struct {
-	HistoryOnly         bool               `json:"history_only,omitempty"`
-	TaskID              string             `json:"task_id,omitempty"`
-	IssueState          string             `json:"issue_state,omitempty"`
-	IssuePlanningStatus string             `json:"issue_planning_status,omitempty"`
-	IssueAttempts       []issueTaskAttempt `json:"issue_attempts,omitempty"`
-	RetryAt             string             `json:"retry_at,omitempty"`
-	WorkflowID          string             `json:"workflow_id,omitempty"`
-	WorkflowName        string             `json:"workflow_name,omitempty"`
+	HistoryOnly            bool               `json:"history_only,omitempty"`
+	TaskID                 string             `json:"task_id,omitempty"`
+	IssueState             string             `json:"issue_state,omitempty"`
+	IssuePRRecoveryBlocker string             `json:"issue_pr_recovery_blocker,omitempty"`
+	IssuePlanningStatus    string             `json:"issue_planning_status,omitempty"`
+	IssueAttempts          []issueTaskAttempt `json:"issue_attempts,omitempty"`
+	RetryAt                string             `json:"retry_at,omitempty"`
+	WorkflowID             string             `json:"workflow_id,omitempty"`
+	WorkflowName           string             `json:"workflow_name,omitempty"`
 
 	ReviewPolicy      TaskReviewPolicy       `json:"review_policy,omitzero"`
 	Complexity        string                 `json:"complexity,omitempty"`
@@ -2017,6 +2018,24 @@ func (b *Broker) recordRetainedIssueStop(requestID, prURL string) {
 		}, now)
 	}
 	b.notifySubscribersLocked()
+}
+
+func (b *Broker) backfillReleaseMergeTime(requestID, prURL string, mergedAt time.Time) {
+	if b == nil || mergedAt.IsZero() {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for i := range b.releases {
+		release := &b.releases[i]
+		if release.RequestID == requestID && strings.EqualFold(release.PRURL, prURL) {
+			if !release.MergedAt.Equal(mergedAt) {
+				release.MergedAt = mergedAt
+				b.notifySubscribersLocked()
+			}
+			return
+		}
+	}
 }
 
 // MarkTaskPRMerged marks the originating task as done after its pull request merges.

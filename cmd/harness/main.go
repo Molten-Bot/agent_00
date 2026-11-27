@@ -1057,6 +1057,7 @@ func runServer(args []string) int {
 			// The worker publishes terminal status after recording workspace usage.
 			return localTaskController.Stop(requestID)
 		}
+		uiServer.CancelMergedTask = localTaskController.CancelMergedTask
 		go func() {
 			if err := uiServer.Run(ctx); err != nil {
 				daemonLogger("localruntime.ui status=error err=%q", err)
@@ -1081,6 +1082,7 @@ func runServer(args []string) int {
 			CleanupTask:       cleanupTaskLogs,
 			MemoryPressure:    memoryPressure,
 			RepositoryAllowed: uiServer.RepositoryAllowed,
+			RecordIssueMerge:  uiServer.RecordMonitoredIssueMerge,
 		}
 		go func() {
 			if err := prMonitor.Run(ctx); err != nil {
