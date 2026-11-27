@@ -12381,10 +12381,20 @@
       switch (task.issue_state) {
         case "retry_wait": return "Waiting to retry";
         case "checks_pending": return "Waiting for GitHub checks";
-        case "review_pending":
-        case "awaiting_review": return "Waiting for review on the current head";
+        case "review_pending": return "Waiting for review on the current head";
+        case "awaiting_review":
         case "waiting":
-          return task.review_gate === "Waiting for successful checks" ? "Waiting for GitHub checks" : "Waiting for merge";
+          switch (task.review_gate) {
+            case "Waiting for successful checks": return "Waiting for GitHub checks";
+            case "Waiting for the trusted review policy check on the current pull request head":
+            case "Waiting for unresolved review threads":
+            case "Waiting for human approval":
+            case "Waiting for requested changes":
+            case "Waiting for pull request to leave draft":
+            case "Waiting for pull request head commit": return task.review_gate;
+            default:
+              return task.issue_state === "awaiting_review" ? "Waiting for review on the current head" : "Waiting for merge";
+          }
         case "blocked": return "Blocked";
         case "waiting_for_worker": return "Waiting for worker to stop";
         default: return taskStatusLabel(task.status);
@@ -12445,10 +12455,10 @@
       for (const attempt of task.issue_attempts) {
         const row = document.createElement("li");
         const status = taskStatusLabel(attempt.status);
-        const stages = [...(attempt.stages || []), attempt.stage].filter(Boolean).map((stage) => stage.replaceAll("_", " "));
-        const stageHistory = Array.from(new Set(stages)).join(" → ");
+        const stages = new Set([...(attempt.stages || []), attempt.stage].filter(Boolean).map(taskStatusLabel));
+        const stageHistory = Array.from(stages).join(" → ");
         const evidence = distinctDetails(attempt.error, attempt.detail, attempt.review_detail);
-        row.textContent = [`Attempt ${attempt.number}`, status, stageHistory, ...evidence].filter(Boolean).join(" · ");
+        row.textContent = [`Attempt ${attempt.number}`, stages.has(status) ? "" : status, stageHistory, ...evidence].filter(Boolean).join(" · ");
         list.appendChild(row);
       }
       details.appendChild(list);

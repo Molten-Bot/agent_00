@@ -71,6 +71,8 @@ type IssueClaimRecord struct {
 	NoChangeEvidence bool          `json:"noChangeEvidence,omitempty"`
 	Control          string        `json:"control,omitempty"`
 
+	PRRecoveryBlocker string `json:"prRecoveryBlocker,omitempty"`
+
 	// Cross-instance workflow recovery must verify this reservation again before dispatch.
 	RequireReservationSHA bool `json:"requireReservationSha,omitempty"`
 
@@ -133,6 +135,13 @@ func (s *IssueClaimStore) Save(record IssueClaimRecord) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Workflow reconciliation can record a merge while another caller
+	// holds a pre-merge snapshot. Keep the terminal receipt in that case.
+	if !record.PRMerged() {
+		if current, err := s.read(filepath.Join(s.Root, record.ID+".json")); err == nil && current.PRMerged() {
+			return nil
+		}
+	}
 	return s.save(record)
 }
 
@@ -332,8 +341,12 @@ func (s *IssueClaimStore) Update(id string, change func(*IssueClaimRecord) error
 	if err != nil {
 		return err
 	}
+	merged := record.PRMerged()
 	if err := change(&record); err != nil {
 		return err
+	}
+	if merged && !record.PRMerged() {
+		return nil
 	}
 	return s.save(record)
 }

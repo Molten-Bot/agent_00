@@ -24,8 +24,8 @@ type issueTaskAttempt struct {
 	ReviewDetail string   `json:"review_detail,omitempty"`
 }
 
-// PreserveIssueMergeEvidence copies the last workflow gate to the matching attempt.
-func (s *Server) PreserveIssueMergeEvidence(run workflow.Run) error {
+// RecordObservedIssueMerge persists the linked PR merge and workflow gate on the matching attempt.
+func (s *Server) RecordObservedIssueMerge(run workflow.Run, pr workflow.Item) error {
 	if s.IssueClaims == nil {
 		return nil
 	}
@@ -38,16 +38,14 @@ func (s *Server) PreserveIssueMergeEvidence(run workflow.Run) error {
 			(run.RequestID != "" && record.RequestID != run.RequestID) {
 			continue
 		}
-		if known := s.knownIssuePR(record); known != "" && !strings.EqualFold(known, run.PRURL) {
+		if known := s.knownIssuePR(record); known != "" && !strings.EqualFold(known, pr.URL) {
 			continue
 		}
-		if record.ReviewDetail == run.Reason {
+		if record.PRMerged() && (run.Reason == "" || record.ReviewDetail == run.Reason) &&
+			(pr.MergedAt.IsZero() || record.PRMergedAt.Equal(pr.MergedAt)) {
 			return nil
 		}
-		return s.IssueClaims.Update(record.ID, func(current *localruntime.IssueClaimRecord) error {
-			current.ReviewDetail = run.Reason
-			return nil
-		})
+		return s.saveMergedIssuePR(record, issuePullRequest{URL: pr.URL, Title: pr.Title, MergedAt: pr.MergedAt}, run.Reason)
 	}
 	return nil
 }
@@ -123,7 +121,7 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 		task.Repo = stringsx.FirstNonEmpty(task.Repo, latest.Run.RepoURL)
 		task.Source = stringsx.FirstNonEmpty(task.Source, "github_issues")
 		task.IssueState = latest.State
-		if latest.State == "blocked" && requiresIssueBranchRecovery(latest) {
+		if latest.PRRecoveryBlocker != "" || (latest.State == "blocked" && requiresIssueBranchRecovery(latest)) {
 			task.CanRerun = false
 		}
 		task.IssuePlanningStatus = latest.PlanningStatus
@@ -187,7 +185,7 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 			task.Error = stringsx.FirstNonEmpty(latest.Error, task.Error)
 		case "blocked":
 			task.Status = "error"
-			task.Error = stringsx.FirstNonEmpty(latest.Error, latest.RunError, task.Error)
+			task.Error = stringsx.FirstNonEmpty(latest.PRRecoveryBlocker, latest.Error, latest.RunError, task.Error)
 		}
 
 		for i, attempt := range attempts {

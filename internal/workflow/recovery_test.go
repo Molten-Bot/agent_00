@@ -101,11 +101,14 @@ func TestObservedIssueMergeRetainsActivationUntilReviewEvidenceIsSaved(t *testin
 	if err := e.save(state); err != nil {
 		t.Fatal(err)
 	}
-	e.InspectPR = func(context.Context, string, string) (Item, error) { return Item{Merged: true}, nil }
+	mergedAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	e.InspectPR = func(context.Context, string, string) (Item, error) {
+		return Item{Merged: true, MergedAt: mergedAt}, nil
+	}
 	writeError := errors.New("issue history unavailable")
-	e.PreserveIssueMergeEvidence = func(previous Run) error {
-		if previous.Reason != reason || previous.RequestID != run.RequestID || previous.PRURL != run.PRURL {
-			t.Fatalf("incorrect evidence passed to issue history: %+v", previous)
+	e.RecordObservedIssueMerge = func(previous Run, pr Item) error {
+		if previous.Reason != reason || previous.RequestID != run.RequestID || pr.URL != run.PRURL || !pr.MergedAt.Equal(mergedAt) {
+			t.Fatalf("incorrect merge or evidence passed to issue history: %+v, %+v", previous, pr)
 		}
 		return writeError
 	}

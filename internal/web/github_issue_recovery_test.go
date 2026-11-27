@@ -2632,3 +2632,68 @@ func TestDisabledRepositoryPausesMonitorAndRetainedClaimAcrossRestart(t *testing
 		t.Fatalf("reenabled repository detail returned %d: %s", response.Code, response.Body)
 	}
 }
+
+func TestIssueRecoveryRecordsReleaseWithoutMergeTimestamp(t *testing.T) {
+	t.Parallel()
+	for _, state := range []string{localruntime.IssueStateMerged, localruntime.IssueStateMergedUnverified} {
+		t.Run(state, func(t *testing.T) {
+			t.Parallel()
+			s, _ := recoveryServer(t)
+			reconcileOrAdmitTestIssue(t.Context(), s)
+			record := completeRecoveryRecord(t, s, "error", 1)
+			record.PRURL = "https://github.com/acme/repo/pull/42"
+			record.State = state
+			if err := s.IssueClaims.Save(record); err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now().UTC().Truncate(time.Second)
+			s.Broker.now = func() time.Time { return now }
+			s.Broker.IngestLog("task status=error request_id=" + record.RequestID + " pr_url=" + record.PRURL)
+			if err := s.ReconcileIssueWork(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			task, _ := s.Broker.Task(record.RequestID)
+			releases := s.Broker.Snapshot().Releases
+			if task.Status != "merged" || len(releases) != 1 || releases[0].PRURL != record.PRURL ||
+				releases[0].MergedAt != now.Format(time.RFC3339) {
+				t.Fatalf("merge without timestamp lost its release: task=%+v releases=%+v", task, releases)
+			}
+		})
+	}
+}
+
+func TestIssueRecoveryDisablesTaskRetryWhenLinkedPRBlocksRecovery(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	reconcileOrAdmitTestIssue(t.Context(), s)
+	record := completeRecoveryRecord(t, s, "error", 1)
+	record.PRURL = "https://github.com/acme/repo/pull/42"
+	record.State, record.Incident = "blocked", localruntime.IssueIncidentHumanAction
+	record.RunError = "worker requires human action"
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(record.Run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Broker.RecordTaskRunConfig(record.RequestID, body)
+	s.Broker.IngestLog("task status=error request_id=" + record.RequestID + " pr_url=" + record.PRURL)
+	for _, tc := range []struct{ state, base, blocker string }{
+		{"closed", "main", "reopen the existing pull request"},
+		{"open", "other", "retarget the existing pull request"},
+		{"open", "main", ""},
+	} {
+		t.Run(tc.state+"/"+tc.base, func(t *testing.T) {
+			f.prs = recoveryPR(tc.state, "null", record.Run.GitHubIssue.Claim.Branch, tc.base)
+			if err := s.ReconcileIssueWork(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			tasks := s.snapshot().Tasks
+			if len(tasks) != 1 || tasks[0].CanRerun != (tc.blocker == "") || !strings.Contains(tasks[0].Error, tc.blocker) ||
+				tasks[0].IssueAttempts[0].Error != record.RunError {
+				t.Fatalf("wrong retry eligibility or missing attempt evidence: %+v", tasks)
+			}
+		})
+	}
+}

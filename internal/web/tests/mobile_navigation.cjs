@@ -852,8 +852,25 @@ test('Studio keeps issue retries and completion under one task', async t => {
   }];
   await update({ status: 'queued', issue_state: 'awaiting_review' });
   await task.getByText('Waiting for review on the current head', { exact: true }).waitFor();
-  await update({ status: 'queued', issue_state: 'checks_pending' });
+  for (const review_gate of [
+    'Waiting for the trusted review policy check on the current pull request head',
+    'Waiting for human approval',
+    'Waiting for unresolved review threads',
+  ]) {
+    await update({ status: 'queued', issue_state: 'waiting', review_gate });
+    const currentStatus = task.locator('.task-issue-status').filter({ hasText: review_gate });
+    assert.equal(await currentStatus.innerText(), review_gate);
+    assert.equal(await task.locator('details').getByText(review_gate, { exact: true }).count(), 0);
+  }
+  await update({
+    status: 'queued', issue_state: 'checks_pending', error: '',
+    issue_attempts: [{
+      number: 1, status: 'checks_pending', stage: 'checks_pending',
+      stages: ['checks', 'checks_pending'],
+    }],
+  });
   await task.getByText('Waiting for GitHub checks', { exact: true }).waitFor();
+  await task.getByText('Attempt 1 · checks → checks pending', { exact: true }).waitFor();
   await update({
     request_id: 'issue-retry', status: 'queued', issue_state: 'retry_wait', error: 'GitHub checks unavailable',
     retry_at: new Date(Date.now() + 60_000).toISOString(), issue_attempts: attempts,

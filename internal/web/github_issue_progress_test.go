@@ -256,7 +256,7 @@ func TestIssueTaskUsesDurableStateAfterRestart(t *testing.T) {
 	}
 
 	var transitions []string
-	s.Workflows.PreserveIssueMergeEvidence = s.PreserveIssueMergeEvidence
+	s.Workflows.RecordObservedIssueMerge = s.RecordObservedIssueMerge
 	s.Workflows.Logf = func(format string, args ...any) {
 		transitions = append(transitions, fmt.Sprintf(format, args...))
 	}
@@ -271,5 +271,78 @@ func TestIssueTaskUsesDurableStateAfterRestart(t *testing.T) {
 	task := s.snapshot().Tasks[0]
 	if task.ReviewGate != "" || task.IssueAttempts[0].ReviewDetail != run.Reason {
 		t.Fatalf("pruned workflow gate was not kept in attempt history: %+v", task)
+	}
+}
+
+func TestWorkflowMergeObservationSurvivesRestartWithoutPRLookup(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	engine := s.Workflows
+	doc, err := engine.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc.Workflows[0].Merge.Enabled = true
+	if doc, err = engine.Store.Save(doc); err != nil {
+		t.Fatal(err)
+	}
+	reconcileOrAdmitTestIssue(t.Context(), s)
+	record := completeRecoveryRecord(t, s, "error", 1)
+	record.PRURL = "https://github.com/acme/repo/pull/42"
+	record.PRVerification = "Verify draft on the current head."
+	record.RunError = "pr_verification: checks never finished"
+	record.NextAttemptAt = time.Now().Add(time.Hour)
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	run := workflow.Run{
+		ID: record.Run.Workflow.EventID, RequestID: record.RequestID, PRURL: record.PRURL,
+		Workflow: doc.Workflows[0], Status: "waiting", Reason: "Waiting for successful checks",
+		Item: workflow.Item{Repository: "acme/repo", Kind: "issue", Number: 17},
+	}
+	journal, err := json.Marshal(map[string]any{
+		"version": 2, "observations": map[string]any{}, "baselines": map[string]bool{}, "runs": []workflow.Run{run},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(engine.StatePath, journal, 0600); err != nil {
+		t.Fatal(err)
+	}
+	mergedAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	engine.InspectPR = func(context.Context, string, string) (workflow.Item, error) {
+		return workflow.Item{Merged: true, MergedAt: mergedAt, Title: recoveryPRTitle}, nil
+	}
+	engine.Fetch = func(context.Context, string, workflow.ScanNeeds) ([]workflow.Item, error) {
+		return nil, nil
+	}
+	engine.RecordObservedIssueMerge = s.RecordObservedIssueMerge
+	if err := engine.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if runs, err := engine.Runs(); err != nil || len(runs) != 0 {
+		t.Fatalf("workflow still active after observing merge: %+v (%v)", runs, err)
+	}
+	// A concurrent recovery pass may still hold a pre-merge snapshot.
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate restart before the issue reconciler can look up the linked PR.
+	s.Broker = NewBroker()
+	s.IssueClaims = &localruntime.IssueClaimStore{Root: s.IssueClaims.Root}
+	s.Workflows = &workflow.Engine{StatePath: engine.StatePath}
+	f.prs = "invalid pull request response"
+	merged := latestRecoveryRecord(t, s)
+	if merged.State != localruntime.IssueStateMergedUnverified || !merged.PRMergedAt.Equal(mergedAt) ||
+		merged.PRTitle != recoveryPRTitle || !merged.NextAttemptAt.IsZero() || merged.ReviewDetail != run.Reason {
+		t.Fatalf("workflow pruned before persisting the merge receipt: %+v", merged)
+	}
+	tasks := s.snapshot().Tasks
+	if len(tasks) != 1 || tasks[0].Status != "merged" || tasks[0].CanRerun ||
+		tasks[0].IssueAttempts[0].Error != record.RunError {
+		t.Fatalf("restart lost the merged task or its verification evidence: %+v", tasks)
+	}
+	if err := s.ReconcileIssueWork(t.Context()); err != nil {
+		t.Fatalf("merged claim still depends on PR lookup: %v", err)
 	}
 }

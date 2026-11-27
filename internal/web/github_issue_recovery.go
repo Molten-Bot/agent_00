@@ -337,7 +337,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		if err != nil || !pr.Merged {
 			return err
 		}
-		if err := s.saveMergedIssuePR(record, pr); err != nil {
+		if err := s.saveMergedIssuePR(record, pr, ""); err != nil {
 			return err
 		}
 		return s.stopMergedIssueWorker(ctx, record.RequestID)
@@ -381,8 +381,25 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 				return linkedPRErr
 			}
 			// Label cleanup must remain possible during a PR lookup failure.
-		} else if linkedPR.Merged {
-			return s.recordMergedIssuePR(ctx, record, linkedPR)
+		} else {
+			if linkedPR.Merged {
+				return s.recordMergedIssuePR(ctx, record, linkedPR)
+			}
+			blocker := ""
+			if err := linkedPR.recoveryBlocker(record.Run.GitHubIssue); err != nil {
+				blocker = err.Error()
+			}
+			if record.PRRecoveryBlocker != blocker {
+				record.PRRecoveryBlocker = blocker
+				if err := s.IssueClaims.Update(record.ID, func(current *localruntime.IssueClaimRecord) error {
+					if !current.PRMerged() {
+						current.PRRecoveryBlocker = blocker
+					}
+					return nil
+				}); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	if record.Fulfilled() && !record.UnlockPending {
@@ -793,7 +810,7 @@ func (s Server) recordVerifiedIssuePR(record localruntime.IssueClaimRecord, pr i
 }
 
 func (s Server) recordMergedIssuePR(ctx context.Context, record localruntime.IssueClaimRecord, pr issuePullRequest) error {
-	if err := s.saveMergedIssuePR(record, pr); err != nil {
+	if err := s.saveMergedIssuePR(record, pr, ""); err != nil {
 		return err
 	}
 	record, err := s.IssueClaims.Load(record.ID)
@@ -816,13 +833,24 @@ func (s Server) knownIssuePR(record localruntime.IssueClaimRecord) string {
 	return ""
 }
 
-func (s Server) saveMergedIssuePR(record localruntime.IssueClaimRecord, pr issuePullRequest) error {
+func (s Server) saveMergedIssuePR(record localruntime.IssueClaimRecord, pr issuePullRequest, reviewDetail string) error {
 	return s.IssueClaims.Update(record.ID, func(current *localruntime.IssueClaimRecord) error {
 		if known := s.knownIssuePR(*current); known != "" && !strings.EqualFold(known, pr.URL) {
 			return fmt.Errorf("merged pull request does not match the issue task's linked pull request")
 		}
-		current.PRURL, current.PRTitle, current.PRMergedAt = pr.URL, strings.TrimSpace(pr.Title), pr.MergedAt
+		current.PRURL = pr.URL
+		if title := strings.TrimSpace(pr.Title); title != "" {
+			current.PRTitle = title
+		}
+		if !pr.MergedAt.IsZero() {
+			current.PRMergedAt = pr.MergedAt
+		}
+		if reviewDetail != "" {
+			current.ReviewDetail = reviewDetail
+		}
+		current.PRRecoveryBlocker = ""
 		if !current.PRMerged() {
+			current.UnlockPending = current.LabelAdded
 			current.State = localruntime.IssueStateMerged
 			if current.PRVerification != "" {
 				current.RunError = current.FailureDetail()
@@ -834,7 +862,6 @@ func (s Server) saveMergedIssuePR(record localruntime.IssueClaimRecord, pr issue
 			}
 		}
 		current.NextAttemptAt = time.Time{}
-		current.UnlockPending = current.LabelAdded
 		return nil
 	})
 }
@@ -856,9 +883,7 @@ func (s Server) finishMergedIssue(ctx context.Context, record localruntime.Issue
 			}
 			mergedAt := formatTimeOrEmpty(record.PRMergedAt)
 			task.PRURL = record.PRURL
-			if mergedAt != "" {
-				s.Broker.RecordReleaseFromTask(task, mergedAt)
-			}
+			s.Broker.RecordReleaseFromTask(task, mergedAt)
 			_ = s.Broker.MarkTaskPRMerged(record.RequestID, mergedAt)
 		}
 	}
