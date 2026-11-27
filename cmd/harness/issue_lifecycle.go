@@ -120,7 +120,13 @@ func persistIssueControl(store *localruntime.IssueClaimStore, requestID, control
 	}
 	record := latestClaimForTask(records, requestID)
 	if record.Version == 2 {
-		return store.Update(record.ID, func(r *localruntime.IssueClaimRecord) error { r.Control = control; return nil })
+		return store.Update(record.ID, func(r *localruntime.IssueClaimRecord) error {
+			if r.Control == "stopped" && control != "stopped" {
+				return errTaskStoppedByOperator
+			}
+			r.Control = control
+			return nil
+		})
 	}
 	return nil
 }
@@ -214,6 +220,14 @@ func (e *issueExecution) finishWithClaimUpdate(ctx context.Context, state string
 			record.Outcome = "error"
 		}
 		record.NoChangeEvidence = result.NoChangeEvidence
+		if result.PRAlreadyMerged {
+			record.PRAlreadyMerged = true
+			record.State = "fulfilled"
+			record.VerifiedAt = stoppedAt
+			record.Error = ""
+			record.Incident = ""
+			record.NextAttemptAt = time.Time{}
+		}
 		if state == "interrupted" && errors.Is(context.Cause(ctx), context.Canceled) {
 			record.Incident = "service_shutdown"
 		}
@@ -294,6 +308,7 @@ func (e *issueExecution) finishWithClaimUpdate(ctx context.Context, state string
 func (e *issueExecution) configure(ctx context.Context, h *app.Harness) (context.Context, func()) {
 	runCtx, cancel := context.WithCancelCause(ctx)
 	watchdog := localruntime.NewStepWatchdog(time.Duration(e.policy.StepTimeoutSeconds)*time.Second, cancel)
+	pauseWatchdogDuringAdmission(h, watchdog)
 	h.Workspace.Root = filepath.Dir(e.record.WorkspaceDir)
 	h.Workspace.NewGUID = func() string { return filepath.Base(e.record.WorkspaceDir) }
 	h.ResumeIssueWorkspace = true

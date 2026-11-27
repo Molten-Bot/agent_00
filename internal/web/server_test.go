@@ -462,7 +462,10 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `syncTaskTimingSummariesForList(listNode, tasks);`) {
 		t.Fatalf("expected index html to update task timing summaries in place when render signatures are unchanged")
 	}
-	if !strings.Contains(markup, `const controls = task?.controls || {};`) || !strings.Contains(markup, `const canStop = Boolean(controls.stop);`) {
+	if !strings.Contains(markup, `const controls = task?.controls || {};`) ||
+		!strings.Contains(markup, `if (!task?.controls?.stop || isCompletedTask(task)) return null;`) ||
+		!strings.Contains(markup, `if (stopAction) promptActions.appendChild(stopAction);`) ||
+		!strings.Contains(markup, `if (stopAction) topActions.appendChild(stopAction);`) {
 		t.Fatalf("expected index html to render task controls from backend-provided capabilities")
 	}
 	if !strings.Contains(markup, `update.className = "task-timing-summary";`) {

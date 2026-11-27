@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -100,6 +101,10 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 		return snapshot
 	}
 	records, _ := s.IssueClaims.List()
+	return s.withIssueTaskRecords(snapshot, records)
+}
+
+func (s Server) withIssueTaskRecords(snapshot Snapshot, records []localruntime.IssueClaimRecord) Snapshot {
 	if len(records) == 0 {
 		return snapshot
 	}
@@ -130,12 +135,7 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 		return claimed[task.RequestID]
 	})
 	for id, attempts := range groups {
-		slices.SortFunc(attempts, func(a, b localruntime.IssueClaimRecord) int {
-			if n := a.Run.GitHubIssue.Claim.Attempt - b.Run.GitHubIssue.Claim.Attempt; n != 0 {
-				return n
-			}
-			return a.UpdatedAt.Compare(b.UpdatedAt)
-		})
+		slices.SortFunc(attempts, compareIssueTaskAttempts)
 		latest := attempts[len(attempts)-1]
 		requestID := stringsx.FirstNonEmpty(latest.RequestID, "issue-"+latest.ID)
 		task, live := byRequest[requestID]
@@ -169,7 +169,7 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 			task.ReviewPolicy = taskReviewPolicy(latest.Run.Workflow, latest.Run.Review != nil || latest.Run.LibraryTaskName == "code-review")
 		}
 		task.PRURL = stringsx.FirstNonEmpty(latest.PRURL, task.PRURL)
-		merged := latest.PRMerged() || latest.PlanningStatus == issueDone || task.Status == "merged"
+		merged := latest.PRMerged() || latest.PRAlreadyMerged || latest.PlanningStatus == issueDone || task.Status == "merged"
 		if latest.Run.Workflow != nil && !latest.Run.Workflow.IsDefaultExecution() {
 			task.WorkflowID, task.WorkflowName = latest.Run.Workflow.ID, latest.Run.Workflow.Name
 			task.WorkflowTriggered = true
@@ -217,16 +217,34 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 			latest.Outcome == workflow.OutcomeReviewPending {
 			task.IssueState = workflow.OutcomeReviewPending
 		}
-		switch task.IssueState {
-		case "retry_wait", localruntime.IssueChecksPending, workflow.OutcomeReviewPending, "waiting", "awaiting_review":
+		switch {
+		case latest.PRMerged() || latest.PlanningStatus == issueDone || task.Status == "merged":
+			task.Status, task.Error, task.ReviewGate = "merged", "", ""
+		case latest.Outcome == "stopped" || task.Status == "stopped":
+			task.Status, task.IssueState, task.ReviewGate, task.RetryAt = "stopped", "stopped", "", ""
+			task.Error, task.Warning = "task was stopped by operator", ""
+		case latest.Control == "paused" && !latest.Fulfilled():
+			task.Status, task.IssueState, task.RetryAt = "paused", "paused", ""
+		case task.IssueState == "retry_wait" || task.IssueState == localruntime.IssueChecksPending ||
+			task.IssueState == workflow.OutcomeReviewPending ||
+			task.IssueState == "waiting" || task.IssueState == "awaiting_review":
 			if isCompletedTaskStatus(task.Status) || !live {
 				task.Status = "queued"
 			}
 			task.Error = stringsx.FirstNonEmpty(latest.Error, task.Error)
-		case "blocked":
+		case task.IssueState == "blocked":
 			task.Status = "error"
 			task.Error = stringsx.FirstNonEmpty(latest.PRRecoveryBlocker, latest.Error, latest.RunError, task.Error)
 		}
+		task.Controls.Stop = s.canStopRetainedIssueTask(latest, task)
+		if !live && isCompletedTaskStatus(task.Status) {
+			task.DeleteScope = s.Broker.completedAttemptGenerations(requestID)
+			if task.DeleteScope[requestID] == "" {
+				// The claim ID is also the broker generation assigned at dispatch.
+				task.DeleteScope[requestID] = issue.Claim.ID
+			}
+		}
+
 		for i, attempt := range attempts {
 			stage := attempt.Step
 			status := stringsx.FirstNonEmpty(attempt.Outcome, attempt.State, attempt.Phase)
@@ -273,6 +291,109 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 	})
 	snapshot.Tasks = tasks
 	return snapshot
+}
+
+func (s Server) canStopRetainedIssueTask(record localruntime.IssueClaimRecord, task Task) bool {
+	if record.Version != 2 || s.IssueRecovery == nil || isCompletedTaskStatus(task.Status) {
+		return false
+	}
+	switch {
+	case record.Control == "paused", record.Outcome == localruntime.IssueChecksPending,
+		record.State == "retry_wait", task.IssueState == "waiting", task.IssueState == "awaiting_review":
+		return true
+	}
+	return record.Outcome == "" && (isPendingTaskStatus(task.Status) || isPausedTaskStatus(task.Status))
+}
+
+func compareIssueTaskAttempts(a, b localruntime.IssueClaimRecord) int {
+	if n := a.Run.GitHubIssue.Claim.Attempt - b.Run.GitHubIssue.Claim.Attempt; n != 0 {
+		return n
+	}
+	return a.UpdatedAt.Compare(b.UpdatedAt)
+}
+
+func (s Server) stopTask(ctx context.Context, requestID string) error {
+	if s.StopTask != nil {
+		if err := s.StopTask(ctx, requestID); !errors.Is(err, ErrTaskNotFound) {
+			return err
+		}
+	}
+	if s.IssueClaims == nil || s.IssueRecovery == nil || s.issueAutomation == nil {
+		return ErrTaskNotFound
+	}
+	persist := func() error { return s.stopRetainedIssueTask(ctx, requestID) }
+	if s.Workflows != nil {
+		return s.Workflows.StopIssueTask(persist)
+	}
+	return persist()
+}
+
+func (s Server) stopRetainedIssueTask(ctx context.Context, requestID string) error {
+	s.issueAutomation.admission.Lock()
+	defer s.issueAutomation.admission.Unlock()
+
+	// Admission can attach a worker while the stop waits for the issue lock.
+	if s.StopTask != nil {
+		if err := s.StopTask(ctx, requestID); !errors.Is(err, ErrTaskNotFound) {
+			return err
+		}
+	}
+	records, err := s.IssueClaims.List()
+	if err != nil {
+		return err
+	}
+	snapshot := s.withIssueTaskRecords(Snapshot{Tasks: s.Broker.TaskList()}, records)
+	for _, task := range snapshot.Tasks {
+		if task.RequestID != requestID || task.TaskID == "" {
+			continue
+		}
+		if task.Status == "stopped" {
+			return fmt.Errorf("task is already stopped")
+		}
+		if !task.Controls.Stop {
+			return fmt.Errorf("task stop is unavailable for this task")
+		}
+		var latest localruntime.IssueClaimRecord
+		for _, record := range records {
+			if (record.RequestID != "" || record.RemoteRecorded) &&
+				issueTaskID(record.Run.GitHubIssue, record.Run.Workflow) == task.TaskID &&
+				(latest.ID == "" || compareIssueTaskAttempts(record, latest) > 0) {
+				latest = record
+			}
+		}
+		if latest.ID != "" && stringsx.FirstNonEmpty(latest.RequestID, "issue-"+latest.ID) == requestID {
+			return s.persistRetainedIssueStop(latest)
+		}
+	}
+	return ErrTaskNotFound
+}
+
+func (s Server) persistRetainedIssueStop(record localruntime.IssueClaimRecord) error {
+	lock, err := s.IssueClaims.TryControlLock(localruntime.IssueExecutionKey(record.Run.GitHubIssue))
+	if err != nil {
+		return err
+	}
+	if lock == nil {
+		return fmt.Errorf("task is changing state; try again")
+	}
+	defer lock.Close()
+
+	if err := s.IssueClaims.Update(record.ID, func(current *localruntime.IssueClaimRecord) error {
+		if !current.UpdatedAt.Equal(record.UpdatedAt) {
+			return fmt.Errorf("task is changing state; try again")
+		}
+		current.Control, current.Outcome = "stopped", "stopped"
+		current.Error = "task was stopped by operator"
+		current.StoppedAt = time.Now().UTC()
+		current.NextAttemptAt = time.Time{}
+		current.UnlockPending = current.UnlockPending || current.LabelAdded
+		return nil
+	}); err != nil {
+		return err
+	}
+	s.Broker.recordRetainedIssueStop(stringsx.FirstNonEmpty(record.RequestID, "issue-"+record.ID), record.PRURL)
+	s.WakeIssueRecovery()
+	return nil
 }
 
 func (s Server) issueTaskHistoryHidden(record localruntime.IssueClaimRecord, requestID string) bool {

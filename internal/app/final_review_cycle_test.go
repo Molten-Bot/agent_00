@@ -253,8 +253,8 @@ func TestRunFinalReviewCycleStopsWhenPullRequestMergesDuringReview(t *testing.T)
 	if runner.reviews != 1 || runner.comments != 0 {
 		t.Fatalf("review/comment counts = %d/%d, want 1/0 after merge", runner.reviews, runner.comments)
 	}
-	if !repo.ReviewStoppedOnMerge {
-		t.Fatal("ReviewStoppedOnMerge = false, want true")
+	if !repo.PRAlreadyMerged || repo.ReviewInterrupted {
+		t.Fatalf("merged = %t, interrupted = %t, want terminal merge success", repo.PRAlreadyMerged, repo.ReviewInterrupted)
 	}
 	if joined := strings.Join(logs, "\n"); !strings.Contains(joined, "status=warn action=stop reason=pr_merged") {
 		t.Fatalf("logs missing merged-during-review warning: %s", joined)
@@ -575,16 +575,34 @@ func TestRunFinalReviewCycleConfirmsFinalPassFixBeforeRelease(t *testing.T) {
 	for _, tc := range []struct {
 		name            string
 		lagReads, waits int
+		pendingCI       bool
 		remoteMoved     bool
 		wantErr         error
 	}{
 		{name: "transient lag", lagReads: 1, waits: 1},
+		{name: "readmission after pending repair CI", pendingCI: true, waits: 1},
 		{name: "persistent lag", lagReads: 10, waits: 5, wantErr: ErrReviewPending},
 		{name: "concurrent update while metadata shows the repair", remoteMoved: true, wantErr: ErrReviewHeadChanged},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			runner := &finalFindingReviewCycleRunner{t: t, findingsPass: 1, repairLagReads: tc.lagReads, remoteMoved: tc.remoteMoved}
 			h := New(runner)
+			if tc.pendingCI {
+				admitted, pending := false, true
+				h.CheckTimings = &CheckTimings{}
+				h.AcquireWorkspace = func(context.Context) error { admitted = true; return nil }
+				h.ReleaseWorkspace = func() { admitted = false }
+				h.Runner = issueBranchRunner(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+					if cmd.Name == "gh" && slices.Contains(cmd.Args, "checks") && pending {
+						pending = false
+						return execx.Result{Stdout: "tests\tpending\n"}, pendingCheckExit{}
+					}
+					if !admitted && (cmd.Name == "git" || cmd.Name == "codex") {
+						t.Fatalf("%s ran without workspace admission", cmd.Name)
+					}
+					return runner.Run(ctx, cmd)
+				})
+			}
 			h.FinalReviewPasses = 1
 			h.PRChecksWatchTimeout = -1
 			waits := 0

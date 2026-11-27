@@ -201,6 +201,25 @@ func TestBrokerShowsCheckWaitOnExistingTask(t *testing.T) {
 	}
 }
 
+func TestBrokerShowsWorkspaceReadmissionOnSameTaskAndStage(t *testing.T) {
+	t.Parallel()
+	b := NewBroker()
+	const id = "issue-readmission"
+	b.IngestLog("task status=start request_id=" + id + " explicit_terminal=true")
+	b.IngestLog("task request_id=" + id + " stage=pr_verification status=waiting")
+	b.IngestLog("task status=queued request_id=" + id + " action=wait_for_workspace")
+	task, ok := b.Task(id)
+	if !ok || task.Status != "pending" || task.Stage != "pr_verification" || task.StageStatus != "waiting_workspace" {
+		t.Fatalf("workspace admission was not visible on the existing task: %+v", task)
+	}
+	b.IngestLog("task status=admitted request_id=" + id + " action=resume_workspace")
+	b.IngestLog("task request_id=" + id + " stage=pr_verification status=start action=verify_handoff")
+	tasks := b.TaskList()
+	if len(tasks) != 1 || tasks[0].RequestID != id || tasks[0].Status != "running" || tasks[0].StageStatus != "start" {
+		t.Fatalf("workspace admission changed task identity or stage: %+v", tasks)
+	}
+}
+
 func TestBrokerTracksTaskLifecycleAndCommandOutput(t *testing.T) {
 	t.Parallel()
 

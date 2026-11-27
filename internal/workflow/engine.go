@@ -45,8 +45,8 @@ type Item struct {
 	ChecksPassed   bool     `json:"checksPassed"`
 	Open           bool     `json:"open"`
 
-	MergedAt time.Time `json:"mergedAt,omitzero"`
-	MergeRequestInactive bool `json:"-"`
+	MergedAt             time.Time `json:"mergedAt,omitzero"`
+	MergeRequestInactive bool      `json:"-"`
 
 	ActionRunID      int64 `json:"actionRunId,omitempty"`
 	ActionRunAttempt int   `json:"actionRunAttempt,omitempty"`
@@ -248,6 +248,11 @@ const OutcomeReviewPending = "review_pending"
 // OutcomeChecksPending reserves the existing activation until its worker resumes.
 const OutcomeChecksPending = "check_verification_pending"
 
+// OutcomeAlreadyMerged records that GitHub confirmed the PR was already merged.
+const OutcomeAlreadyMerged = "already_merged"
+
+const alreadyMergedReason = "GitHub confirmed the pull request was already merged"
+
 type Outcome struct {
 	ReviewReceipt     *githubutil.ReviewReceipt `json:"reviewReceipt,omitempty"`
 	ReviewInterrupted bool                      `json:"reviewInterrupted,omitempty"`
@@ -281,6 +286,8 @@ type Engine struct {
 	InspectPRState      func(context.Context, string, string) (Item, error)
 	RecordReviewOutcome func(string, Outcome) error
 	RecordMerge         func(Run, time.Time) error
+	// IssueTaskStopped checks the issue claim for a stopped workflow event ID.
+	IssueTaskStopped func(string) bool
 	// RecordIssueMerge saves the merge before pruning an issue activation.
 	RecordIssueMerge func(previous Run, pr Item, mergedByApp bool) error
 	// MemoryPressure defers background ticks while host memory is exhausted.
@@ -337,6 +344,18 @@ func (e *Engine) ActivationStartedAt(id string) (time.Time, error) {
 		return time.Time{}, err
 	}
 	return s.retryStart(id, time.Time{}), nil
+}
+
+// StopIssueTask serializes a durable issue stop with review writeback and merge.
+// The claim journal is authoritative so a stop survives a workflow journal error.
+func (e *Engine) StopIssueTask(persist func() error) error {
+	e.tickMu.Lock()
+	defer e.tickMu.Unlock()
+	if err := persist(); err != nil {
+		return err
+	}
+	e.RequestScan()
+	return nil
 }
 
 // save persists only runs that still need dispatch recovery or merge coordination.
@@ -396,7 +415,7 @@ func (e *Engine) logRun(r Run, event string, mergedAt time.Time) {
 		reason = "review_check_pending"
 	case "Review writeback paused: workflow changed or was disabled":
 		reason = "review_writeback_paused"
-	case "Pull request merged externally during review":
+	case "Pull request merged externally during review", "Pull request was already merged when checks resumed", alreadyMergedReason:
 		reason = "external_merge"
 	case observedIssueMergeReason:
 		reason = "external_merge"
@@ -914,6 +933,12 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		}
 		return finish()
 	}
+	if r.Item.Kind == "issue" && e.IssueTaskStopped != nil && e.IssueTaskStopped(r.ID) {
+		r.Status, r.Reason = "failed", "Task was stopped by operator"
+		r.Outcome = nil
+		r.GitHubRetryAt = time.Time{}
+		return finish()
+	}
 	active := featureEnabled && exists && w.Enabled && e.Allowed(w.Repository) && e.Allowed(r.Item.Repository)
 	if !e.now().Before(r.GitHubRetryAt) {
 		r.GitHubRetryAt = time.Time{}
@@ -1016,10 +1041,14 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		} else {
 			o = e.Status(r.RequestID)
 		}
-		if o.Status == "failed" || o.Status == "succeeded" || o.Status == OutcomeReviewPending || o.Status == OutcomeChecksPending {
+		if o.Status == "failed" || o.Status == "succeeded" || o.Status == OutcomeReviewPending ||
+			o.Status == OutcomeChecksPending || o.Status == OutcomeAlreadyMerged {
 			r.Outcome = &o
 		}
-		if o.ReviewInterrupted {
+		if o.Status == OutcomeAlreadyMerged {
+			r.PRURL, r.Status, r.Reason = o.PRURL, "completed", alreadyMergedReason
+			r.MergeHead = ""
+		} else if o.ReviewInterrupted {
 			r.PRURL = o.PRURL
 			if r.Item.Kind == "issue" {
 				if r.PRURL == "" {
@@ -1436,7 +1465,7 @@ func (e *Engine) recordIssueMerge(r Run, prURL string, pr Item, mergedByApp bool
 }
 
 // ObserveIssueMerge releases the activation after the issue claim records the merge.
-func (e *Engine) ObserveIssueMerge(id, requestID, prURL string) error {
+func (e *Engine) ObserveIssueMerge(id, requestID, prURL string, mergedAt time.Time) error {
 	if id == "" || prURL == "" {
 		return nil
 	}
@@ -1471,7 +1500,7 @@ func (e *Engine) ObserveIssueMerge(id, requestID, prURL string) error {
 		return nil
 	})
 	if err == nil && merged.ID != "" {
-		e.logRun(merged, "transition", time.Time{})
+		e.logRun(merged, "transition", mergedAt)
 	}
 	return err
 }
@@ -1532,7 +1561,11 @@ func (e *Engine) Complete(id string, outcome Outcome) error {
 		if r == nil {
 			return ErrActivationNotFound
 		}
-		if r.Status == OutcomeChecksPending || ((r.Status == awaitingReview || r.Status == "failed") && r.hasPendingReview()) {
+		if outcome.Status == OutcomeAlreadyMerged {
+			// A confirmed merge needs no further GitHub reads.
+			r.GitHubRetryAt = time.Time{}
+			r.Status = "running"
+		} else if r.Status == OutcomeChecksPending || ((r.Status == awaitingReview || r.Status == "failed") && r.hasPendingReview()) {
 			r.Status = "running"
 		}
 		if terminal(outcome.Status) && outcome.CompletedAt.IsZero() {

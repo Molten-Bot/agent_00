@@ -52,6 +52,7 @@ func (s Server) WakeIssueRecovery() {
 
 var errIssueRecoveryDeferred = errors.New("issue recovery deferred during memory pressure")
 
+const issueAlreadyMergedError = "issue already has a merged PR"
 const mergedUnverifiedIssueError = "pull request merged before draft verification passed"
 
 // Retained claims share the GitHub quota with active delivery and review.
@@ -358,6 +359,9 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	if err != nil {
 		return err
 	}
+	if record.PRAlreadyMerged && !record.PRMerged() && record.PRURL != "" {
+		return s.recordMergedIssuePR(ctx, record, issuePullRequest{URL: record.PRURL, Title: record.PRTitle})
+	}
 	if record.PRMerged() {
 		return s.finishMergedIssue(ctx, record)
 	}
@@ -525,8 +529,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		return nil
 	}
 	if !allowed {
-		// A stopped worker's owned label still needs to be removed. Keep
-		// its claim and outcome for resumption when the repository is enabled.
+		// Clean up the owned label while preserving the recorded outcome.
 		if !record.LabelAdded {
 			return nil
 		}
@@ -597,14 +600,14 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		}
 		record.UnlockPending = record.LabelAdded
 	}
-	if record.Outcome == "interrupted" && record.ExecutionAgentAttempts != nil {
-		// Persist the interruption before removing the reserve. A missing
+	if (record.Outcome == "interrupted" || record.Outcome == "stopped") && record.ExecutionAgentAttempts != nil {
+		// Persist the outcome before removing the reserve. A missing
 		// reserve on an unfinished execution signals journal exhaustion.
 		if err := s.IssueClaims.Save(record); err != nil {
-			return fmt.Errorf("persist interrupted issue outcome: %w", err)
+			return fmt.Errorf("persist issue outcome before releasing execution reserve: %w", err)
 		}
 		if err := s.IssueClaims.ReleaseExecutionReserve(record.ID); err != nil {
-			return fmt.Errorf("release interrupted issue execution reserve: %w", err)
+			return fmt.Errorf("release issue execution reserve: %w", err)
 		}
 		record.ExecutionAgentAttempts = nil
 	}
@@ -659,7 +662,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 					return s.deferIssueRecord(record, err)
 				}
 			}
-			return s.recordVerifiedIssuePR(record, pr)
+			return s.recordVerifiedIssuePR(&record, pr)
 		}
 	}
 	if record.State == localruntime.IssueStateMergedUnverified {
@@ -834,17 +837,17 @@ func (s *Server) RecordWorkflowMerge(run workflow.Run, mergedAt time.Time) error
 	return nil
 }
 
-func (s Server) recordVerifiedIssuePR(record localruntime.IssueClaimRecord, pr issuePullRequest) error {
+func (s Server) recordVerifiedIssuePR(record *localruntime.IssueClaimRecord, pr issuePullRequest) error {
 	record.PRURL = pr.URL
 	record.PRTitle = strings.TrimSpace(pr.Title)
 	record.VerifiedAt = time.Now().UTC()
 	record.State = "fulfilled"
 	record.Error = ""
 	record.NextAttemptAt = time.Time{}
-	if err := s.IssueClaims.Save(record); err != nil {
+	if err := s.IssueClaims.Save(*record); err != nil {
 		return err
 	}
-	s.publishVerifiedIssuePR(record)
+	s.publishVerifiedIssuePR(*record)
 	return nil
 }
 
@@ -856,14 +859,22 @@ func (s Server) recordMergedIssuePR(ctx context.Context, record localruntime.Iss
 	if err != nil {
 		return err
 	}
-	if s.Broker != nil {
-		var startedAt time.Time
-		if policy := record.Run.Workflow; policy != nil && !policy.IsDefaultExecution() && s.Workflows != nil {
-			startedAt, _ = s.Workflows.ActivationStartedAt(policy.EventID)
-		}
-		s.Broker.recordRecoveredIssueMerge(record.RequestID, startedAt, record.PRMergedAt)
-	}
+	s.recordIssueMergeTiming(record)
 	return s.finishMergedIssue(ctx, record)
+}
+
+func (s Server) recordIssueMergeTiming(record localruntime.IssueClaimRecord) {
+	if s.Broker == nil || record.RequestID == "" || record.PRMergedAt.IsZero() {
+		return
+	}
+	var startedAt time.Time
+	if policy := record.Run.Workflow; policy != nil && !policy.IsDefaultExecution() && s.Workflows != nil {
+		startedAt, _ = s.Workflows.ActivationStartedAt(policy.EventID)
+	}
+	if startedAt.IsZero() {
+		startedAt = record.StartedAt
+	}
+	s.Broker.recordRecoveredIssueMerge(record.RequestID, startedAt, record.PRMergedAt)
 }
 
 func (s Server) knownIssuePR(record localruntime.IssueClaimRecord) string {
@@ -948,20 +959,9 @@ func (s Server) saveMergedIssuePR(record localruntime.IssueClaimRecord, pr issue
 			current.PRMergedAt = pr.MergedAt
 		}
 		current.PRMergedByApp = current.PRMergedByApp || mergedByApp
-		if current.PRVerification != "" && current.RunError == "" && current.Error != mergedUnverifiedIssueError {
-			current.RunError = current.Error
-		}
-		if current.PRVerification == "" {
-			if current.RunError == "" && current.Outcome != "merged" {
-				current.RunError = current.FailureDetail()
-			}
-			current.Outcome = "merged"
-			current.Error = ""
-			current.Incident = ""
-			if current.StoppedAt.IsZero() {
-				current.StoppedAt = time.Now().UTC()
-			}
-		}
+		current.PRAlreadyMerged = true
+		current.Outcome = "completed"
+		current.Incident = ""
 		if reviewDetail != "" {
 			current.ReviewDetail = reviewDetail
 		}
@@ -986,7 +986,10 @@ func (s Server) saveMergedIssuePR(record localruntime.IssueClaimRecord, pr issue
 func (s Server) finishMergedIssue(ctx context.Context, record localruntime.IssueClaimRecord) (err error) {
 	if s.Workflows != nil && record.Run.Workflow != nil && !record.Run.Workflow.IsDefaultExecution() {
 		defer func() {
-			err = errors.Join(err, s.Workflows.ObserveIssueMerge(record.Run.Workflow.EventID, record.RequestID, record.PRURL))
+			if latest, loadErr := s.IssueClaims.Load(record.ID); loadErr == nil {
+				record.PRMergedAt = latest.PRMergedAt
+			}
+			err = errors.Join(err, s.Workflows.ObserveIssueMerge(record.Run.Workflow.EventID, record.RequestID, record.PRURL, record.PRMergedAt))
 		}()
 	}
 	s.publishVerifiedIssuePR(record)
@@ -1061,6 +1064,7 @@ func (s Server) backfillIssueReleaseMergeTime(ctx context.Context, record localr
 		}
 	}
 	s.Broker.backfillReleaseMergeTime(record.RequestID, record.PRURL, record.PRMergedAt)
+	s.recordIssueMergeTiming(record)
 	return nil
 }
 
@@ -1108,7 +1112,7 @@ func (s Server) ValidateIssueOwnership(ctx context.Context, run config.Config) e
 // Count a terminal outcome once per claim. Each automatic successor carries
 // the previous count, including runs that never reached the agent step.
 func issueRunFailures(record localruntime.IssueClaimRecord) int {
-	if record.Fulfilled() {
+	if record.Fulfilled() || record.PRMerged() || record.PRAlreadyMerged {
 		return 0
 	}
 	failures := record.PriorRunFailures

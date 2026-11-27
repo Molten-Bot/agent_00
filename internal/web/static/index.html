@@ -12191,6 +12191,17 @@
       const taskStatus = normalizedTaskStatus(task?.status);
       progress.classList.toggle("is-running", taskStatus === "running" || taskStatus === "active");
 
+      const waitingForWorkspace = taskStatus === "pending" && task.stage_status === "waiting_workspace";
+      const waitingStage = ["checks", "review_checks", "pr_verification"].includes(task.stage);
+      const waitingForGitHub = waitingStage && task.stage_status === "waiting" &&
+        (taskStatus === "running" || taskStatus === "pending");
+      const wait = waitingForGitHub && task.logs?.findLast(log => {
+        if (log.stream !== "meta" || parseTaskProgressField(log.text, "stage") !== task.stage) return false;
+        return ["wait_for_github_checks", "wait_for_reviewed_head_evidence"].includes(parseTaskProgressField(log.text, "action"));
+      });
+      const pendingChecks = wait && parseTaskProgressField(wait.text, "pending_checks");
+      const showGitHubIcon = waitingForGitHub && (task.stage !== "pr_verification" || Boolean(pendingChecks));
+
       const track = document.createElement("div");
       track.className = "task-progress-track";
 
@@ -12238,7 +12249,11 @@
           stateText = "current";
         }
 
-        appendTaskStepIcon(marker, step, task);
+        if (i === index && showGitHubIcon) {
+          appendTaskStepIcon(marker, { ...step, icon: "github", label: "GitHub checks" }, task);
+        } else {
+          appendTaskStepIcon(marker, step, task);
+        }
 
         marker.title = `${step.label}: ${stateText}. ${step.detail}`;
         steps.appendChild(marker);
@@ -12246,22 +12261,29 @@
 
       track.append(line, steps);
       progress.append(track);
-      if (task.stage === "pr_verification" && task.stage_status === "waiting" && taskStatus === "running") {
-        const wait = task.logs?.findLast(log => log.stream === "meta" &&
-          parseTaskProgressField(log.text, "action") === "wait_for_reviewed_head_evidence");
-        if (wait) {
-          const checks = parseTaskProgressField(wait.text, "pending_checks");
-          const head = parseTaskProgressField(wait.text, "reviewed_head");
-          const refreshed = parseTaskProgressField(wait.text, "last_github_refresh");
-          const detail = document.createElement("div");
-          detail.className = "task-progress-wait";
+      if (waitingForWorkspace || waitingForGitHub) {
+        const detail = document.createElement("div");
+        detail.className = "task-progress-wait";
+        if (waitingForWorkspace) {
+          const queue = task.logs?.findLast(log => log.stream === "meta" &&
+            (parseTaskProgressField(log.text, "action") === "wait_for_workspace" ||
+              ["disk_space", "host_memory_pressure"].includes(parseTaskProgressField(log.text, "reason"))));
+          const reason = queue && parseTaskProgressField(queue.text, "reason");
+          detail.textContent = reason === "disk_space" ? "Waiting for workspace disk space" :
+            reason === "host_memory_pressure" ? "Waiting for available memory to resume workspace work" :
+            "Waiting to resume local workspace work";
+        } else {
+          const head = wait && parseTaskProgressField(wait.text, "reviewed_head");
+          const refreshed = wait && parseTaskProgressField(wait.text, "last_github_refresh");
           detail.textContent = [
-            checks ? `Waiting for GitHub checks: ${checks}` : "Waiting for draft verification evidence",
+            pendingChecks ? `Waiting for GitHub checks: ${pendingChecks}` :
+              task.stage === "pr_verification" ? "Waiting for draft verification evidence" :
+              "Waiting for GitHub checks",
             head && `Reviewed head: ${head}`,
             refreshed && `Last GitHub refresh: ${refreshed}`,
           ].filter(Boolean).join(" · ");
-          progress.append(detail);
         }
+        progress.append(detail);
       }
       return progress;
     }
@@ -12575,6 +12597,25 @@
 
     function taskOrderRenderSig(tasks) {
       return (tasks || []).map((task) => task.task_id || taskRequestID(task)).join("|");
+    }
+
+    function renderTaskStopButton(task, requestID, busy) {
+      if (!task?.controls?.stop || isCompletedTask(task)) return null;
+      const stop = document.createElement("button");
+      stop.type = "button";
+      stop.className = "task-stop task-icon-button";
+      stop.title = "Stop this task";
+      stop.setAttribute("aria-label", "Stop task");
+      stop.appendChild(createTaskActionIcon("stop"));
+      const label = document.createElement("span");
+      label.className = "sr-only";
+      label.textContent = "Stop";
+      stop.appendChild(label);
+      stop.disabled = busy;
+      bindTaskActionButton(stop, () => {
+        controlTask(requestID, "stop");
+      });
+      return stop;
     }
 
     function issueTaskStatusLabel(task) {
@@ -12972,8 +13013,10 @@
         const showIssueRetry = issueTask && !promptOnly && canRerunTask(task) && normalizedTaskStatus(task.status) !== "merged";
         const issuePrimaryAction = issueTask && !showIssueRetry &&
           (renderTaskPullRequestAction(task, "View pull request") || renderTaskIssueAction(task, "View issue"));
+        const taskStatus = normalizedTaskStatus(task.status);
         const showIssueProgress = issueTask && !collapsed && !promptOnly &&
-          task.issue_state === "running" && normalizedTaskStatus(task.status) === "running";
+          task.issue_state === "running" &&
+          (taskStatus === "running" || (taskStatus === "pending" && task.stage_status === "waiting_workspace"));
         const progress = !collapsed && !promptOnly && (!issueTask || showIssueProgress) ? renderTaskProgress(task) : null;
         const issueHistory = renderIssueTaskHistory(task, openIssueTasks.has(task.task_id), !progress, issuePrimaryAction);
         const showIssueLink = !issuePrimaryAction || Boolean(taskCardPullRequestURL(task));
@@ -13006,6 +13049,8 @@
         if (badge && !taskHistoryView && !collapsed) {
           topActions.appendChild(badge);
         }
+        const taskControlBusy = isTaskControlInFlight(requestID);
+        const stopAction = renderTaskStopButton(task, requestID, taskControlBusy);
 
         if (promptOnly) {
           node.classList.add("task-prompt-only");
@@ -13043,6 +13088,7 @@
           if (githubAction) {
             promptActions.appendChild(githubAction);
           }
+          if (stopAction) promptActions.appendChild(stopAction);
 
           const closeAction = renderTaskCloseButton(task, requestID);
           if (closeAction) {
@@ -13113,13 +13159,11 @@
           topActions.appendChild(cloneButton);
         }
 
-        const taskControlBusy = isTaskControlInFlight(requestID);
         const controls = task?.controls || {};
         const canPause = Boolean(controls.pause);
         const canRun = Boolean(controls.run);
         const canForceRun = Boolean(controls.force_run);
-        const canStop = Boolean(controls.stop);
-        if (!isCompletedTask(task) && (canPause || canRun || canForceRun || canStop)) {
+        if (!isCompletedTask(task) && (canPause || canRun || canForceRun)) {
           if (canForceRun) {
             const forceStart = document.createElement("button");
             forceStart.type = "button";
@@ -13157,25 +13201,8 @@
           if (canPause || canRun) {
             topActions.appendChild(pauseRun);
           }
-
-          if (canStop) {
-            const stop = document.createElement("button");
-            stop.type = "button";
-            stop.className = "task-stop task-icon-button";
-            stop.title = "Stop this task";
-            stop.setAttribute("aria-label", "Stop task");
-            stop.appendChild(createTaskActionIcon("stop"));
-            const stopLabel = document.createElement("span");
-            stopLabel.className = "sr-only";
-            stopLabel.textContent = "Stop";
-            stop.appendChild(stopLabel);
-            stop.disabled = taskControlBusy;
-            bindTaskActionButton(stop, () => {
-              controlTask(requestID, "stop");
-            });
-            topActions.appendChild(stop);
-          }
         }
+        if (stopAction) topActions.appendChild(stopAction);
 
         if (showIssueRetry || (!issueTask && canRerunTask(task))) {
           const rerun = document.createElement("button");

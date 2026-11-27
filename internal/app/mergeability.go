@@ -23,6 +23,9 @@ func (h Harness) ensurePullRequestMergeable(
 	runtime agentruntime.Runtime, codexDir string, codexOpts codexRunOptions,
 	codexBasePrompt, agentsPath, codexTargetLabel, agentStage string,
 ) (int, string, error) {
+	if repo.PRAlreadyMerged {
+		return ExitSuccess, "", nil
+	}
 	const maxChecks = 6
 	repaired := false
 	for check := 0; check < maxChecks; check++ {
@@ -50,7 +53,8 @@ func (h Harness) ensurePullRequestMergeable(
 			return ExitPR, "pr", fmt.Errorf("decode pull request mergeability: %w", err)
 		}
 		if strings.EqualFold(state.State, "MERGED") {
-			repo.ReviewStoppedOnMerge = true
+			h.logf("stage=pr status=ok action=observe_merge pr_url=%s", repo.PRURL)
+			h.recordObservedMerge(repo)
 			return ExitSuccess, "", nil
 		}
 		if !strings.EqualFold(state.State, "OPEN") {
@@ -73,6 +77,9 @@ func (h Harness) ensurePullRequestMergeable(
 		base := normalizeBranchRef(state.BaseRefName)
 		if base == "" || normalizeBranchRef(state.HeadRefName) != normalizeBranchRef(repo.Branch) || base == normalizeBranchRef(repo.Branch) {
 			return ExitGit, "git", fmt.Errorf("cannot repair pull request conflicts: invalid base or mismatched head branch")
+		}
+		if err := h.requireWorkspace(ctx); err != nil {
+			return ExitWorkspace, "workspace", err
 		}
 		// Existing PRs need the same conflict remediation as generated branches,
 		// using the PR's actual target rather than a configured clone branch.

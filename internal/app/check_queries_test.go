@@ -31,7 +31,8 @@ func TestCheckQueryHonorsSharedRateLimitDeadline(t *testing.T) {
 		return nil
 	}
 	watch := func() error {
-		_, err := h.runPRChecksWatch(t.Context(), "/repo", "https://github.com/acme/repo/pull/42")
+		const url = "https://github.com/acme/repo/pull/42"
+		_, err := h.runPRChecksWatch(t.Context(), prChecksCommand("/repo", url), newCheckPoll("checks", url))
 		return err
 	}
 	var rate *githubutil.RateLimitError
@@ -84,7 +85,8 @@ func TestCheckQueryKeepsConfirmedFailureDistinctFromUnavailable(t *testing.T) {
 		t.Fatal("a check failure was retried as a query error")
 		return nil
 	}
-	result, err := h.runPRChecksWatch(t.Context(), "/repo", "https://github.com/acme/repo/pull/42")
+	const url = "https://github.com/acme/repo/pull/42"
+	result, err := h.runPRChecksWatch(t.Context(), prChecksCommand("/repo", url), newCheckPoll("checks", url))
 	snapshot, parseErr := latestCheckSnapshotFromText(result.Stdout)
 	if parseErr != nil || !snapshot.HasFailures || !errors.Is(err, failure) || errors.Is(err, ErrChecksUnavailable) {
 		t.Fatalf("got snapshot=%+v query error=%v parse error=%v", snapshot, err, parseErr)

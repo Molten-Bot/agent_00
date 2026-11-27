@@ -166,7 +166,10 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 		baseMoved              bool
 		baseMovedAfterEvidence bool
 		publishedBaseMoved     bool
+		mergedAtReview         string
+		repair                 bool
 		mergedDuringEvidence   bool
+		mergedOnEvidencePoll   bool
 		reviewStale            bool
 		reviewTruncated        bool
 		verifierBlocked        bool
@@ -188,6 +191,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 		{name: "configured check has not reported", answer: localSuccess, change: true, checkRollups: []string{"[]", "[]"}, requiredChecks: `{"contexts":["CI"]}`, wantExit: ExitPR,
 			wantEvidenceError: "missing result for configured draft check"},
 		{name: "wait for pending checks on reviewed head", answer: localSuccess, change: true, pendingChecks: 1},
+		{name: "read repaired head only after disk readmission", answer: localSuccess, change: true, repair: true, pendingChecks: 1},
 		{name: "restore early readiness while checks are pending", answer: localSuccess, change: true, earlyReady: true},
 		{name: "keep explicit draft after early readiness", answer: localSuccess, change: true, earlyReady: true, keepDraft: true},
 		{name: "restore readiness on the last check poll", answer: localSuccess, change: true, earlyReady: true, readyOnPassingPoll: true},
@@ -232,7 +236,12 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			wantEvidenceError: "reviewed patch evidence has a stale draft base"},
 		{name: "base changed during offline verification", answer: localSuccess, change: true, baseMovedAfterEvidence: true, wantExit: ExitPR},
 		{name: "published base moves while PR metadata is stale", answer: localSuccess, change: true, publishedBaseMoved: true, wantExit: ExitPR},
-		{name: "external merge during offline verification", answer: localSuccess, change: true, mergedDuringEvidence: true, wantExit: ExitPR},
+		{name: "external merge at initial mergeability check", answer: localSuccess, change: true, mergedAtReview: "before"},
+		{name: "external merge during final review", answer: localSuccess, change: true, mergedAtReview: "during"},
+		{name: "external merge during repair CI", answer: localSuccess, change: true, repair: true, mergedAtReview: "repair checks"},
+		{name: "external merge at final mergeability check", answer: localSuccess, change: true, mergedAtReview: "after"},
+		{name: "external merge during offline verification", answer: localSuccess, change: true, mergedDuringEvidence: true},
+		{name: "external merge while polling for draft checks", answer: localSuccess, change: true, pendingChecks: 1, mergedOnEvidencePoll: true},
 		{name: "submitted review stale", answer: localSuccess, change: true, reviewStale: true, wantExit: ExitPR},
 		{name: "submitted review body exceeds evidence limit", answer: localSuccess, change: true, reviewTruncated: true, wantExit: ExitPR,
 			wantEvidenceError: "submitted review 1 body exceeds the draft verification evidence limit"},
@@ -277,6 +286,9 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			var implementations, creates, verifications, ready, evidenceReads, waits int
 			var watchReads, evidenceOutages int
 			var draftRestorations, reviewerRuns, verificationPolicyReads int
+			var repairs int
+			workspaceHeld := true
+			mergeSeenDuringRepair := false
 			var lastWait string
 			var draft, accepted, metadataRetry bool
 			savedResume := ""
@@ -310,6 +322,9 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				}
 				switch cmd.Name {
 				case "git":
+					if tc.repair && strings.HasPrefix(args, "ls-remote ") && !workspaceHeld {
+						t.Fatal("checkout-backed Git command ran without workspace admission")
+					}
 					if args == "remote get-url origin" {
 						return execx.Result{Stdout: repoURL}, nil
 					}
@@ -318,7 +333,12 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 						cmd.Args[i] = remote
 					}
 					cmd.Args = append([]string{"-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false"}, cmd.Args...)
-					return (execx.OSRunner{}).Run(ctx, cmd)
+					res, err := (execx.OSRunner{}).Run(ctx, cmd)
+					if err == nil && tc.repair && repairs > 0 && strings.HasPrefix(args, "push ") {
+						api.head = git(remote, "rev-parse", branch)
+						git(remote, "update-ref", "refs/pull/42/head", api.head)
+					}
+					return res, err
 				case "codex":
 					switch {
 					case args == "--help":
@@ -337,7 +357,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 							!strings.Contains(cmd.Stdin, `"state":"OPEN","isDraft":true`) ||
 							!strings.Contains(cmd.Stdin, `"headRefOid":"`+api.head+`"`) ||
 							!strings.Contains(cmd.Stdin, `"commit_id":"`+api.head+`"`) ||
-							!strings.Contains(cmd.Stdin, "#pullrequestreview-1") || !strings.Contains(cmd.Stdin, "No material issues found.") ||
+							!strings.Contains(cmd.Stdin, api.review.URL) || !strings.Contains(cmd.Stdin, "No material issues found.") ||
 							(len(tc.checkRollups) == 0 && !strings.Contains(cmd.Stdin, `"conclusion":"SUCCESS"`)) || !strings.Contains(cmd.Stdin, `"path":"work.txt"`) ||
 							(!tc.largePatch && !strings.Contains(cmd.Stdin, "+implemented")) {
 							t.Error("verification started before draft and submitted evidence were available")
@@ -398,12 +418,15 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 							draft = false
 						}
 						return execx.Result{Stdout: `{"status":"passed","evidence":"The live inventory lists work.txt, its patch shows the change, and CI and the clean review match the draft head."}`}, nil
+					case tc.repair && strings.Contains(cmd.Stdin, "Automated review repair pass"):
+						repairs++
+						return execx.Result{Stdout: "Fixed."}, os.WriteFile(filepath.Join(cmd.Dir, "work.txt"), []byte("implemented with repair\n"), 0o600)
 					case strings.Contains(cmd.Stdin, "Prepared pull-request review context"):
 						reviewerRuns++
 						if !draft {
 							t.Error("review ran before draft publication")
 						}
-						if tc.findings {
+						if tc.findings || (tc.repair && reviewerRuns == 1) {
 							return execx.Result{Stdout: `{"status":"findings","findings":[{"severity":"high","path":"work.txt","line":1,"title":"Incorrect output"}]}`}, nil
 						}
 						return execx.Result{Stdout: cleanReviewOutput}, nil
@@ -532,6 +555,8 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 							return execx.Result{Stdout: tc.commitStatuses}, nil
 						}
 						return execx.Result{Stdout: `{"statuses":[]}`}, nil
+					case slices.Equal(cmd.Args, append(workflowDispatchRunsCommand("", branch).Args, "--repo", "acme/repo", "--commit", api.head)):
+						return execx.Result{Stdout: "[]"}, nil
 					case strings.HasPrefix(args, "pr checks "):
 						watchReads++
 						if watchReads <= tc.watchOutages {
@@ -540,6 +565,19 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 						return execx.Result{Stdout: "CI\tpass\n"}, nil
 					case strings.HasPrefix(args, "pr view "):
 						head := api.head
+						state := "OPEN"
+						if slices.Contains(cmd.Args, "state,mergeable,baseRefName,headRefName") &&
+							(tc.mergedAtReview == "before" || (tc.mergedAtReview == "after" && api.posts > 0)) {
+							state = "MERGED"
+						}
+						if tc.mergedAtReview == "during" && reviewerRuns > 0 &&
+							slices.Contains(cmd.Args, "url,title,state,mergedAt,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner") {
+							state = "MERGED"
+						}
+						if tc.mergedAtReview == "repair checks" && repairs > 0 && watchReads > 1 {
+							mergeSeenDuringRepair = true
+							state = "MERGED"
+						}
 						fileEvidence := ""
 						rollup := `[{"name":"CI","conclusion":"SUCCESS"}]`
 						if strings.Contains(args, "statusCheckRollup") && strings.Contains(args, "changedFiles,files") {
@@ -551,6 +589,9 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 								return execx.Result{}, errors.New("private draft file metadata requires authentication")
 							}
 							evidenceReads++
+							if tc.mergedOnEvidencePoll && evidenceReads > tc.pendingChecks {
+								state = "MERGED"
+							}
 							switch {
 							case tc.checkAfterVerification && verifications > 0:
 								rollup = `[{"name":"CI","conclusion":"SUCCESS"},{"name":"Web and browser tests","status":"IN_PROGRESS"}]`
@@ -587,7 +628,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 							}
 							fileEvidence = fmt.Sprintf(`,"changedFiles":%d,"files":[%s]`, fileCount, strings.Join(files, ","))
 						}
-						return execx.Result{Stdout: fmt.Sprintf(`{"id":"PR_id","number":42,"url":%q,"state":"OPEN","mergeable":"MERGEABLE","baseRefName":"main","headRefName":%q,"headRefOid":%q,"isDraft":%t,"statusCheckRollup":%s%s}`, prURL, branch, head, draft, rollup, fileEvidence)}, nil
+						return execx.Result{Stdout: fmt.Sprintf(`{"id":"PR_id","number":42,"url":%q,"state":%q,"mergeable":"MERGEABLE","baseRefName":"main","headRefName":%q,"headRefOid":%q,"isDraft":%t,"statusCheckRollup":%s%s}`, prURL, state, branch, head, draft, rollup, fileEvidence)}, nil
 					case strings.Contains(args, "api repos/acme/repo/pulls?") && creates > 0:
 						return execx.Result{Stdout: fmt.Sprintf(`[{"html_url":%q,"title":"Issue","state":"open","head":{"ref":%q,"repo":{"full_name":"acme/repo"}},"base":{"ref":"main"}}]`, prURL, branch)}, nil
 					case strings.HasPrefix(args, "api "):
@@ -597,6 +638,18 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				return execx.Result{}, fmt.Errorf("unexpected command %s %s", cmd.Name, args)
 			})
 			h := New(runner)
+			const verificationEstimate = 30 * time.Second
+			const verificationTimingKey = "acme/repo/checks"
+			h.CheckTimings = &CheckTimings{}
+			h.CheckTimings.record(verificationTimingKey, verificationEstimate)
+			h.ReleaseWorkspace = func() { workspaceHeld = false }
+			h.AcquireWorkspace = func(context.Context) error {
+				if mergeSeenDuringRepair {
+					t.Fatal("repair cycle requested disk after observing a merge")
+				}
+				workspaceHeld = true
+				return nil
+			}
 			h.PRChecksWatchTimeout = 10 * time.Second
 			if tc.earlyReady && !tc.readyOnPassingPoll {
 				h.PRChecksWatchTimeout = 20 * time.Second
@@ -606,7 +659,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 					lastWait = line
 				}
 			}
-			h.Sleep = func(context.Context, time.Duration) error {
+			h.Sleep = func(_ context.Context, delay time.Duration) error {
 				waits++
 				if tc.earlyReady {
 					if !accepted || !draft || api.posts != 1 || reviewerRuns != 1 || ready != 0 || verifications != 0 {
@@ -622,11 +675,19 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 						t.Fatalf("invalid GitHub refresh in progress: %s", lastWait)
 					}
 					if waits == 1 {
+						if !tc.readyOnPassingPoll && (delay <= 14*time.Second || delay > 15*time.Second) {
+							t.Fatalf("draft poll delay = %v, want about 15s from the learned CI estimate", delay)
+						}
 						draft = false
 					}
 				}
 				return nil
 			}
+			t.Cleanup(func() {
+				if got := h.CheckTimings.average(verificationTimingKey); got != verificationEstimate {
+					t.Errorf("draft evidence wait changed build estimate to %v, want %v", got, verificationEstimate)
+				}
+			})
 			h.SaveWorkflowPRResume = func(url string) error { savedResume = url; return nil }
 			h.Workspace = workspace.Manager{Root: root, NewGUID: func() string { return "issue-workspace" }}
 			if tc.queued {
@@ -651,6 +712,9 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			if tc.largePatch {
 				h.FinalReviewPasses = 10
 				cfg.Workflow = &config.WorkflowRunConfig{ID: "delivery", EventID: "delivery-event", ReviewAgent: config.ReviewAgentConfig{Complexity: "easy"}}
+			}
+			if tc.repair {
+				h.FinalReviewPasses = 1
 			}
 			result := h.Run(t.Context(), cfg)
 			if result.ExitCode != tc.wantExit {
@@ -732,9 +796,19 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				}
 				return
 			}
-			if tc.mergedDuringEvidence {
-				if verifications != 1 || !result.ReviewInterrupted || !errors.Is(result.Err, githubutil.ErrReviewInterrupted) {
-					t.Fatalf("external merge during verification must fail the handoff: %+v", result)
+			if tc.mergedAtReview != "" || tc.mergedDuringEvidence || tc.mergedOnEvidencePoll {
+				wantPosts := 1
+				if tc.mergedAtReview == "before" || tc.mergedAtReview == "during" {
+					wantPosts = 0
+				}
+				wantVerifications := 0
+				if tc.mergedDuringEvidence {
+					wantVerifications = 1
+				}
+				if workspaceHeld || creates != 1 || api.posts != wantPosts || verifications != wantVerifications || ready != 0 ||
+					result.Err != nil || result.PRURL != prURL || !result.PRAlreadyMerged || result.ReviewInterrupted || result.PRVerificationPassed {
+					t.Fatalf("external merge must complete the task and release its workspace: held=%t, verifications=%d, ready=%d, result=%+v",
+						workspaceHeld, verifications, ready, result)
 				}
 				return
 			}
@@ -766,7 +840,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				git(remote, "update-ref", "refs/pull/42/head", api.head)
 			}
 			wantReviews := 1
-			if tc.headMoved || tc.evidenceOutage {
+			if tc.headMoved || tc.evidenceOutage || tc.repair {
 				wantReviews = 2
 			}
 			wantVerifications := 1

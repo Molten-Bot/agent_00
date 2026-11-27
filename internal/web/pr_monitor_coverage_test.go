@@ -54,6 +54,7 @@ func TestShouldMonitorTaskPR(t *testing.T) {
 		{"completed with pr url", Task{Status: "completed", PRURL: "url"}, true},
 		{"no_changes with pr url", Task{Status: "no_changes", PRURL: "url"}, true},
 		{"workflow already confirmed merge", Task{Status: "merged", PRURL: "url"}, true},
+		{"stopped with pr url", Task{Status: "stopped", PRURL: "url"}, true},
 		{"running with pr url", Task{Status: "running", PRURL: "url"}, false},
 		{"errored with pr url", Task{Status: "error", PRURL: "url"}, false},
 	}

@@ -2055,6 +2055,24 @@ func (b *Broker) RecordReleaseFromTask(task Task, mergedAt string) {
 	b.notifySubscribersLocked()
 }
 
+func (b *Broker) recordRetainedIssueStop(requestID, prURL string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	now := b.now().UTC()
+	task := b.tasks[requestID]
+	if task == nil && prURL != "" {
+		// Keep checking the retained PR for an external merge.
+		task = b.ensureTaskLocked(requestID, now)
+	}
+	if task != nil && task.Status != "merged" {
+		b.updateTaskFromLineLocked(task, "task status=stopped", map[string]string{
+			"err":    "task was stopped by operator",
+			"pr_url": stringsx.FirstNonEmpty(task.PRURL, prURL),
+		}, now)
+	}
+	b.notifySubscribersLocked()
+}
+
 func (b *Broker) backfillReleaseMergeTime(requestID, prURL string, mergedAt time.Time) {
 	if b == nil || mergedAt.IsZero() {
 		return
@@ -2566,6 +2584,13 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 		t.Warning = "Verification will retry automatically."
 		t.ExitCode = 0
 		t.PRURL = stringsx.FirstNonEmpty(taskPRURLFromFields(fields), t.PRURL)
+	}
+
+	if t.Status == "running" && strings.HasPrefix(line, "task status=queued ") && fields["action"] == "wait_for_workspace" {
+		t.Status, t.StageStatus = "pending", "waiting_workspace"
+	}
+	if strings.HasPrefix(line, "task status=admitted ") && fields["action"] == "resume_workspace" {
+		t.Status, t.StageStatus = "running", "start"
 	}
 
 	if strings.HasPrefix(line, "task status=start") {

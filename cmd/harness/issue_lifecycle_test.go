@@ -352,6 +352,36 @@ func TestIssueCheckWaitResumesSameClaimAndPreservesBackoff(t *testing.T) {
 	}
 }
 
+func TestIssueCheckResumeRecordsAlreadyMergedPRAsFulfilled(t *testing.T) {
+	t.Parallel()
+	store, record := lifecycleRecord(t)
+	record.Outcome, record.State = localruntime.IssueChecksPending, localruntime.IssueChecksPending
+	record.PRURL = "https://github.com/acme/repo/pull/42"
+	record.PRVerification = "Verify CI on the reviewed draft."
+	record.Error = "Waiting for GitHub checks"
+	record.NextAttemptAt = time.Now().Add(-time.Second)
+	if err := store.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	work, _, err := prepareIssueExecution(store, record.Run, localruntime.IssueRecoveryConfig{})
+	if err != nil || work == nil {
+		t.Fatalf("prepare issue execution = %v, %v", work, err)
+	}
+	result := app.Result{PRURL: record.PRURL, PRAlreadyMerged: true}
+	if err := work.finish(t.Context(), "completed", result, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Load(record.ID)
+	if err != nil || !got.Fulfilled() || !got.PRAlreadyMerged || got.Outcome != "completed" ||
+		got.Error != "" || !got.NextAttemptAt.IsZero() || got.PRVerification != record.PRVerification ||
+		got.VerifiedAt.IsZero() || !got.UnlockPending {
+		t.Fatalf("merged issue receipt = %+v, %v", got, err)
+	}
+	if next, request, err := prepareIssueExecution(store, record.Run, localruntime.IssueRecoveryConfig{}); err != nil || next != nil || request != record.RequestID {
+		t.Fatalf("merged issue retried: %v, %q, %v", next, request, err)
+	}
+}
+
 func TestIssueExecutionDiskFullRestoresAgentBudget(t *testing.T) {
 	t.Parallel()
 	store, record := lifecycleRecord(t)

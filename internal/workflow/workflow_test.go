@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/githubutil"
@@ -274,6 +275,55 @@ func TestEngineMergeGatesAndReviewFindings(t *testing.T) {
 				t.Fatal("duplicate merge")
 			}
 		})
+	}
+}
+
+func TestEngineCompletesChecksPendingRunWhenPRAlreadyMerged(t *testing.T) {
+	t.Parallel()
+	w := definition("review")
+	w.Trigger = Trigger{Event: "pr.opened"}
+	w.Task.Kind = "review"
+	w.Merge.Enabled, w.IncludeBacklog = true, true
+	e, items, _ := testEngine(t, w)
+	pr := Item{Number: 1, Repository: w.Repository, Kind: "pr", Open: true, URL: "https://github.com/acme/repo/pull/1"}
+	*items = []Item{pr}
+	e.InspectPR = func(context.Context, string, string) (Item, error) {
+		t.Fatal("looked up merge eligibility after confirmed merge")
+		return Item{}, nil
+	}
+	e.Merge = func(context.Context, Run) error {
+		t.Fatal("tried to merge an already merged PR")
+		return nil
+	}
+	var terminal string
+	e.Logf = func(format string, args ...any) {
+		if line := fmt.Sprintf(format, args...); strings.Contains(line, "status=completed reason=external_merge") {
+			terminal = line
+		}
+	}
+	tick(t, e)
+	runs, err := e.Runs()
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("initial runs = %+v, error = %v", runs, err)
+	}
+	id := runs[0].ID
+	if err := e.Complete(id, Outcome{Status: OutcomeChecksPending, PRURL: pr.URL}); err != nil {
+		t.Fatal(err)
+	}
+	tick(t, e)
+	if err := e.transaction(func(state *State) error {
+		state.run(id).GitHubRetryAt = e.now().Add(time.Hour)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Complete(id, Outcome{Status: OutcomeAlreadyMerged, PRURL: pr.URL}); err != nil {
+		t.Fatal(err)
+	}
+	tick(t, e)
+	runs, err = e.Runs()
+	if err != nil || len(runs) != 0 || terminal == "" {
+		t.Fatalf("terminal runs = %+v, merge event = %q, error = %v", runs, terminal, err)
 	}
 }
 

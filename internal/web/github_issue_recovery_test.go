@@ -908,172 +908,62 @@ func TestIssueCheckRecoveryWaitsForRateResetThenResubmitsSameClaim(t *testing.T)
 	}
 }
 
-func TestIssueCheckRecoverySettlesMergedPRBeforeResubmitting(t *testing.T) {
+func TestIssueRecoveryOnlyUnlocksClaimAfterConfirmedMerge(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)
 	reconcileOrAdmitTestIssue(t.Context(), s)
-	record := completeRecoveryRecord(t, s, localruntime.IssueChecksPending, 1)
-	record.State = localruntime.IssueChecksPending
+	record := completeRecoveryRecord(t, s, "completed", 1)
+	record.State = "fulfilled"
+	record.PRAlreadyMerged = true
 	record.PRURL = "https://github.com/acme/repo/pull/42"
-	record.PRVerification = "Verify draft checks"
-	doc, err := s.Workflows.Store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	w := doc.Workflows[0]
-	const eventID = "checks-pending-activation"
-	record.Run.Workflow = &config.WorkflowRunConfig{ID: w.ID, EventID: eventID, PolicyHash: w.ExecutionPolicyHash()}
-	s.Workflows.Now = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
-	item := workflow.Item{Kind: "issue", Repository: w.Repository, Number: record.Run.GitHubIssue.Number}
-	if err := s.Workflows.PrepareIssueRecovery(w.ID, w.ExecutionPolicyHash(), eventID, "", item, nil); err != nil {
-		t.Fatal(err)
-	}
+	record.PRVerification = "Verify CI on the draft."
+	record.VerifiedAt = time.Now()
 	if err := s.IssueClaims.Save(record); err != nil {
 		t.Fatal(err)
 	}
-	f.pendingPR = strings.Replace(strings.TrimSuffix(strings.TrimPrefix(recoveryPR("closed", `"2026-01-01T00:02:00Z"`, record.Run.GitHubIssue.Claim.Branch, "main"), "["), "]"), recoveryPRTitle, "Published PR", 1)
 	for range 2 {
 		if err := s.ReconcileIssueWork(t.Context()); err != nil {
 			t.Fatal(err)
 		}
 	}
-	got := latestRecoveryRecord(t, s)
-	if !got.PRMerged() || got.PRTitle != "Published PR" ||
-		got.PRVerification != record.PRVerification || !got.VerifiedAt.IsZero() ||
-		got.UnlockPending || got.LabelAdded || !got.NextAttemptAt.IsZero() || len(f.submissions) != 1 || f.deletes != 1 {
-		t.Fatalf("merge did not settle pending checks: %+v, submissions=%d, label removals=%d", got, len(f.submissions), f.deletes)
-	}
-	response := httptest.NewRecorder()
-	s.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/status", nil))
-	var dashboard Snapshot
-	if err := json.Unmarshal(response.Body.Bytes(), &dashboard); err != nil {
-		t.Fatal(err)
-	}
-	if response.Code != http.StatusOK || dashboard.Stats.TotalSavedSeconds != 120 ||
-		len(dashboard.Tasks) != 1 || dashboard.Tasks[0].Status != "merged" {
-		t.Fatalf("dashboard did not show the merge: %s", response.Body.String())
-	}
-}
-
-func TestConfirmedWorkflowMergeSettlesIssueClaim(t *testing.T) {
-	t.Parallel()
-	for _, state := range []string{"blocked", "retry_wait", localruntime.IssueStateMergedUnverified} {
-		t.Run(state, func(t *testing.T) {
-			t.Parallel()
-			s, _ := recoveryServer(t)
-			const id, requestID, eventID = "abcdef0123456789abcdef0123456789", "issue-task", "workflow-activation"
-			const prURL = "https://github.com/acme/repo/pull/42"
-			mergedAt := time.Now().UTC().Truncate(time.Second)
-			record := localruntime.IssueClaimRecord{
-				Version: 2, ID: id, RequestID: requestID, State: state, Outcome: "error",
-				PRURL: prURL, LabelAdded: true, NextAttemptAt: mergedAt.Add(time.Hour),
-				PRVerification: "Verify draft checks", Error: "draft verification interrupted",
-				Run: config.Config{
-					GitHubIssue: &config.GitHubIssueConfig{Repository: "acme/repo", Number: 17, Claim: &config.GitHubIssueClaim{ID: id}},
-					Workflow:    &config.WorkflowRunConfig{ID: "issues", EventID: eventID},
-				},
-			}
-			if err := s.IssueClaims.Save(record); err != nil {
-				t.Fatal(err)
-			}
-			run := workflow.Run{ID: eventID, RequestID: requestID, PRURL: prURL,
-				Item: workflow.Item{Kind: "issue", Repository: "acme/repo", Number: 17}}
-			for range 2 {
-				if err := s.RecordIssueMerge(run, workflow.Item{URL: prURL, Merged: true, MergedAt: mergedAt}, true); err != nil {
-					t.Fatal(err)
-				}
-				if err := s.RecordWorkflowMerge(run, mergedAt); err != nil {
-					t.Fatal(err)
-				}
-			}
-			// A fresh broker has no task log to override the claim status.
-			s.Broker = NewBroker()
-			s.IssueClaims = &localruntime.IssueClaimStore{Root: s.IssueClaims.Root}
-			got := latestRecoveryRecord(t, s)
-			if !got.PRMerged() || got.Outcome != "error" || !got.NextAttemptAt.IsZero() || !got.UnlockPending ||
-				got.Error != mergedUnverifiedIssueError || got.FailureDetail() != record.Error || got.PRVerification != record.PRVerification || !got.PRMergedAt.Equal(mergedAt) {
-				t.Fatalf("confirmed merge did not settle the claim: %+v", got)
-			}
-			tasks := s.snapshot().Tasks
-			if len(tasks) != 1 || tasks[0].Status != "merged" || tasks[0].PRURL != prURL ||
-				tasks[0].Error != "" || tasks[0].RetryAt != "" || !tasks[0].HistoryOnly {
-				t.Fatalf("dashboard lost the confirmed merge after restart: %+v", tasks)
-			}
-		})
-	}
-}
-
-func TestIssueRecoveryChecksRecordedPRAcrossBranchReuse(t *testing.T) {
-	t.Parallel()
-	s, f := recoveryServer(t)
-	reconcileOrAdmitTestIssue(t.Context(), s)
-	record := completeRecoveryRecord(t, s, "error", 1)
-	record.PRURL = "https://github.com/acme/repo/pull/42"
-	record.PRVerification = "Verify draft checks"
-	if err := s.IssueClaims.Save(record); err != nil {
-		t.Fatal(err)
-	}
-	branch := record.Run.GitHubIssue.Claim.Branch
-	closed := recoveryPR("closed", "null", branch, "main")
-	older := strings.Replace(recoveryPR("closed", `"2026-01-01T00:01:00Z"`, branch, "main"), `"number":42`, `"number":41`, 1)
-	f.prs = strings.TrimSuffix(closed, "]") + "," + strings.TrimPrefix(older, "[")
-	if err := s.ReconcileIssueWork(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if got := latestRecoveryRecord(t, s); got.Fulfilled() || got.PRURL != record.PRURL {
-		t.Fatalf("older merge settled the recorded closed PR: %+v", got)
-	}
 	if response := retryIssue(t, s, record.ID, true); response.Code != http.StatusConflict ||
-		!strings.Contains(response.Body.String(), "reopen the existing pull request") {
-		t.Fatalf("retry of closed PR: status=%d body=%s", response.Code, response.Body.String())
+		!strings.Contains(response.Body.String(), "pull request is already merged") {
+		t.Fatalf("retry after confirmed merge: status=%d body=%s", response.Code, response.Body.String())
 	}
-	// The linked PR can merge even if branch discovery no longer lists it.
-	expireIssueRetry(t, s, record.ID)
-	f.prs = older
-	f.pendingPR = strings.TrimSuffix(strings.TrimPrefix(recoveryPR("closed", `"2026-01-01T00:02:00Z"`, branch, "main"), "["), "]")
-	s.Broker.now = func() time.Time { return time.Now().Add(retainedIssuePRPollInterval + time.Second) }
-	if err := s.ReconcileIssueWork(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if got := latestRecoveryRecord(t, s); got.Outcome != "merged" || got.PRURL != record.PRURL || len(f.submissions) != 1 {
-		t.Fatalf("recorded merge was not settled: %+v, submissions=%d", got, len(f.submissions))
+	got := latestRecoveryRecord(t, s)
+	if !got.PRMerged() || got.Outcome != "completed" || got.UnlockPending || got.LabelAdded ||
+		got.PRVerification != record.PRVerification || len(f.submissions) != 1 || f.deletes != 1 {
+		t.Fatalf("confirmed merge reconciliation = %+v, submissions=%d deletes=%d", got, len(f.submissions), f.deletes)
 	}
 }
 
-func TestIssueRecoveryPreservesFailedVerificationAfterExternalMerge(t *testing.T) {
+func TestIssueRecoveryRecordsExternalMergeAsTerminalSuccess(t *testing.T) {
 	t.Parallel()
-	for _, mode := range []string{"live failed task", "restart", "explicit retry", "legacy fulfilled record", "legacy merged-unverified record"} {
+	for _, mode := range []string{"restart", "explicit retry", "legacy fulfilled record", "legacy merged-unverified record"} {
 		t.Run(mode, func(t *testing.T) {
 			s, f := recoveryServer(t)
 			reconcileOrAdmitTestIssue(t.Context(), s)
 			record := completeRecoveryRecord(t, s, "error", 1)
 			const failure = "pr_verification: reviewed patch evidence is truncated"
 			const prURL = "https://github.com/acme/repo/pull/42"
-			const eventID = "workflow-activation"
-			startedAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-			doc, err := s.Workflows.Store.Load()
-			if err != nil {
-				t.Fatal(err)
-			}
-			w := doc.Workflows[0]
-			record.Run.Workflow = &config.WorkflowRunConfig{ID: w.ID, EventID: eventID, PolicyHash: w.ExecutionPolicyHash()}
-			record.StartedAt = startedAt.Add(15 * time.Second)
 			engine := s.Workflows
+			startedAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 			engine.Now = func() time.Time { return startedAt }
-			engine.Reconcile = func(string) string { return record.RequestID }
-			engine.Fetch = func(context.Context, string, workflow.ScanNeeds) ([]workflow.Item, error) { return nil, nil }
-			item := workflow.Item{Repository: w.Repository, Kind: "issue", Number: record.Run.GitHubIssue.Number}
-			if err := engine.PrepareIssueRecovery(w.ID, w.ExecutionPolicyHash(), eventID, "", item, nil); err != nil {
+			policy := record.Run.Workflow
+			item := workflow.Item{Kind: "issue", Repository: record.Run.GitHubIssue.Repository, Number: record.Run.GitHubIssue.Number}
+			if err := engine.PrepareIssueRecovery(policy.ID, policy.PolicyHash, policy.EventID, "", item, nil); err != nil {
 				t.Fatal(err)
 			}
-			if err := engine.Complete(eventID, workflow.Outcome{Status: "failed", PRURL: prURL, Reason: failure}); err != nil {
+			engine.Fetch = func(context.Context, string, workflow.ScanNeeds) ([]workflow.Item, error) { return nil, nil }
+			engine.Reconcile = func(string) string { return record.RequestID }
+			if err := engine.Complete(policy.EventID, workflow.Outcome{Status: workflow.OutcomeChecksPending, PRURL: prURL}); err != nil {
 				t.Fatal(err)
 			}
 			if err := engine.Tick(t.Context()); err != nil {
 				t.Fatal(err)
 			}
-			if runs, err := engine.Runs(); err != nil || len(runs) != 0 {
-				t.Fatalf("failed activation was not retired: %+v, %v", runs, err)
+			if runs, err := engine.Runs(); err != nil || len(runs) != 1 || runs[0].Status != workflow.OutcomeChecksPending {
+				t.Fatalf("expected retained checks-pending activation, got %+v, %v", runs, err)
 			}
 			record.PRVerification = "Verify CI and submitted review on the published head."
 			record.RunError, record.Error = failure, failure
@@ -1102,6 +992,14 @@ func TestIssueRecoveryPreservesFailedVerificationAfterExternalMerge(t *testing.T
 					t.Fatal(err)
 				}
 			}
+			if mode == "legacy merged-unverified record" {
+				if err := s.IssueClaims.Update(record.ID, func(r *localruntime.IssueClaimRecord) error {
+					r.State, r.PRURL, r.Error = localruntime.IssueStateMergedUnverified, prURL, "pull request merged before draft verification passed"
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
 			f.prs = recoveryPR("closed", `"2026-01-01T00:02:00Z"`, record.Run.GitHubIssue.Claim.Branch, "main")
 			restarted := automationServer(t, f.automationGitHub)
 			restarted.IssueClaims = &localruntime.IssueClaimStore{Root: s.IssueClaims.Root}
@@ -1111,9 +1009,15 @@ func TestIssueRecoveryPreservesFailedVerificationAfterExternalMerge(t *testing.T
 				restarted.Broker.IngestLog("task status=error request_id=" + record.RequestID + " pr_url=" + prURL)
 			}
 			if mode == "explicit retry" {
+				if err := restarted.IssueClaims.BeginExecution(latestRecoveryRecord(t, restarted)); err != nil {
+					t.Fatal(err)
+				}
 				if response := retryIssue(t, restarted, record.ID, true); response.Code != http.StatusConflict ||
 					!strings.Contains(response.Body.String(), "pull request is already merged") {
 					t.Fatalf("retry after merge: status=%d body=%s", response.Code, response.Body.String())
+				}
+				if _, err := os.Stat(filepath.Join(restarted.IssueClaims.Root, ".storage-reserve-"+record.ID)); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("execution reserve after merge: %v", err)
 				}
 			}
 			for range 2 {
@@ -1121,14 +1025,32 @@ func TestIssueRecoveryPreservesFailedVerificationAfterExternalMerge(t *testing.T
 					t.Fatal(err)
 				}
 			}
+			if err := engine.Tick(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if runs, err := engine.Runs(); err != nil || len(runs) != 0 {
+				t.Fatalf("external merge left a workflow activation: %+v, %v", runs, err)
+			}
 			got := latestRecoveryRecord(t, restarted)
-			if !got.PRMerged() || got.State != localruntime.IssueStateMergedUnverified || got.Error != mergedUnverifiedIssueError ||
-				got.ID != record.ID || got.RequestID != record.RequestID || got.FailureDetail() != failure ||
+			if !got.PRMerged() || !got.PRAlreadyMerged || got.State != localruntime.IssueStateMergedUnverified ||
+				got.Error != mergedUnverifiedIssueError || got.Incident != "" ||
+				got.ID != record.ID || got.RequestID != record.RequestID || got.Outcome != "completed" || got.FailureDetail() != failure ||
 				got.PRVerification != record.PRVerification || got.PRURL != prURL || !got.VerifiedAt.IsZero() || !got.NextAttemptAt.IsZero() ||
-				got.UnlockPending || issueRunFailures(got) != 0 || len(f.submissions) != 1 || len(restarted.Broker.verifiedTaskPRs) != 0 {
-				t.Fatalf("external merge lost failed verification history: %+v, submissions=%d", got, len(f.submissions))
+				got.UnlockPending || got.LabelAdded || got.ExecutionAgentAttempts != nil || issueRunFailures(got) != 0 ||
+				len(f.submissions) != 1 {
+				t.Fatalf("external merge outcome or verification history: %+v, submissions=%d", got, len(f.submissions))
 			}
 			response := httptest.NewRecorder()
+			restarted.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/state", nil))
+			var snapshot Snapshot
+			if err := json.Unmarshal(response.Body.Bytes(), &snapshot); response.Code != http.StatusOK || err != nil {
+				t.Fatalf("task state API: status=%d, decode error=%v", response.Code, err)
+			}
+			if len(snapshot.Tasks) != 1 || snapshot.Tasks[0].Status != "merged" || snapshot.Tasks[0].StageStatus != "merged" || snapshot.Tasks[0].Error != "" ||
+				len(snapshot.Tasks[0].IssueAttempts) != 1 || snapshot.Tasks[0].IssueAttempts[0].Error != failure {
+				t.Fatalf("merged task projection = %+v", snapshot.Tasks)
+			}
+			response = httptest.NewRecorder()
 			restarted.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/status", nil))
 			var dashboard Snapshot
 			if err := json.Unmarshal(response.Body.Bytes(), &dashboard); err != nil {
@@ -2577,6 +2499,84 @@ func TestIssueRecoveryKeepsPausedAndUncertainWorkersBlocked(t *testing.T) {
 	}
 }
 
+func TestStopRetainedIssueTask(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, state, outcome, control, status string
+	}{
+		{name: "queued", state: "queued", status: "queued"},
+		{name: "paused after restart", state: "blocked", outcome: "interrupted", control: "paused", status: "paused"},
+		{name: "checks pending", state: localruntime.IssueChecksPending, outcome: localruntime.IssueChecksPending, status: "queued"},
+		{name: "waiting to retry", state: "retry_wait", outcome: "error", status: "queued"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f := recoveryServer(t)
+			reconcileOrAdmitTestIssue(t.Context(), s)
+			record := completeRecoveryRecord(t, s, tc.outcome, 1)
+			record.State, record.Control = tc.state, tc.control
+			record.NextAttemptAt = time.Now().Add(time.Hour)
+			if tc.outcome == localruntime.IssueChecksPending {
+				record.PRURL = "https://github.com/acme/repo/pull/42"
+			}
+			if err := s.IssueClaims.Save(record); err != nil {
+				t.Fatal(err)
+			}
+			if tc.outcome == localruntime.IssueChecksPending {
+				s.Broker.IngestLog("task status=queued request_id=" + record.RequestID + " action=wait_for_github_checks")
+				tc.status = "pending"
+			}
+			s.ResolveTaskControls = func(string) TaskControls { return TaskControls{} }
+			s.StopTask = func(context.Context, string) error { return ErrTaskNotFound }
+			handler := s.Handler()
+			assertStatus := func(want string, canStop bool) {
+				t.Helper()
+				res := httptest.NewRecorder()
+				handler.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/api/status", nil))
+				var snapshot Snapshot
+				if err := json.Unmarshal(res.Body.Bytes(), &snapshot); err != nil {
+					t.Fatal(err)
+				}
+				for _, task := range snapshot.Tasks {
+					if task.RequestID == record.RequestID {
+						if task.Status != want || task.Controls.Stop != canStop {
+							t.Fatalf("task status = %q, stop = %t, want %q, %t", task.Status, task.Controls.Stop, want, canStop)
+						}
+						return
+					}
+				}
+				t.Fatalf("task %q missing from status response", record.RequestID)
+			}
+			assertStatus(tc.status, true)
+			stop := func(want int) {
+				t.Helper()
+				res := httptest.NewRecorder()
+				handler.ServeHTTP(res, httptest.NewRequest(http.MethodPost, "/api/tasks/"+record.RequestID+"/stop", nil))
+				if res.Code != want {
+					t.Fatalf("stop = %d %s, want %d", res.Code, res.Body, want)
+				}
+			}
+			stop(http.StatusOK)
+			assertStatus("stopped", false)
+			stop(http.StatusConflict)
+			if err := s.ReconcileIssueWork(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			saved := latestRecoveryRecord(t, s)
+			if saved.Control != "stopped" || saved.Outcome != "stopped" || !saved.NextAttemptAt.IsZero() ||
+				len(f.submissions) != 1 || f.deletes != 1 {
+				t.Fatalf("stop did not persist and release the label without resubmitting: %+v, submissions=%d deletes=%d", saved, len(f.submissions), f.deletes)
+			}
+			assertStatus("stopped", false)
+			if record.PRURL != "" {
+				if err := s.Broker.MarkTaskPRMerged(record.RequestID, ""); err != nil {
+					t.Fatal(err)
+				}
+				assertStatus("merged", false)
+			}
+		})
+	}
+}
+
 func TestIssueRecoveryBlocksLegacyDiskExhaustionUntilExplicitRetry(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)
@@ -2743,7 +2743,7 @@ func TestIssuePRMetadataFailureSettlesOperatorMerge(t *testing.T) {
 		}
 	}
 	got := latestRecoveryRecord(t, s)
-	if !got.Fulfilled() || got.Outcome != "merged" || got.Error != "" || got.FailureDetail() != failure ||
+	if !got.Fulfilled() || got.Outcome != "completed" || got.Error != "" || got.FailureDetail() != failure ||
 		got.UnlockPending || !got.NextAttemptAt.IsZero() || len(f.submissions) != 1 {
 		t.Fatalf("merge did not settle metadata failure: %+v, submissions=%d", got, len(f.submissions))
 	}

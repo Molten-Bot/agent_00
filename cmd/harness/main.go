@@ -360,6 +360,7 @@ func runServer(args []string) int {
 	var wakeIssueRecovery func()
 	var verifyIssueOwnership func(context.Context, config.Config) error
 	githubCooldown := &githubutil.Cooldown{Logf: daemonLogger}
+	checkTimings := &app.CheckTimings{}
 	var workflowEngine *workflow.Engine
 	var enqueueLocalRun func(reqCtx context.Context, runCfg config.Config, source string, force bool) (string, error)
 	var reviewResumeMu sync.Mutex
@@ -566,6 +567,12 @@ func runServer(args []string) int {
 			if issueWork != nil {
 				logIssueWorkspaceStorage(diskRequest.ExistingDir, requestID, daemonLogger)
 			}
+			lease := &taskWorkspaceLease{
+				scheduler: scheduler, requestID: requestID, handle: taskHandle,
+				logf: daemonLogger, timings: checkTimings,
+				history: diskHistory, diskKey: diskKey,
+			}
+			defer lease.suspend()
 			forceRetry := false
 			for {
 				if taskHandle != nil {
@@ -591,12 +598,17 @@ func runServer(args []string) int {
 				settings := signingSettings(activeCfg, runner)
 				forceAcquire := forceRetry
 				var workspaceRoot string
+				remoteResume := issueWork != nil && issueWork.record.Outcome == localruntime.IssueChecksPending && issueWork.record.PRURL != ""
 				admission := prepareLocalTaskAdmission(
 					runCtx,
 					taskHandle,
 					settings.ValidatedSnapshot,
 					settings.TryValidatedSnapshot,
 					func() (func(), error) {
+						if remoteResume {
+							workspaceRoot = diskRequest.Workspace.Root
+							return func() {}, nil
+						}
 						acquireCtx, cancelAcquire := context.WithCancel(runCtx)
 						if taskHandle != nil {
 							taskHandle.SetAcquireCancel(cancelAcquire)
@@ -713,7 +725,14 @@ func runServer(args []string) int {
 				taskWorkspace := diskRequest.Workspace
 				taskWorkspace.Root = workspaceRoot
 				canRetryWorkspace := diskRequest.RetryRoot == "" && canRetryTaskWorkspace(diskRequest.Workspace)
-				outcome := runLocalTask(context.WithValue(runCtx, githubCooldownContextKey{}, githubCooldown), taskRunner, daemonLogger, "local", requestID, runCfg, taskReviewPasses(runCfg), taskHandle, signingSnapshot, monitorBroker, taskWorkspace, func(runDir string) {
+				lease.disk = diskRequest
+				lease.disk.Workspace.Root = workspaceRoot
+				if !remoteResume {
+					lease.release = release
+				}
+				taskCtx := context.WithValue(runCtx, githubCooldownContextKey{}, githubCooldown)
+				taskCtx = context.WithValue(taskCtx, taskWorkspaceLeaseKey{}, lease)
+				outcome := runLocalTask(taskCtx, taskRunner, daemonLogger, "local", requestID, runCfg, taskReviewPasses(runCfg), taskHandle, signingSnapshot, monitorBroker, taskWorkspace, func(runDir string) {
 					recordLocalTaskDiskUsage(diskHistory, diskKey, requestID, runDir, daemonLogger)
 				}, canRetryWorkspace)
 				if taskHandle != nil {
@@ -721,7 +740,7 @@ func runServer(args []string) int {
 				}
 				if outcome.State == "retry_workspace" {
 					daemonLogger("task status=warn action=retry_workspace_allocation request_id=%s err=%q", requestID, outcome.Result.Err)
-					release()
+					lease.suspend()
 					diskRequest.RetryRoot = workspaceRoot
 					if errors.Is(outcome.Result.Err, os.ErrPermission) {
 						diskRequest.PermissionDeniedRoot = workspaceRoot
@@ -733,7 +752,6 @@ func runServer(args []string) int {
 					}
 					continue
 				}
-				defer release()
 
 				reviewOutcome := workflow.Outcome{
 					Status: "succeeded", PRURL: outcome.Result.PRURL, Reason: "Task completed", CompletedAt: time.Now().UTC(),
@@ -746,6 +764,9 @@ func runServer(args []string) int {
 				}
 				if outcome.Result.Err != nil {
 					reviewOutcome.Reason = outcome.Result.Err.Error()
+				}
+				if outcome.Result.PRAlreadyMerged {
+					reviewOutcome.Status = workflow.OutcomeAlreadyMerged
 				}
 				var rate *githubutil.RateLimitError
 				if outcome.State == "error" && (errors.Is(outcome.Result.Err, app.ErrReviewPending) || errors.Is(outcome.Result.Err, app.ErrReviewHeadChanged) || errors.As(outcome.Result.Err, &rate)) {
@@ -820,6 +841,18 @@ func runServer(args []string) int {
 		}
 		workflowEngine = uiServer.Workflows
 		workflowEngine.MemoryPressure = memoryPressure
+		workflowEngine.IssueTaskStopped = func(eventID string) bool {
+			records, _ := issueClaims.List()
+			var latest localruntime.IssueClaimRecord
+			for _, record := range records {
+				if run := record.Run.Workflow; run != nil && run.EventID == eventID &&
+					(latest.ID == "" || record.Run.GitHubIssue.Claim.Attempt > latest.Run.GitHubIssue.Claim.Attempt ||
+						(record.Run.GitHubIssue.Claim.Attempt == latest.Run.GitHubIssue.Claim.Attempt && record.UpdatedAt.After(latest.UpdatedAt))) {
+					latest = record
+				}
+			}
+			return latest.Outcome == "stopped"
+		}
 		brokerStatus := workflowEngine.Status
 		workflowEngine.Status = func(requestID string) workflow.Outcome {
 			// The worker can emit a terminal task log just before saving its
@@ -1487,6 +1520,15 @@ func runLocalTask(
 
 	h := app.New(runner)
 	h.Workspace = taskWorkspace
+	if lease, ok := ctx.Value(taskWorkspaceLeaseKey{}).(*taskWorkspaceLease); ok {
+		h.CheckTimings = lease.timings
+		h.ReleaseWorkspace = lease.suspend
+		h.AcquireWorkspace = lease.acquire
+		h.OnWorkspace = func(dir string) {
+			lease.disk.ExistingDir = dir
+			lease.disk.Workspace.Root = filepath.Dir(dir)
+		}
+	}
 	if cooldown, ok := ctx.Value(githubCooldownContextKey{}).(*githubutil.Cooldown); ok {
 		h.GitHubCooldown = cooldown
 		h.WaitForGitHub = true
@@ -1520,6 +1562,7 @@ func runLocalTask(
 		ctx = repairCtx
 		defer func() { watchdog.Close(); cancel(nil) }()
 		h.OnStep = func(step string) { watchdog.Advance(step) }
+		pauseWatchdogDuringAdmission(&h, watchdog)
 		h.Workspace.Root = filepath.Dir(repairWork.workspaceDir())
 		h.Workspace.NewGUID = func() string { return repairWork.record.ID }
 	}
@@ -1556,7 +1599,7 @@ func runLocalTask(
 	if res.Err != nil && context.Cause(ctx) != nil {
 		res.Err = errors.Join(res.Err, context.Cause(ctx))
 	}
-	if taskHandle.IsStopped() {
+	if taskHandle.IsStopped() && !res.PRAlreadyMerged {
 		stopErr := context.Cause(ctx)
 		if stopErr == nil {
 			stopErr = errTaskStoppedByOperator
