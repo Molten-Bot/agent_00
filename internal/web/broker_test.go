@@ -220,6 +220,39 @@ func TestBrokerShowsWorkspaceReadmissionOnSameTaskAndStage(t *testing.T) {
 	}
 }
 
+func TestBrokerDistinguishesCodexWaitFromAgentExecution(t *testing.T) {
+	t.Parallel()
+	b := NewBroker()
+	const id = "issue-codex-session"
+	b.IngestLog("task status=start request_id=" + id + " explicit_terminal=true")
+	b.IngestLog("task request_id=" + id + " stage=review status=start")
+	for _, tc := range []struct {
+		state, status string
+		running       int
+	}{
+		{"waiting_for_codex_session", "pending", 0},
+		{"queued", "pending", 0},
+		{"running", "running", 1},
+		{"running_agent", "running", 1},
+	} {
+		b.IngestLog("task request_id=" + id + " task_state=" + tc.state)
+		if tc.state == "running_agent" {
+			b.IngestLog("task request_id=" + id + " stage=review status=running elapsed_s=15")
+		}
+		task, ok := b.Task(id)
+		if !ok || task.ExecutionState != tc.state || task.Status != tc.status || task.Stage != "review" {
+			t.Fatalf("task state after %s = %+v", tc.state, task)
+		}
+		if stats := b.Snapshot().Stats; stats.RunningTasks != tc.running || stats.PendingTasks != 1-tc.running {
+			t.Fatalf("task stats after %s = %+v", tc.state, stats)
+		}
+	}
+	b.IngestLog("task status=completed request_id=" + id)
+	if tasks := b.TaskList(); len(tasks) != 1 || tasks[0].ExecutionState != "" || tasks[0].Status != "completed" {
+		t.Fatalf("terminal task state = %+v", tasks)
+	}
+}
+
 func TestBrokerTracksTaskLifecycleAndCommandOutput(t *testing.T) {
 	t.Parallel()
 

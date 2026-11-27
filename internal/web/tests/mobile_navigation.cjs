@@ -970,10 +970,26 @@ test('Studio shows pending draft verification on the same issue task', async t =
 
   await update({
     status: 'pending', stage: 'checks', stage_status: 'waiting_workspace',
+    issue_state: 'queued', execution_state: 'queued',
     logs: [{ stream: 'meta', time: now, text: 'task status=queued request_id=issue-run reason=disk_space' }],
   });
   await checks.getByText('Waiting for workspace disk space').waitFor();
   assert.equal(await checks.getByRole('img', { name: 'GitHub checks logo' }).count(), 0);
+
+  await update({
+    status: 'pending', execution_state: 'waiting_for_codex_session',
+    issue_state: 'waiting_for_codex_session',
+  });
+  await progress.getByText('Waiting for Codex session').waitFor();
+  assert.equal(await progress.evaluate(node => node.classList.contains('is-running')), false);
+
+  await update({
+    status: 'running', execution_state: 'running_agent', issue_state: 'running_agent',
+    stage_status: 'start',
+  });
+  await progress.and(page.locator('.is-running')).waitFor();
+  await progress.getByText('Agent running').waitFor();
+  assert.equal(await progress.locator('.task-progress-wait').count(), 0);
 
   await update({
     status: 'merged', stage: 'finalize', stage_status: 'ok', issue_state: 'fulfilled',

@@ -107,6 +107,7 @@ type Task struct {
 	StatusTransitions []TaskStatusTransition `json:"status_transitions,omitempty"`
 	Stage             string                 `json:"stage,omitempty"`
 	StageStatus       string                 `json:"stage_status,omitempty"`
+	ExecutionState    string                 `json:"execution_state,omitempty"`
 	ExitCode          int                    `json:"exit_code,omitempty"`
 	WorkspaceDir      string                 `json:"workspace_dir,omitempty"`
 	Branch            string                 `json:"branch,omitempty"`
@@ -382,6 +383,7 @@ type taskState struct {
 	StatusTransitions []TaskStatusTransition
 	Stage             string
 	StageStatus       string
+	ExecutionState    string
 	ExitCode          int
 	WorkspaceDir      string
 	Branch            string
@@ -722,6 +724,7 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 			StatusTransitions: slices.Clone(t.StatusTransitions),
 			Stage:             t.Stage,
 			StageStatus:       t.StageStatus,
+			ExecutionState:    t.ExecutionState,
 			ExitCode:          t.ExitCode,
 			WorkspaceDir:      t.WorkspaceDir,
 			Branch:            t.Branch,
@@ -845,6 +848,7 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 		StatusTransitions: slices.Clone(t.StatusTransitions),
 		Stage:             t.Stage,
 		StageStatus:       t.StageStatus,
+		ExecutionState:    t.ExecutionState,
 		ExitCode:          t.ExitCode,
 		WorkspaceDir:      t.WorkspaceDir,
 		Branch:            t.Branch,
@@ -1070,6 +1074,7 @@ func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON [
 			Status:            "pending",
 			Stage:             "task",
 			StageStatus:       "queued",
+			ExecutionState:    "queued",
 			StartedAt:         now,
 			UpdatedAt:         now,
 		}
@@ -2129,6 +2134,7 @@ func (b *Broker) markTaskPRMergedLocked(task *taskState, mergedTime, now time.Ti
 	}
 	task.Stage = "finalize"
 	task.StageStatus = "merged"
+	task.ExecutionState = ""
 	task.Error, task.Warning, task.ReviewGate = "", "", ""
 	task.ExitCode = 0
 	task.TerminalAt = now
@@ -2550,6 +2556,9 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 	previousStatus := normalizeTaskTerminalStatus(t.Status)
 	defer func() {
 		if t != nil {
+			if isCompletedTaskStatus(t.Status) {
+				t.ExecutionState = ""
+			}
 			if normalizeTaskTerminalStatus(t.Status) != previousStatus {
 				t.recordStatusTransition(previousStatus)
 			}
@@ -2574,28 +2583,50 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 	if strings.HasPrefix(line, "task status=queued ") && fields["action"] == "resume_draft_verification" {
 		t.Status = "pending"
 		t.Stage, t.StageStatus = "task", "queued"
+		t.ExecutionState = "queued"
 		t.Error, t.Warning, t.ReviewURL, t.ReviewGate = "", "", "", ""
 		t.ExitCode = 0
 		t.TerminalAt = time.Time{}
 	}
 	if strings.HasPrefix(line, "task status=queued ") && fields["action"] == "wait_for_github_checks" {
 		t.Status, t.Stage, t.StageStatus = "pending", "checks", "waiting"
+		t.ExecutionState = "waiting_for_github"
 		t.Error, t.ReviewURL, t.ReviewGate = "", "", ""
 		t.Warning = "Verification will retry automatically."
 		t.ExitCode = 0
 		t.PRURL = stringsx.FirstNonEmpty(taskPRURLFromFields(fields), t.PRURL)
 	}
 
-	if t.Status == "running" && strings.HasPrefix(line, "task status=queued ") && fields["action"] == "wait_for_workspace" {
-		t.Status, t.StageStatus = "pending", "waiting_workspace"
+	if strings.HasPrefix(line, "task status=queued ") && !isCompletedTaskStatus(t.Status) {
+		if fields["action"] == "wait_for_workspace" {
+			t.StageStatus = "waiting_workspace"
+		}
+		if fields["action"] != "wait_for_github_checks" {
+			t.ExecutionState = "queued"
+			if t.Status != "paused" {
+				t.Status = "pending"
+			}
+		}
 	}
 	if strings.HasPrefix(line, "task status=admitted ") && fields["action"] == "resume_workspace" {
-		t.Status, t.StageStatus = "running", "start"
+		t.Status, t.StageStatus, t.ExecutionState = "running", "start", "running"
+	}
+	if strings.HasPrefix(line, "task request_id=") && !isCompletedTaskStatus(t.Status) {
+		switch fields["task_state"] {
+		case "queued", "waiting_for_github", "waiting_for_codex_session":
+			t.ExecutionState = fields["task_state"]
+			if t.Status != "paused" {
+				t.Status = "pending"
+			}
+		case "running", "running_agent":
+			t.Status, t.ExecutionState = "running", fields["task_state"]
+		}
 	}
 
 	if strings.HasPrefix(line, "task status=start") {
 		t.Status = "running"
 		t.ReviewStarted = false
+		t.ExecutionState = "running"
 		t.explicitTerminal = fields["explicit_terminal"] == "true"
 		t.Warning = ""
 		t.ReviewURL = ""
@@ -2647,6 +2678,7 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 		t.Status = "pending"
 		t.Stage = "task"
 		t.StageStatus = "queued"
+		t.ExecutionState = "queued"
 		t.Error = ""
 	}
 

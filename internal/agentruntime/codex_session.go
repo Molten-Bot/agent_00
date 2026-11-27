@@ -54,6 +54,31 @@ func (s *CodexSession) ChildFiles() []*os.File {
 // device login. A kernel lock is released even if the harness crashes. Hold it
 // until the child has exited; normal Codex execution rotates and saves tokens.
 func AcquireCodexSession(ctx context.Context, home string) (*CodexSession, error) {
+	return acquireCodexSession(ctx, home, nil)
+}
+
+// AcquireCodexSessionWithAdmission yields admission on contention. Release the
+// readiness probe before rejoining the scheduler so a queued task cannot keep
+// another worker from using the credentials.
+func AcquireCodexSessionWithAdmission(ctx context.Context, home string, yield func(), admit func(context.Context) error) (*CodexSession, error) {
+	for {
+		waited := false
+		session, err := acquireCodexSession(ctx, home, func() {
+			waited = true
+			yield()
+		})
+		if err != nil || !waited {
+			return session, err
+		}
+		session.Release()
+		if err := admit(ctx); err != nil {
+			return nil, err
+		}
+		// Another task can win the lock during admission. Yield again if needed.
+	}
+}
+
+func acquireCodexSession(ctx context.Context, home string, onContention func()) (*CodexSession, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -78,6 +103,10 @@ func AcquireCodexSession(ctx context.Context, home string) (*CodexSession, error
 		}
 		if locked {
 			return &CodexSession{file: file}, nil
+		}
+		if onContention != nil {
+			onContention()
+			onContention = nil
 		}
 		select {
 		case <-ctx.Done():

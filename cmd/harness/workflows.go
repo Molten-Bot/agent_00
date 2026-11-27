@@ -89,7 +89,7 @@ func workflowRunConfigWithLibrary(r workflow.Run, resolve workflowLibraryResolve
 	}
 	if i.Kind == "issue" {
 		c.PRTitle = i.Title
-		c.GitHubIssue = &config.GitHubIssueConfig{Repository: w.Repository, Number: i.Number, Title: i.Title, URL: i.URL, LinkMode: w.Task.IssueLinkMode}
+		c.GitHubIssue = &config.GitHubIssueConfig{Repository: w.Repository, Number: i.Number, Title: i.Title, Priority: config.GitHubIssuePriority(i.Labels), URL: i.URL, LinkMode: w.Task.IssueLinkMode}
 	} else if i.Kind == "pr" && w.Task.Kind == "review" {
 		c.Review = &config.ReviewConfig{PRNumber: i.Number, PRURL: i.URL, HeadBranch: i.HeadBranch, Trigger: "manual", Writeback: "comment"}
 	} else if i.Kind == "pr" {

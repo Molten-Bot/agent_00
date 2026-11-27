@@ -1,6 +1,7 @@
 package agentruntime
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,9 +34,11 @@ var promptImageHarnesses = map[string]struct{}{
 
 // RunOptions controls provider-specific execution behavior.
 type RunOptions struct {
+	// AcquireCodexSession optionally coordinates model discovery with task admission.
+	AcquireCodexSession func(context.Context, string) (*CodexSession, error)
+	Model               string
+	ReasoningEffort     string
 	// WorkspaceDir is the task's private parent directory, including repos and IO.
-	Model            string
-	ReasoningEffort  string
 	WorkspaceDir     string
 	SkipGitRepoCheck bool
 	ImagePaths       []string

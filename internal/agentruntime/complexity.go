@@ -64,7 +64,11 @@ func (r Runtime) ResolveModel(ctx context.Context, runner execx.Runner, dir stri
 	if err != nil {
 		return selection, err
 	}
-	lock, err := AcquireCodexSession(ctx, home)
+	acquire := opts.AcquireCodexSession
+	if acquire == nil {
+		acquire = AcquireCodexSession
+	}
+	lock, err := acquire(ctx, home)
 	if err != nil {
 		return selection, err
 	}
