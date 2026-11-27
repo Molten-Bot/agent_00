@@ -32,6 +32,7 @@ type TaskDiskHistory struct {
 	now       func() time.Time
 	mu        sync.Mutex
 	samples   map[string]taskDiskSamples
+	fallback  map[string]taskDiskSamples
 	dirty     bool
 	needsLoad bool
 }
@@ -39,23 +40,34 @@ type TaskDiskHistory struct {
 type taskDiskSample struct {
 	Bytes     uint64    `json:"bytes"`
 	ExpiresAt time.Time `json:"expiresAt"`
+	Temporary bool      `json:"temporary,omitempty"`
 }
 
 type taskDiskSamples []taskDiskSample
 
-func (s taskDiskSamples) peak(now time.Time) uint64 {
-	var peak uint64
+func (s taskDiskSamples) estimate(now time.Time) uint64 {
+	var peak, largest, baseline uint64
 	for _, sample := range s {
 		if now.Before(sample.ExpiresAt) {
 			peak = max(peak, sample.Bytes)
 		}
+		// Keep the largest size supported by at least two successful runs.
+		// Imported snapshots only contribute to the temporary peak.
+		if sample.Temporary {
+			continue
+		}
+		if sample.Bytes >= largest {
+			largest, baseline = sample.Bytes, largest
+		} else {
+			baseline = max(baseline, sample.Bytes)
+		}
 	}
-	return peak
+	return max(peak, baseline)
 }
 
 func recentTaskDiskSamples(samples taskDiskSamples, now time.Time) taskDiskSamples {
 	samples = slices.DeleteFunc(samples, func(sample taskDiskSample) bool {
-		return !now.Before(sample.ExpiresAt)
+		return sample.Temporary && !now.Before(sample.ExpiresAt)
 	})
 	return samples[max(0, len(samples)-taskDiskHistoryWindow):]
 }
@@ -78,49 +90,61 @@ func OpenTaskDiskHistory(path string) (*TaskDiskHistory, error) {
 		for key, entries := range samples {
 			samples[key] = recentTaskDiskSamples(entries, now)
 		}
-		history.samples = samples
+		if err != nil {
+			// Use readable history for estimates while keeping pending writes
+			// separate so a successful reload won't count fallback data twice.
+			history.fallback = samples
+		} else {
+			history.samples = samples
+		}
 	}
 	return history, err
 }
 
 func readTaskDiskSamples(path string) (map[string]taskDiskSamples, error) {
 	samples := make(map[string]taskDiskSamples)
-	versionedAt, err := readTaskDiskHistoryFile(TaskDiskSamplesPath(path), &samples)
-	if err != nil {
-		return nil, err
+	versionedAt, versionedErr := readTaskDiskHistoryFile(TaskDiskSamplesPath(path), &samples)
+	if versionedErr != nil {
+		samples = nil
 	}
 	var legacy map[string]json.RawMessage
 	legacyAt, err := readTaskDiskHistoryFile(path, &legacy)
 	if err != nil {
-		return nil, err
+		return samples, errors.Join(versionedErr, err)
 	}
 	if !legacyAt.After(versionedAt) {
-		return samples, nil
+		return samples, versionedErr
+	}
+	imports := make(map[string]taskDiskSamples)
+	for key, value := range legacy {
+		var sizes []uint64
+		if value[0] == '[' {
+			err = json.Unmarshal(value, &sizes)
+		} else {
+			var size uint64
+			err = json.Unmarshal(value, &size)
+			// A newer scalar snapshot can contain a rollback estimate or
+			// a measurement whose versioned write did not complete.
+			if size > samples[key].estimate(versionedAt) {
+				sizes = []uint64{size}
+			}
+		}
+		if err != nil {
+			return samples, errors.Join(versionedErr, fmt.Errorf("decode legacy task disk history: %w", err))
+		}
+		for _, size := range sizes {
+			imports[key] = append(imports[key], taskDiskSample{
+				Bytes: size, ExpiresAt: legacyAt.Add(taskDiskLegacyMaxAge), Temporary: true,
+			})
+		}
 	}
 	if samples == nil {
 		samples = make(map[string]taskDiskSamples)
 	}
-	for key, value := range legacy {
-		var sizes []uint64
-		if value[0] == '[' {
-			if err := json.Unmarshal(value, &sizes); err != nil {
-				return nil, fmt.Errorf("decode legacy task disk history: %w", err)
-			}
-		} else {
-			var size uint64
-			if err := json.Unmarshal(value, &size); err != nil {
-				return nil, fmt.Errorf("decode legacy task disk history: %w", err)
-			}
-			// Import new high-water marks written while running an older release.
-			if size > samples[key].peak(versionedAt) {
-				sizes = []uint64{size}
-			}
-		}
-		for _, size := range sizes {
-			samples[key] = append(samples[key], taskDiskSample{size, legacyAt.Add(taskDiskLegacyMaxAge)})
-		}
+	for key, entries := range imports {
+		samples[key] = append(samples[key], entries...)
 	}
-	return samples, nil
+	return samples, versionedErr
 }
 
 func readTaskDiskHistoryFile(path string, dest any) (time.Time, error) {
@@ -175,7 +199,8 @@ func TaskDiskKey(repos []string) string {
 func (h *TaskDiskHistory) RequiredBytes(key string) uint64 {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.samples[key].peak(h.now())
+	now := h.now()
+	return max(h.samples[key].estimate(now), h.fallback[key].estimate(now))
 }
 
 // Record adds a measurement from a successful task, including its tool caches.
@@ -184,7 +209,7 @@ func (h *TaskDiskHistory) Record(key string, size uint64) error {
 	defer h.mu.Unlock()
 	if key != "" && size > 0 {
 		now := h.now()
-		sample := taskDiskSample{size, now.Add(taskDiskSampleMaxAge).UTC()}
+		sample := taskDiskSample{Bytes: size, ExpiresAt: now.Add(taskDiskSampleMaxAge).UTC()}
 		h.samples[key] = recentTaskDiskSamples(append(h.samples[key], sample), now)
 		h.dirty = true
 	}
@@ -215,23 +240,24 @@ func (h *TaskDiskHistory) flushLocked() error {
 			samples[key] = append(samples[key], pending...)
 		}
 		h.samples = samples
+		h.fallback = nil
 		h.needsLoad = false
 	}
 
 	now := h.now()
-	maxima := make(map[string]uint64)
+	estimates := make(map[string]uint64)
 	for key, samples := range h.samples {
 		samples = recentTaskDiskSamples(samples, now)
-		if peak := samples.peak(now); peak > 0 {
+		if estimate := samples.estimate(now); estimate > 0 {
 			h.samples[key] = samples
-			maxima[key] = peak
+			estimates[key] = estimate
 		} else {
 			delete(h.samples, key)
 		}
 	}
 	// Write the rollback-compatible snapshot first so a newer scalar file
 	// can only come from an older release or an interrupted save.
-	if err := writeTaskDiskHistoryFile(h.path, maxima); err != nil {
+	if err := writeTaskDiskHistoryFile(h.path, estimates); err != nil {
 		return fmt.Errorf("save task disk history: %w", err)
 	}
 	if err := writeTaskDiskHistoryFile(TaskDiskSamplesPath(h.path), h.samples); err != nil {
@@ -388,15 +414,11 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 			setupErr = fmt.Errorf("inspect workspace storage %s: %w", path, sample.err)
 			continue
 		}
-		needed := minimum
-		if force {
-			needed = workspace.MinimumFreeBytes
-		}
-		if checkPersistent != nil && sample.total < needed {
-			// Freeing space here cannot admit this task. Keep looking for
-			// a usable root or a setup error that explains the failure.
+		if checkPersistent != nil && sample.total < workspace.MinimumFreeBytes {
+			// Only the fixed floor makes this volume unsuitable. An estimate
+			// can shrink while the task waits for admission.
 			setupErr = fmt.Errorf("%w: %s has capacity %d bytes and %d bytes free, requires %d bytes; expand or move the workspace filesystem",
-				workspace.ErrUnsuitableStorage, path, sample.total, sample.free, needed)
+				workspace.ErrUnsuitableStorage, path, sample.total, sample.free, workspace.MinimumFreeBytes)
 			continue
 		}
 		if force && checkPersistent != nil && sample.free < workspace.MinimumFreeBytes {

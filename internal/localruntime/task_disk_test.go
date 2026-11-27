@@ -122,6 +122,13 @@ func TestTaskDiskHistoryFlushRetriesVersionedWrite(t *testing.T) {
 	if err := history.Record("repo", 256); err == nil {
 		t.Fatal("record succeeded while versioned destination was blocked")
 	}
+	fallback, err := OpenTaskDiskHistory(path)
+	if err == nil {
+		t.Error("open did not report the unreadable versioned history")
+	}
+	if got := fallback.RequiredBytes("repo"); got != 256 {
+		t.Errorf("requirement while versioned history is unreadable = %d, want 256", got)
+	}
 	if err := os.Remove(versioned); err != nil {
 		t.Fatal(err)
 	}
@@ -184,6 +191,11 @@ func TestTaskDiskHistoryMergesPendingSamplesAfterFailedLoad(t *testing.T) {
 	if got := reopened.RequiredBytes("first"); got != 128 {
 		t.Fatalf("estimate after aging out the legacy sample = %d, want 128", got)
 	}
+	now := time.Now().Add(taskDiskLegacyMaxAge)
+	reopened.now = func() time.Time { return now }
+	if got := reopened.RequiredBytes("second"); got != 0 {
+		t.Fatalf("estimate after both imported samples expire = %d, want 0", got)
+	}
 }
 
 func TestTaskDiskHistoryRemainsWritableAfterRollback(t *testing.T) {
@@ -242,17 +254,75 @@ func TestTaskDiskHistoryRemainsWritableAfterRollback(t *testing.T) {
 	}
 }
 
+func TestTaskDiskHistoryRetainsBaselineAfterIdle(t *testing.T) {
+	t.Parallel()
+
+	const baseline = 2 * 1024 * 1024 * 1024
+	path := filepath.Join(t.TempDir(), "task-disk-usage.json")
+	history, err := OpenTaskDiskHistory(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordedAt := time.Now().Add(-taskDiskSampleMaxAge - time.Minute)
+	history.now = func() time.Time { return recordedAt }
+	for _, size := range []uint64{baseline, baseline, 3 * baseline, baseline} {
+		if err := history.Record("repo", size); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := history.RequiredBytes("repo"); got != 3*baseline {
+		t.Fatalf("fresh estimate = %d, want %d", got, 3*baseline)
+	}
+	history.now = func() time.Time { return recordedAt.Add(taskDiskSampleMaxAge) }
+	if got := history.RequiredBytes("repo"); got != baseline {
+		t.Errorf("idle estimate = %d, want %d", got, baseline)
+	}
+	reopened, err := OpenTaskDiskHistory(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.RequiredBytes("repo"); got != baseline {
+		t.Errorf("idle estimate after restart = %d, want %d", got, baseline)
+	}
+	if err := reopened.Record("other-repo", 128); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err = OpenTaskDiskHistory(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.RequiredBytes("repo"); got != baseline {
+		t.Errorf("idle estimate after resaving history = %d, want %d", got, baseline)
+	}
+	for range taskDiskHistoryWindow {
+		if err := reopened.Record("repo", baseline/2); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := reopened.RequiredBytes("repo"); got != baseline/2 {
+		t.Errorf("estimate after smaller runs = %d, want %d", got, baseline/2)
+	}
+}
+
 func TestAdaptiveSchedulerAdmitsAfterDiskOutlierExpires(t *testing.T) {
 	t.Parallel()
 
 	const gib = 1024 * 1024 * 1024
 	const peak uint64 = 5509423104
-	for _, name := range []string{"migrated", "measured"} {
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		total uint64
+		issue bool
+	}{
+		{name: "migrated", total: 8 * gib},
+		{name: "measured", total: 8 * gib},
+		{name: "issue on smaller volume", total: 4 * gib, issue: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "task-disk-usage.json")
 			now := time.Now().UTC().Truncate(time.Second)
 			expiresAt := now.Add(time.Minute)
-			if name == "migrated" {
+			if tc.name == "migrated" {
 				if err := os.WriteFile(path, fmt.Appendf(nil, `{"repo":%d}`, peak), 0o600); err != nil {
 					t.Fatal(err)
 				}
@@ -266,7 +336,7 @@ func TestAdaptiveSchedulerAdmitsAfterDiskOutlierExpires(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := uint64(0)
-			if name == "measured" {
+			if tc.name != "migrated" {
 				history.now = func() time.Time { return expiresAt.Add(-taskDiskSampleMaxAge) }
 				if err := history.Record("repo", peak); err != nil {
 					t.Fatal(err)
@@ -285,7 +355,7 @@ func TestAdaptiveSchedulerAdmitsAfterDiskOutlierExpires(t *testing.T) {
 			history.now = func() time.Time { return now }
 			controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 1}, nil)
 			controller.diskSpace = func(string) (string, uint64, uint64, error) {
-				return "disk", 4 * gib, 8 * gib, nil
+				return "disk", 4 * gib, tc.total, nil
 			}
 			request := TaskDiskRequest{
 				Workspace: workspace.Manager{Root: t.TempDir()},
@@ -296,11 +366,15 @@ func TestAdaptiveSchedulerAdmitsAfterDiskOutlierExpires(t *testing.T) {
 					return workspace.MinimumFreeBytes
 				},
 			}
+			if tc.issue {
+				request.CheckPersistentStorage = func(string) error { return nil }
+			}
 			waiter := &taskWaiter{disk: &request}
 			controller.waiters = []*taskWaiter{waiter}
 			controller.RecheckQueue()
-			if waiter.granted || waiter.diskEstimate != peak || waiter.diskBlock == "" {
-				t.Fatalf("outlier did not block admission: %+v", waiter)
+			if waiter.granted || waiter.err != nil || waiter.diskEstimate != peak || waiter.diskBlock == "" || len(controller.waiters) != 1 {
+				t.Fatalf("outlier did not keep task queued: granted=%t err=%v estimate=%d block=%q waiters=%d",
+					waiter.granted, waiter.err, waiter.diskEstimate, waiter.diskBlock, len(controller.waiters))
 			}
 			now = expiresAt
 			controller.RecheckQueue()
@@ -310,6 +384,7 @@ func TestAdaptiveSchedulerAdmitsAfterDiskOutlierExpires(t *testing.T) {
 			if !waiter.granted || waiter.diskBytes != max(want, workspace.MinimumFreeBytes) {
 				t.Fatalf("admission after expiry: %+v", waiter)
 			}
+			controller.releaseFunc(waiter)()
 		})
 	}
 }
