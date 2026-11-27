@@ -167,9 +167,18 @@ func TestIssueTaskSnapshotKeepsRetryAndCompletionOnOneTask(t *testing.T) {
 	retry.State, retry.Outcome, retry.RunError = "blocked", "error", "pr_verification: persistent failure"
 	save(retry, "error")
 	blocked, _ := snapshot()
-	if blocked.TaskID != waiting.TaskID || blocked.Status != "error" || blocked.Error != retry.RunError {
+	if blocked.TaskID != waiting.TaskID || blocked.Status != "error" || blocked.Error != retry.RunError || !blocked.CanRerun {
 		t.Fatalf("persistent failure missing: %+v", blocked)
 	}
+	retry.Incident = localruntime.IssueIncidentBranchRecovery
+	retry.Error = "Reopen the existing pull request before using Recover / retry"
+	save(retry, "error")
+	held, _ := snapshot()
+	if held.CanRerun || held.Error != retry.Error || held.TaskID != blocked.TaskID {
+		t.Fatalf("PR recovery prerequisite still exposes task retry: %+v", held)
+	}
+	retry.Incident, retry.Error = "", ""
+	save(retry, "error")
 	s.Broker = NewBroker()
 	restoredBlocked, _ := snapshot()
 	if restoredBlocked.TaskID != blocked.TaskID || restoredBlocked.Status != "error" || !restoredBlocked.HistoryOnly {
@@ -207,7 +216,7 @@ func TestIssueTaskUsesDurableStateAfterRestart(t *testing.T) {
 	run := workflow.Run{
 		ID: record.Run.Workflow.EventID, RequestID: record.RequestID, PRURL: record.PRURL,
 		Workflow: definitions.Workflows[0], Status: "awaiting_review",
-		Reason: "Waiting for review", GitHubRetryAt: time.Now().Add(time.Minute),
+		Reason: "Waiting for unresolved review threads", GitHubRetryAt: time.Now().Add(time.Minute),
 		Outcome: &workflow.Outcome{Status: workflow.OutcomeReviewPending, Reason: record.RunError},
 	}
 	journal, err := json.Marshal(map[string]any{
@@ -247,6 +256,7 @@ func TestIssueTaskUsesDurableStateAfterRestart(t *testing.T) {
 	}
 
 	var transitions []string
+	s.Workflows.PreserveIssueMergeEvidence = s.PreserveIssueMergeEvidence
 	s.Workflows.Logf = func(format string, args ...any) {
 		transitions = append(transitions, fmt.Sprintf(format, args...))
 	}
@@ -257,5 +267,9 @@ func TestIssueTaskUsesDurableStateAfterRestart(t *testing.T) {
 	if err != nil || len(runs) != 0 || len(f.submissions) != 1 || len(transitions) != 1 ||
 		!strings.Contains(transitions[0], "status=merged reason=external_merge") {
 		t.Fatalf("merged claim did not settle stale workflow: %+v, transitions %v (err %v)", runs, transitions, err)
+	}
+	task := s.snapshot().Tasks[0]
+	if task.ReviewGate != "" || task.IssueAttempts[0].ReviewDetail != run.Reason {
+		t.Fatalf("pruned workflow gate was not kept in attempt history: %+v", task)
 	}
 }

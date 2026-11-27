@@ -148,6 +148,11 @@ func (e *issueExecution) finish(ctx context.Context, state string, result app.Re
 	var journalErr error
 	holdPersisted := false
 	update := func(record *localruntime.IssueClaimRecord) error {
+		if record.PRMerged() {
+			record.StoppedAt = stoppedAt
+			record.ExecutionAgentAttempts = nil
+			return nil
+		}
 		record.Outcome = state
 		record.ExitCode = result.ExitCode
 		record.State = "verifying"
@@ -333,6 +338,9 @@ func (e *issueExecution) configure(ctx context.Context, h *app.Harness) (context
 			return
 		}
 		err := e.store.Update(e.record.ID, func(record *localruntime.IssueClaimRecord) error {
+			if record.PRMerged() {
+				return errors.New("issue task pull request is already merged")
+			}
 			record.State = "running"
 			record.Step = step
 			recordIssueStage(record, step)

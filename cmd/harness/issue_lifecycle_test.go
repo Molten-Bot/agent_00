@@ -136,6 +136,31 @@ func TestIssueExecutionClearsVerificationOnlyOnVerifiedCompletion(t *testing.T) 
 	}
 }
 
+func TestIssueExecutionStopPreservesObservedMerge(t *testing.T) {
+	t.Parallel()
+	store, record := lifecycleRecord(t)
+	work, _, err := prepareIssueExecution(store, record.Run, localruntime.IssueRecoveryConfig{})
+	if err != nil || work == nil {
+		t.Fatalf("prepare issue execution = %v, %v", work, err)
+	}
+	if err := store.Update(record.ID, func(r *localruntime.IssueClaimRecord) error {
+		r.State = localruntime.IssueStateMergedUnverified
+		r.Outcome = localruntime.IssueChecksPending
+		r.Error = "pull request merged before draft verification passed"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := work.finish(t.Context(), "stopped", app.Result{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Load(record.ID)
+	if err != nil || !got.PRMerged() || got.Outcome != localruntime.IssueChecksPending ||
+		got.Error != "pull request merged before draft verification passed" || got.StoppedAt.IsZero() || got.ExecutionAgentAttempts != nil {
+		t.Fatalf("worker stop overwrote merge receipt: %+v, %v", got, err)
+	}
+}
+
 func TestIssueCheckWaitResumesSameClaimAndPreservesBackoff(t *testing.T) {
 	t.Parallel()
 	store, record := lifecycleRecord(t)

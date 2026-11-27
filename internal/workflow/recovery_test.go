@@ -85,6 +85,44 @@ func TestPendingReviewRetainsActivationWithoutUsingReviewEvidence(t *testing.T) 
 	}
 }
 
+func TestObservedIssueMergeRetainsActivationUntilReviewEvidenceIsSaved(t *testing.T) {
+	t.Parallel()
+	w := definition("observed-issue-merge")
+	w.Merge.Enabled = true
+	e, _, _ := testEngine(t, w)
+	state, err := e.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const reason = "Waiting for unresolved review threads"
+	run := Run{ID: "activation", RequestID: "task", Workflow: w, Status: "waiting", Reason: reason,
+		PRURL: "https://github.com/acme/repo/pull/12", Item: Item{Repository: w.Repository, Kind: "issue", Number: 1}}
+	state.Runs = []Run{run}
+	if err := e.save(state); err != nil {
+		t.Fatal(err)
+	}
+	e.InspectPR = func(context.Context, string, string) (Item, error) { return Item{Merged: true}, nil }
+	writeError := errors.New("issue history unavailable")
+	e.PreserveIssueMergeEvidence = func(previous Run) error {
+		if previous.Reason != reason || previous.RequestID != run.RequestID || previous.PRURL != run.PRURL {
+			t.Fatalf("incorrect evidence passed to issue history: %+v", previous)
+		}
+		return writeError
+	}
+	if err := e.Tick(t.Context()); !errors.Is(err, writeError) {
+		t.Fatalf("tick with unavailable issue history: %v", err)
+	}
+	runs, err := e.Runs()
+	if err != nil || len(runs) != 1 || runs[0].Reason != reason {
+		t.Fatalf("activation lost evidence before it was saved: %+v, %v", runs, err)
+	}
+	writeError = nil
+	tick(t, e)
+	if runs, err = e.Runs(); err != nil || len(runs) != 0 {
+		t.Fatalf("merged activation was not pruned after saving evidence: %+v, %v", runs, err)
+	}
+}
+
 func TestPendingChecksReserveActivationUntilCurrentHeadIsReviewed(t *testing.T) {
 	t.Parallel()
 	w := definition("pending-checks")

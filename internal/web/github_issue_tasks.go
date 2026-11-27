@@ -14,13 +14,42 @@ import (
 )
 
 type issueTaskAttempt struct {
-	Number    int      `json:"number"`
-	RequestID string   `json:"request_id,omitempty"`
-	Status    string   `json:"status"`
-	Stage     string   `json:"stage,omitempty"`
-	Stages    []string `json:"stages,omitempty"`
-	Error     string   `json:"error,omitempty"`
-	Detail    string   `json:"detail,omitempty"`
+	Number       int      `json:"number"`
+	RequestID    string   `json:"request_id,omitempty"`
+	Status       string   `json:"status"`
+	Stage        string   `json:"stage,omitempty"`
+	Stages       []string `json:"stages,omitempty"`
+	Error        string   `json:"error,omitempty"`
+	Detail       string   `json:"detail,omitempty"`
+	ReviewDetail string   `json:"review_detail,omitempty"`
+}
+
+// PreserveIssueMergeEvidence copies the last workflow gate to the matching attempt.
+func (s *Server) PreserveIssueMergeEvidence(run workflow.Run) error {
+	if s.IssueClaims == nil {
+		return nil
+	}
+	records, err := s.IssueClaims.List()
+	if err != nil {
+		return err
+	}
+	for _, record := range records {
+		if record.Run.Workflow == nil || record.Run.Workflow.EventID != run.ID ||
+			(run.RequestID != "" && record.RequestID != run.RequestID) {
+			continue
+		}
+		if known := s.knownIssuePR(record); known != "" && !strings.EqualFold(known, run.PRURL) {
+			continue
+		}
+		if record.ReviewDetail == run.Reason {
+			return nil
+		}
+		return s.IssueClaims.Update(record.ID, func(current *localruntime.IssueClaimRecord) error {
+			current.ReviewDetail = run.Reason
+			return nil
+		})
+	}
+	return nil
 }
 
 func issueTaskID(issue *config.GitHubIssueConfig, policy *config.WorkflowRunConfig) string {
@@ -94,6 +123,9 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 		task.Repo = stringsx.FirstNonEmpty(task.Repo, latest.Run.RepoURL)
 		task.Source = stringsx.FirstNonEmpty(task.Source, "github_issues")
 		task.IssueState = latest.State
+		if latest.State == "blocked" && requiresIssueBranchRecovery(latest) {
+			task.CanRerun = false
+		}
 		task.IssuePlanningStatus = latest.PlanningStatus
 		task.RetryAt = formatTimeOrEmpty(latest.NextAttemptAt)
 		if latest.Fulfilled() && (latest.Outcome == "error" || latest.Outcome == "interrupted") {
@@ -168,6 +200,7 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 			task.IssueAttempts = append(task.IssueAttempts, issueTaskAttempt{
 				Number: attempt.Run.GitHubIssue.Claim.Attempt, RequestID: attempt.RequestID,
 				Status: status, Stage: stage, Stages: attempt.Stages, Error: attempt.FailureDetail(), Detail: attempt.Error,
+				ReviewDetail: attempt.ReviewDetail,
 			})
 		}
 		if merged {

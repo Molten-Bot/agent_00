@@ -233,6 +233,8 @@ type Engine struct {
 	Logf      func(string, ...any)
 
 	FinishReview func(context.Context, githubutil.ReviewReceipt, *githubutil.PendingReviewGate) error
+	// PreserveIssueMergeEvidence saves the prior gate before pruning a merged issue activation.
+	PreserveIssueMergeEvidence func(Run) error
 	// MemoryPressure defers background ticks while host memory is exhausted.
 	MemoryPressure func() bool
 
@@ -714,6 +716,11 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 				stale = true
 				return errJournalUnchanged
 			}
+			if r.Reason == observedIssueMergeReason {
+				if err := e.preserveIssueMergeEvidence(*current, r.PRURL); err != nil {
+					return err
+				}
+			}
 			*current = r
 			expected = r
 			return nil
@@ -858,6 +865,10 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 			waitForQuota(err)
 			return errors.Join(err, finish())
 		}
+		if i.Merged && r.Item.Kind == "issue" {
+			r.Status, r.Reason = "merged", observedIssueMergeReason
+			return finish()
+		}
 		if !i.Open {
 			r.Status, r.Reason = "completed", "Pull request closed before review writeback"
 			return finish()
@@ -880,6 +891,8 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		outcome.PendingReviewGate = &gate
 		r.Outcome = &outcome
 		switch {
+		case errors.Is(err, githubutil.ErrReviewInterrupted) && r.Item.Kind == "issue":
+			r.Status, r.Reason = "merged", observedIssueMergeReason
 		case errors.Is(err, githubutil.ErrReviewInterrupted):
 			r.Status, r.Reason = "completed", "Pull request was already merged when the workflow checked"
 		case errors.Is(err, githubutil.ErrReviewThreadsPending):
@@ -971,8 +984,11 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		} else if !e.Allowed(r.Item.Repository) || !e.StillEnabled(r.Workflow) {
 			r.Reason = "Workflow changed or was disabled before merge"
 		} else if mergeErr := e.Merge(ctx, r); errors.Is(mergeErr, githubutil.ErrReviewInterrupted) {
-			r.Status = "completed"
-			r.Reason = "Pull request was already merged when the workflow checked"
+			if r.Item.Kind == "issue" {
+				r.Status, r.Reason = "merged", observedIssueMergeReason
+			} else {
+				r.Status, r.Reason = "completed", "Pull request was already merged when the workflow checked"
+			}
 		} else if errors.Is(mergeErr, githubutil.ErrReviewCheckPending) {
 			r.Reason = "Waiting for the trusted review policy check on the current pull request head"
 		} else if errors.Is(mergeErr, githubutil.ErrReviewThreadsPending) {
@@ -1033,6 +1049,15 @@ func (r Run) hasPendingReview() bool {
 	return r.Outcome != nil && r.Outcome.Status == OutcomeReviewPending && !r.Outcome.ReviewInterrupted
 }
 
+func (e *Engine) preserveIssueMergeEvidence(r Run, prURL string) error {
+	if e.PreserveIssueMergeEvidence == nil || r.Reason == "" ||
+		(r.Status != awaitingReview && r.Status != "waiting" && r.Status != OutcomeChecksPending && !r.hasFailedPendingReview()) {
+		return nil
+	}
+	r.PRURL = prURL
+	return e.PreserveIssueMergeEvidence(r)
+}
+
 // ObserveIssueMerge releases the activation after the issue claim records the merge.
 func (e *Engine) ObserveIssueMerge(id, requestID, prURL string) error {
 	if id == "" || prURL == "" {
@@ -1051,6 +1076,9 @@ func (e *Engine) ObserveIssueMerge(id, requestID, prURL string) error {
 			!strings.HasPrefix(r.Workflow.Trigger.Event, "issue.") ||
 			(r.PRURL != "" && !strings.EqualFold(r.PRURL, prURL)) {
 			return errJournalUnchanged
+		}
+		if err := e.preserveIssueMergeEvidence(*r, prURL); err != nil {
+			return err
 		}
 		r.Status, r.Reason, r.PRURL = "merged", observedIssueMergeReason, prURL
 		r.RequestID, r.UpdatedAt, r.GitHubRetryAt = requestID, e.now(), time.Time{}

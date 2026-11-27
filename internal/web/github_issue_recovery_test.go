@@ -700,12 +700,22 @@ func TestIssueRecoveryKeepsExistingMergeTarget(t *testing.T) {
 	if err := s.ReconcileIssueWork(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := latestRecoveryRecord(t, s); !got.PRMerged() || got.PRURL != "https://github.com/acme/repo/pull/42" {
-		t.Fatalf("recovery state = %q, PR = %q, want merged with PR 42", got.State, got.PRURL)
+	if got := latestRecoveryRecord(t, s); got.PRMerged() || (got.PRURL != "" && got.PRURL != trackedURL) {
+		t.Fatalf("recovery adopted sibling PR: state = %q, PR = %q", got.State, got.PRURL)
 	}
 	task, ok := s.Broker.Task(record.RequestID)
 	if !ok || task.PRURL != trackedURL || task.Status != "completed" {
 		t.Fatalf("task after recovery = %+v, want completed with PR %q", task, trackedURL)
+	}
+	f.prs = strings.Replace(f.prs, `"number":42`, `"number":41`, 1)
+	if err := s.ReconcileIssueWork(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := latestRecoveryRecord(t, s)
+	releases := s.Broker.Snapshot().Releases
+	if !got.PRMerged() || got.PRURL != trackedURL || len(releases) != 1 || releases[0].PRURL != trackedURL ||
+		releases[0].MergedAt != "2026-01-01T00:00:00Z" {
+		t.Fatalf("tracked merge or release missing: state=%q PR=%q releases=%+v", got.State, got.PRURL, releases)
 	}
 }
 
@@ -957,7 +967,7 @@ func TestMergedIssueStopsChecksAndReleasesReservation(t *testing.T) {
 	record := latestRecoveryRecord(t, s)
 	record.PRURL = "https://github.com/acme/repo/pull/42"
 	record.PRVerification = "Verify draft on the current head."
-	record.State, record.Outcome = localruntime.IssueChecksPending, localruntime.IssueChecksPending
+	record.State, record.Outcome = "queued", localruntime.IssueChecksPending
 	record.NextAttemptAt = time.Now().Add(time.Hour)
 	if err := s.IssueClaims.BeginExecution(record); err != nil {
 		t.Fatal(err)
@@ -973,6 +983,22 @@ func TestMergedIssueStopsChecksAndReleasesReservation(t *testing.T) {
 	}
 	// The exact linked PR still identifies the task after a branch rename.
 	f.prs = recoveryPR("closed", `"2026-01-01T00:00:00Z"`, "renamed-branch", "main")
+	lock, err := s.IssueClaims.TryLock(localruntime.IssueExecutionKey(record.Run.GitHubIssue))
+	if err != nil || lock == nil {
+		t.Fatalf("acquire queued worker lock: %v", err)
+	}
+	defer lock.Close()
+	if err := s.ReconcileIssueWork(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	queued := latestRecoveryRecord(t, s)
+	task, _ := s.Broker.Task(record.RequestID)
+	if !queued.PRMerged() || task.Status != "stopped" || f.deletes != 0 {
+		t.Fatalf("locked continuation did not stop before cleanup: state=%s task=%s deletes=%d", queued.State, task.Status, f.deletes)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.ReconcileIssueWork(t.Context()); err != nil {
 		t.Fatal(err)
 	}

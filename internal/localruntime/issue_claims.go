@@ -48,6 +48,8 @@ type IssueClaimRecord struct {
 	WorkspaceDir     string        `json:"workspaceDir,omitempty"`
 	PRURL            string        `json:"prUrl,omitempty"`
 	PRTitle          string        `json:"prTitle,omitempty"`
+	PRMergedAt       time.Time     `json:"prMergedAt,omitzero"`
+	ReviewDetail     string        `json:"mergeReviewDetail,omitempty"`
 	VerifiedAt       time.Time     `json:"verifiedAt,omitempty"`
 	LabelAdded       bool          `json:"labelAdded,omitempty"`
 	UnlockPending    bool          `json:"unlockPending,omitempty"`

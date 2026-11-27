@@ -12428,9 +12428,17 @@
       }
 
       const seenDetails = new Set(showStatus ? [issueTaskStatusLabel(task)] : []);
-      const distinctDetails = (...values) => values.filter((value) => {
-        if (!value || seenDetails.has(value)) return false;
-        seenDetails.add(value);
+      const stages = new Set(["pr_verification"]);
+      for (const attempt of task.issue_attempts) {
+        for (const stage of [...(attempt.stages || []), attempt.stage].filter(Boolean)) stages.add(stage);
+      }
+      const distinctDetails = (...values) => values.map((value) => {
+        const detail = String(value || "").trim();
+        const separator = detail.indexOf(": ");
+        return separator > 0 && stages.has(detail.slice(0, separator)) ? detail.slice(separator + 2).trim() : detail;
+      }).filter((detail) => {
+        if (!detail || seenDetails.has(detail)) return false;
+        seenDetails.add(detail);
         return true;
       });
       const list = document.createElement("ul");
@@ -12439,7 +12447,7 @@
         const status = taskStatusLabel(attempt.status);
         const stages = [...(attempt.stages || []), attempt.stage].filter(Boolean).map((stage) => stage.replaceAll("_", " "));
         const stageHistory = Array.from(new Set(stages)).join(" → ");
-        const evidence = distinctDetails(attempt.error, attempt.detail);
+        const evidence = distinctDetails(attempt.error, attempt.detail, attempt.review_detail);
         row.textContent = [`Attempt ${attempt.number}`, status, stageHistory, ...evidence].filter(Boolean).join(" · ");
         list.appendChild(row);
       }
