@@ -82,6 +82,29 @@ func TestPRCheckWatchReportsChecksWithSchedulerReleased(t *testing.T) {
 	}
 }
 
+func TestPRCheckWatchRetainsPendingEvidenceWhenQueryTimesOut(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		const url = "https://github.com/example/repo/pull/42"
+		const pending = "Go\tpass\nBrowser tests\tpending\n"
+		reads := 0
+		h := New(issueBranchRunner(func(ctx context.Context, _ execx.Command) (execx.Result, error) {
+			reads++
+			if reads == 1 {
+				return execx.Result{Stdout: pending}, pendingCheckExit{}
+			}
+			<-ctx.Done()
+			return execx.Result{}, ctx.Err()
+		}))
+		h.CheckTimings = &CheckTimings{}
+		h.PRChecksWatchTimeout = 15 * time.Second
+		res, err := h.runPRChecksWatch(t.Context(), prChecksCommand("/checkout", url), newCheckPoll("checks", url))
+		if reads != 2 || !errors.Is(err, errPRChecksWatchTimeout) || res.Stdout != pending {
+			t.Fatalf("watch after %d reads = (%q, %v), want pending evidence and timeout", reads, res.Stdout, err)
+		}
+	})
+}
+
 func TestPublishedChecksRecordMergeBeforeReview(t *testing.T) {
 	t.Parallel()
 	const url = "https://github.com/example/repo/pull/42"
