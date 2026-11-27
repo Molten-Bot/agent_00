@@ -95,7 +95,7 @@ func TestObservedIssueMergeRetainsActivationUntilReviewEvidenceIsSaved(t *testin
 		t.Fatal(err)
 	}
 	const reason = "Waiting for unresolved review threads"
-	run := Run{ID: "activation", RequestID: "task", Workflow: w, Status: "waiting", Reason: reason,
+	run := Run{ID: "activation", RequestID: "task", Workflow: w, Status: awaitingReview, Reason: reason,
 		PRURL: "https://github.com/acme/repo/pull/12", Item: Item{Repository: w.Repository, Kind: "issue", Number: 1}}
 	state.Runs = []Run{run}
 	if err := e.save(state); err != nil {
@@ -120,8 +120,14 @@ func TestObservedIssueMergeRetainsActivationUntilReviewEvidenceIsSaved(t *testin
 		t.Fatalf("activation lost evidence before it was saved: %+v, %v", runs, err)
 	}
 	writeError = nil
-	tick(t, e)
-	if runs, err = e.Runs(); err != nil || len(runs) != 0 {
+	restarted := &Engine{Store: e.Store, StatePath: e.StatePath, Enabled: e.Enabled, Allowed: e.Allowed,
+		Fetch: e.Fetch, RecordIssueMerge: e.RecordIssueMerge,
+		InspectPR: func(context.Context, string, string) (Item, error) {
+			t.Fatal("looked up a previously observed merge after restart")
+			return Item{}, nil
+		}}
+	tick(t, restarted)
+	if runs, err = restarted.Runs(); err != nil || len(runs) != 0 {
 		t.Fatalf("merged activation was not pruned after saving evidence: %+v, %v", runs, err)
 	}
 }

@@ -513,11 +513,12 @@ func TestImplementationMergeRequiresPersistedReceiptOnCurrentHead(t *testing.T) 
 		name, head                              string
 		receipt, interrupted, merge             bool
 		checksPending, unresolved, queueEnabled bool
-		requireApproval                         bool
+		requireApproval, verificationLost       bool
 		requireCheck, checkPublished            bool
 	}{
 		{name: "no receipt", head: "abc"},
 		{name: "matching receipt", head: "abc", receipt: true, merge: true},
+		{name: "merge verification read lost", head: "abc", receipt: true, merge: true, verificationLost: true},
 		{name: "CI pending", head: "abc", receipt: true, checksPending: true},
 		{name: "unresolved thread", head: "abc", receipt: true, unresolved: true},
 		{name: "merge queue enabled", head: "abc", receipt: true, queueEnabled: true},
@@ -557,6 +558,9 @@ func TestImplementationMergeRequiresPersistedReceiptOnCurrentHead(t *testing.T) 
 				args := strings.Join(cmd.Args, " ")
 				switch {
 				case strings.HasPrefix(args, "pr view "):
+					if tc.verificationLost && strings.HasSuffix(args, "--json state") {
+						return execx.Result{}, errors.New("verification read unavailable")
+					}
 					ci := "SUCCESS"
 					if tc.checksPending {
 						ci = ""
@@ -615,6 +619,14 @@ func TestImplementationMergeRequiresPersistedReceiptOnCurrentHead(t *testing.T) 
 				return nil
 			}
 			tick(t, restarted)
+			if tc.verificationLost {
+				pending, err := restarted.Runs()
+				if err != nil || len(pending) != 1 || merges != 1 || receipts != 0 {
+					t.Fatalf("unconfirmed app merge: runs=%+v, merges=%d, receipts=%d, err=%v", pending, merges, receipts, err)
+				}
+				restarted = &Engine{Store: e.Store, StatePath: e.StatePath, Enabled: e.Enabled, Allowed: e.Allowed,
+					Fetch: e.Fetch, InspectPR: gh.Inspect, Merge: gh.Merge, RecordIssueMerge: restarted.RecordIssueMerge}
+			}
 			tick(t, restarted)
 			wantReceipts := merges
 			if tc.interrupted {

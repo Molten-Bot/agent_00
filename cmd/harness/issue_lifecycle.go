@@ -137,6 +137,10 @@ func latestClaimForTask(records []localruntime.IssueClaimRecord, requestID strin
 }
 
 func (e *issueExecution) finish(ctx context.Context, state string, result app.Result, waitForStorage func() bool) error {
+	return e.finishWithClaimUpdate(ctx, state, result, waitForStorage, e.store.Update)
+}
+
+func (e *issueExecution) finishWithClaimUpdate(ctx context.Context, state string, result app.Result, waitForStorage func() bool, updateClaim func(string, func(*localruntime.IssueClaimRecord) error) error) error {
 	defer e.lock.Close()
 	if state == "" {
 		state = "interrupted"
@@ -240,8 +244,7 @@ func (e *issueExecution) finish(ctx context.Context, state string, result app.Re
 			record.State = localruntime.IssueStateMerged
 			record.NextAttemptAt = time.Time{}
 			record.UnlockPending = record.LabelAdded
-		}
-		if journalErr != nil || ((state == "error" || state == "interrupted") &&
+		} else if journalErr != nil || ((state == "error" || state == "interrupted") &&
 			(workspace.IsDiskFull(result.Err) || errors.Is(result.Err, workspace.ErrUnsuitableStorage))) {
 			record.Incident = localruntime.IssueIncidentWorkspaceStorage
 			record.State = "blocked"
@@ -258,7 +261,7 @@ func (e *issueExecution) finish(ctx context.Context, state string, result app.Re
 		return nil
 	}
 	for {
-		err := e.store.Update(e.record.ID, update)
+		err := updateClaim(e.record.ID, update)
 		if err == nil {
 			return e.store.ReleaseExecutionReserve(e.record.ID)
 		}

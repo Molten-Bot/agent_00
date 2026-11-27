@@ -161,6 +161,40 @@ func TestIssueExecutionStopPreservesObservedMerge(t *testing.T) {
 	}
 }
 
+func TestIssueExecutionMergeSurvivesDiskFullClaimWrite(t *testing.T) {
+	t.Parallel()
+	store, record := lifecycleRecord(t)
+	work, _, err := prepareIssueExecution(store, record.Run, localruntime.IssueRecoveryConfig{})
+	if err != nil || work == nil {
+		t.Fatalf("prepare issue execution = %v, %v", work, err)
+	}
+	writes, waits := 0, 0
+	update := func(id string, change func(*localruntime.IssueClaimRecord) error) error {
+		return store.Update(id, func(r *localruntime.IssueClaimRecord) error {
+			writes++
+			if err := change(r); err != nil {
+				return err
+			}
+			if writes == 1 {
+				return syscall.ENOSPC
+			}
+			return nil
+		})
+	}
+	wait := func() bool { waits++; return waits == 1 }
+	result := app.Result{PRURL: "https://github.com/acme/repo/pull/42", ReviewInterrupted: true, Err: githubutil.ErrReviewInterrupted}
+	if err := work.finishWithClaimUpdate(t.Context(), "error", result, wait, update); err != nil {
+		t.Fatal(err)
+	}
+	restarted := &localruntime.IssueClaimStore{Root: store.Root}
+	got, err := restarted.Load(record.ID)
+	if err != nil || !got.PRMerged() || got.PRURL != result.PRURL || !got.NextAttemptAt.IsZero() ||
+		!got.UnlockPending || got.RunError != result.Err.Error() || got.ExecutionAgentAttempts != nil ||
+		waits != 1 || writes != 2 {
+		t.Fatalf("merge receipt after storage retry = %+v, %v (writes = %d, waits = %d)", got, err, writes, waits)
+	}
+}
+
 func TestIssueExecutionSavesPassedVerificationAfterAppMergeReceipt(t *testing.T) {
 	t.Parallel()
 	store, record := lifecycleRecord(t)

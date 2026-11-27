@@ -57,10 +57,7 @@ func (s *Server) RecordIssueMerge(run workflow.Run, pr workflow.Item, mergedByAp
 	if s.IssueClaims == nil {
 		return nil
 	}
-	records, err := s.IssueClaims.List()
-	if err != nil {
-		return err
-	}
+	records, listErr := s.IssueClaims.List()
 	for _, record := range records {
 		if record.Run.Workflow == nil || record.Run.Workflow.EventID != run.ID ||
 			(run.RequestID != "" && record.RequestID != run.RequestID) {
@@ -75,7 +72,7 @@ func (s *Server) RecordIssueMerge(run workflow.Run, pr workflow.Item, mergedByAp
 		}
 		return s.saveMergedIssuePR(record, issuePullRequest{URL: pr.URL, Title: pr.Title, MergedAt: pr.MergedAt}, run.Reason, mergedByApp)
 	}
-	return nil
+	return listErr
 }
 
 func issueTaskID(issue *config.GitHubIssueConfig, policy *config.WorkflowRunConfig) string {

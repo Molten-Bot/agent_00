@@ -176,16 +176,18 @@ type Run struct {
 	Reason        string           `json:"reason"`
 	PRURL         string           `json:"prUrl,omitempty"`
 	MergeHead     string           `json:"mergeHead,omitempty"`
-	AppMerge      *appMergeReceipt `json:"appMerge,omitempty"`
+	AppMerge      *mergeReceipt    `json:"appMerge,omitempty"`
+	ObservedMerge *mergeReceipt    `json:"observedMerge,omitempty"`
 	StartedAt     *time.Time       `json:"startedAt,omitempty"`
 	UpdatedAt     time.Time        `json:"updatedAt"`
 	GitHubRetryAt time.Time        `json:"githubRetryAt,omitzero"`
 }
 
-// Retain a successful app merge until its issue claim receipt is written.
-type appMergeReceipt struct {
-	Title    string    `json:"title,omitempty"`
-	MergedAt time.Time `json:"mergedAt,omitzero"`
+// Retain merge evidence until its issue claim receipt is written.
+type mergeReceipt struct {
+	Title               string    `json:"title,omitempty"`
+	MergedAt            time.Time `json:"mergedAt,omitzero"`
+	PendingVerification bool      `json:"pendingVerification,omitempty"`
 }
 
 func (r Run) LinkedPRURL() string {
@@ -730,6 +732,29 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 	stale := false
 	var mergedPR Item
 	mergedByApp := false
+	// The issue claim and workflow journal are separate writes. Preserve the
+	// GitHub result and the prior review state before updating the claim.
+	checkpointMerge := func(receipt *mergeReceipt, byApp bool) error {
+		return e.transaction(func(s *State) error {
+			current := s.run(r.ID)
+			if current == nil || current.RequestID != expected.RequestID ||
+				(current.LinkedPRURL() != "" && !strings.EqualFold(current.LinkedPRURL(), r.PRURL)) {
+				stale = true
+				return errJournalUnchanged
+			}
+			current.PRURL = r.PRURL
+			if r.Outcome != nil && r.Outcome.ReviewInterrupted && sameOutcome(current.Outcome, expected.Outcome) {
+				current.Outcome = r.Outcome
+				expected.Outcome = r.Outcome
+			}
+			if byApp {
+				current.AppMerge = receipt
+			} else {
+				current.ObservedMerge = receipt
+			}
+			return nil
+		})
+	}
 	commit := func() error {
 		return e.transaction(func(s *State) error {
 			current := s.run(r.ID)
@@ -755,6 +780,13 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		r.UpdatedAt = e.now()
 		if r.Status == "merged" {
 			r.GitHubRetryAt = time.Time{}
+			if r.Item.Kind == "issue" && original.ObservedMerge == nil &&
+				(original.AppMerge == nil || original.AppMerge.PendingVerification) {
+				receipt := &mergeReceipt{Title: mergedPR.Title, MergedAt: mergedPR.MergedAt}
+				if err := checkpointMerge(receipt, mergedByApp); err != nil || stale {
+					return err
+				}
+			}
 		}
 		if err := commit(); err != nil {
 			return err
@@ -773,15 +805,24 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		r.Reason = "Waiting for GitHub quota. " + rate.Error()
 		return true
 	}
-	if r.AppMerge != nil {
+	if r.AppMerge != nil && !r.AppMerge.PendingVerification {
 		mergedPR = Item{Title: r.AppMerge.Title, MergedAt: r.AppMerge.MergedAt}
 		mergedByApp = true
 		r.Status, r.Reason = "merged", "Pull request merged"
 		return finish()
 	}
+	if r.ObservedMerge != nil {
+		mergedPR = Item{Title: r.ObservedMerge.Title, MergedAt: r.ObservedMerge.MergedAt}
+		r.Status, r.Reason = "merged", observedIssueMergeReason
+		return finish()
+	}
 	if r.Item.Kind == "issue" && r.Outcome != nil && r.Outcome.ReviewInterrupted && r.LinkedPRURL() != "" {
 		r.PRURL = r.LinkedPRURL()
 		r.Status, r.Reason = "merged", observedIssueMergeReason
+		if r.AppMerge != nil {
+			mergedPR.Title, mergedByApp = r.AppMerge.Title, true
+			r.Reason = "Pull request merged"
+		}
 		return finish()
 	}
 	active := featureEnabled && exists && w.Enabled && e.Allowed(w.Repository) && e.Allowed(r.Item.Repository)
@@ -789,6 +830,26 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		r.GitHubRetryAt = time.Time{}
 	} else if active {
 		return nil
+	}
+	if r.AppMerge != nil {
+		if !active {
+			return nil
+		}
+		i, err := e.InspectPR(ctx, r.Item.Repository, r.PRURL)
+		if err != nil {
+			waitForQuota(err)
+			return errors.Join(err, finish())
+		}
+		if i.Merged {
+			mergedPR, mergedByApp = i, true
+			if mergedPR.Title == "" {
+				mergedPR.Title = r.AppMerge.Title
+			}
+			r.Status, r.Reason = "merged", "Pull request merged"
+		} else {
+			r.AppMerge = nil
+		}
+		return finish()
 	}
 	if r.Status == "pending_action" {
 		if !active || !e.StillEnabled(r.Workflow) {
@@ -982,6 +1043,11 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 			waitForQuota(inspectErr)
 			return errors.Join(inspectErr, finish())
 		}
+		if i.Merged && r.Item.Kind == "issue" {
+			mergedPR = i
+			r.Status, r.Reason = "merged", observedIssueMergeReason
+			return finish()
+		}
 		if i.Open && reviewRequired {
 			receipt := r.cleanReviewReceipt(r.Outcome)
 			if receipt == nil {
@@ -1003,10 +1069,7 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		if stale {
 			return nil
 		}
-		if i.Merged && r.Item.Kind == "issue" {
-			mergedPR = i
-			r.Status, r.Reason = "merged", observedIssueMergeReason
-		} else if i.Merged && reviewRequired {
+		if i.Merged && reviewRequired {
 			r.Status = "completed"
 			r.Reason = "Pull request was already merged when the workflow checked"
 		} else if i.Merged {
@@ -1047,6 +1110,14 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 			r.Reason = "Waiting for requested changes"
 		} else if errors.Is(mergeErr, githubutil.ErrReviewApprovalPending) {
 			r.Reason = "Waiting for human approval"
+		} else if errors.Is(mergeErr, errAppMergeVerificationPending) && r.Item.Kind == "issue" {
+			r.AppMerge = &mergeReceipt{Title: i.Title, PendingVerification: true}
+			if err := checkpointMerge(r.AppMerge, true); err != nil || stale {
+				return err
+			}
+			if !waitForQuota(mergeErr) {
+				r.Reason = "Waiting for GitHub to confirm the app merge"
+			}
 		} else if mergeErr != nil {
 			if !waitForQuota(mergeErr) {
 				r.Reason = "Merge blocked: " + mergeErr.Error()
@@ -1060,17 +1131,6 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 					if observed.Title != "" {
 						mergedPR.Title = observed.Title
 					}
-				}
-				receipt := &appMergeReceipt{Title: mergedPR.Title, MergedAt: mergedPR.MergedAt}
-				if err := e.transaction(func(s *State) error {
-					current := s.run(r.ID)
-					if current == nil {
-						return ErrActivationNotFound
-					}
-					current.AppMerge = receipt
-					return nil
-				}); err != nil {
-					return err
 				}
 			}
 			mergedByApp = true
@@ -1160,6 +1220,8 @@ func (e *Engine) ObserveIssueMerge(id, requestID, prURL string) error {
 		if byApp {
 			pr = Item{Title: r.AppMerge.Title, MergedAt: r.AppMerge.MergedAt}
 			reason = "Pull request merged"
+		} else if r.ObservedMerge != nil {
+			pr = Item{Title: r.ObservedMerge.Title, MergedAt: r.ObservedMerge.MergedAt}
 		}
 		if err := e.recordIssueMerge(*r, prURL, pr, byApp); err != nil {
 			return err

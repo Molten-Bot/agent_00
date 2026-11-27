@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -19,6 +20,8 @@ type GitHub struct {
 	Cooldown *githubutil.Cooldown
 	Logf     func(string, ...any)
 }
+
+var errAppMergeVerificationPending = errors.New("could not verify the app merge")
 
 // pullRequestSnapshotError preserves the complete issue snapshot when a pull
 // request listed by GitHub cannot be inspected.
@@ -385,13 +388,20 @@ func (g GitHub) Merge(ctx context.Context, r Run) error {
 	}
 	raw, err := g.command(ctx, "pr", "view", r.PRURL, "--repo", r.Item.Repository, "--json", "state")
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", errAppMergeVerificationPending, err)
 	}
 	var pr struct{ State string }
-	if err := json.Unmarshal([]byte(raw), &pr); err != nil || pr.State != "MERGED" {
-		return fmt.Errorf("GitHub did not confirm the pull request merged")
+	if err := json.Unmarshal([]byte(raw), &pr); err != nil {
+		return fmt.Errorf("%w: %w", errAppMergeVerificationPending, err)
 	}
-	return nil
+	switch pr.State {
+	case "MERGED":
+		return nil
+	case "OPEN", "CLOSED":
+		return errors.New("GitHub did not confirm the pull request merged")
+	default:
+		return errAppMergeVerificationPending
+	}
 }
 
 // CanonicalRepository accepts the forms used by the harness's run config.

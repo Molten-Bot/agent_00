@@ -341,7 +341,15 @@ func testWorkflowMergeSurvivesRestartWithoutPRLookup(t *testing.T, mergedByApp b
 		return nil, nil
 	}
 	engine.RecordIssueMerge = s.RecordIssueMerge
+	// List must still return the readable claim when a neighboring receipt
+	// cannot be decoded.
+	if err := os.WriteFile(filepath.Join(s.IssueClaims.Root, "malformed.json"), []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if err := engine.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(s.IssueClaims.Root, "malformed.json")); err != nil {
 		t.Fatal(err)
 	}
 	if (merges == 1) != mergedByApp || merges > 1 {
