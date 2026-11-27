@@ -60,6 +60,7 @@ type taskWaiter struct {
 	diskBytes    uint64
 	diskEstimate uint64
 	diskBlock    string
+	diskCooldown bool
 	queued       bool
 	drainDevices []string
 }
@@ -395,10 +396,11 @@ func (c *AdaptiveScheduler) tryGrantLocked(start int) {
 	for i := start; c.running < c.allowed && i < len(c.waiters); {
 		waiter := c.waiters[i]
 		wasDiskBlocked := waiter.diskBlock != ""
+		wasCoolingDown := waiter.diskCooldown
 		previousEstimate := waiter.diskEstimate
 		granted, err := c.reserveDiskLocked(waiter, false, samples, preparedRoots)
 		if !granted && err == nil {
-			if waiter.queued && (!wasDiskBlocked || previousEstimate != waiter.diskEstimate) {
+			if waiter.queued && (!wasDiskBlocked || wasCoolingDown != waiter.diskCooldown || previousEstimate != waiter.diskEstimate) {
 				c.logf("task status=queued request_id=%s reason=disk_space %s",
 					stringsx.FirstNonEmpty(waiter.requestID, fmt.Sprintf("queued-%d", waiter.id)), waiter.diskBlock)
 			}

@@ -2,6 +2,7 @@ package localruntime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -106,6 +107,38 @@ func TestTaskDiskHistoryFlushRetriesFailedWrite(t *testing.T) {
 	}
 }
 
+func TestTaskDiskHistoryFlushRetriesVersionedWrite(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "task-disk-usage.json")
+	history, err := OpenTaskDiskHistory(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	versioned := TaskDiskSamplesPath(path)
+	if err := os.Mkdir(versioned, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := history.Record("repo", 256); err == nil {
+		t.Fatal("record succeeded while versioned destination was blocked")
+	}
+	if err := os.Remove(versioned); err != nil {
+		t.Fatal(err)
+	}
+	if err := history.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenTaskDiskHistory(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Add(2 * taskDiskLegacyMaxAge)
+	reopened.now = func() time.Time { return now }
+	if got := reopened.RequiredBytes("repo"); got != 256 {
+		t.Fatalf("timestamped sample was not recovered: got %d, want 256", got)
+	}
+}
+
 func TestTaskDiskHistoryMergesPendingSamplesAfterFailedLoad(t *testing.T) {
 	t.Parallel()
 
@@ -150,6 +183,134 @@ func TestTaskDiskHistoryMergesPendingSamplesAfterFailedLoad(t *testing.T) {
 	}
 	if got := reopened.RequiredBytes("first"); got != 128 {
 		t.Fatalf("estimate after aging out the legacy sample = %d, want 128", got)
+	}
+}
+
+func TestTaskDiskHistoryRemainsWritableAfterRollback(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "task-disk-usage.json")
+	if err := os.WriteFile(path, []byte(`{"existing":256}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	history, err := OpenTaskDiskHistory(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := history.Record("new", 128); err != nil {
+		t.Fatal(err)
+	}
+
+	// Use the previous release's scalar decoder and high-water update.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var maxima map[string]uint64
+	if err := json.Unmarshal(data, &maxima); err != nil {
+		t.Fatalf("rollback cannot read history: %v", err)
+	}
+	if maxima["existing"] != 256 || maxima["new"] != 128 {
+		t.Fatalf("rollback estimates = %v", maxima)
+	}
+	maxima["new"] = 512
+	data, err = json.Marshal(maxima)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRuntimeConfigFile(path, data); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(TaskDiskSamplesPath(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rollbackAt := info.ModTime().Add(time.Second)
+	if err := os.Chtimes(path, rollbackAt, rollbackAt); err != nil {
+		t.Fatal(err)
+	}
+	history, err = OpenTaskDiskHistory(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := history.RequiredBytes("new"); got != 512 {
+		t.Fatalf("estimate after re-upgrade = %d, want 512", got)
+	}
+	history.now = func() time.Time { return rollbackAt.Add(taskDiskLegacyMaxAge) }
+	if got := history.RequiredBytes("new"); got != 128 {
+		t.Fatalf("estimate after rollback sample expires = %d, want 128", got)
+	}
+}
+
+func TestAdaptiveSchedulerAdmitsAfterDiskOutlierExpires(t *testing.T) {
+	t.Parallel()
+
+	const gib = 1024 * 1024 * 1024
+	const peak uint64 = 5509423104
+	for _, name := range []string{"migrated", "measured"} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "task-disk-usage.json")
+			now := time.Now().UTC().Truncate(time.Second)
+			expiresAt := now.Add(time.Minute)
+			if name == "migrated" {
+				if err := os.WriteFile(path, fmt.Appendf(nil, `{"repo":%d}`, peak), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				legacyAt := expiresAt.Add(-taskDiskLegacyMaxAge)
+				if err := os.Chtimes(path, legacyAt, legacyAt); err != nil {
+					t.Fatal(err)
+				}
+			}
+			history, err := OpenTaskDiskHistory(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := uint64(0)
+			if name == "measured" {
+				history.now = func() time.Time { return expiresAt.Add(-taskDiskSampleMaxAge) }
+				if err := history.Record("repo", peak); err != nil {
+					t.Fatal(err)
+				}
+				history.now = func() time.Time { return now }
+				want = 2 * gib
+				if err := history.Record("repo", want); err != nil {
+					t.Fatal(err)
+				}
+				history, err = OpenTaskDiskHistory(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			history.now = func() time.Time { return now }
+			controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 1}, nil)
+			controller.diskSpace = func(string) (string, uint64, uint64, error) {
+				return "disk", 4 * gib, 8 * gib, nil
+			}
+			request := TaskDiskRequest{
+				Workspace: workspace.Manager{Root: t.TempDir()},
+				RequiredBytes: func() uint64 {
+					if size := history.RequiredBytes("repo"); size > 0 {
+						return size
+					}
+					return workspace.MinimumFreeBytes
+				},
+			}
+			waiter := &taskWaiter{disk: &request}
+			controller.waiters = []*taskWaiter{waiter}
+			controller.RecheckQueue()
+			if waiter.granted || waiter.diskEstimate != peak || waiter.diskBlock == "" {
+				t.Fatalf("outlier did not block admission: %+v", waiter)
+			}
+			now = expiresAt
+			controller.RecheckQueue()
+			if got := history.RequiredBytes("repo"); got != want {
+				t.Errorf("estimate after expiry = %d, want %d", got, want)
+			}
+			if !waiter.granted || waiter.diskBytes != max(want, workspace.MinimumFreeBytes) {
+				t.Fatalf("admission after expiry: %+v", waiter)
+			}
+		})
 	}
 }
 
@@ -752,6 +913,41 @@ func TestAdaptiveSchedulerWaitsBeforeReadmittingFailedAllocation(t *testing.T) {
 	controller.sampleAndUpdate()
 	if !waiter.granted || waiter.root != root {
 		t.Fatalf("retry admitted = %v, root = %q, want %q", waiter.granted, waiter.root, root)
+	}
+}
+
+func TestAdaptiveSchedulerLogsDiskSpaceAfterAllocationCooldown(t *testing.T) {
+	t.Parallel()
+
+	const floor = workspace.MinimumFreeBytes
+	var logs []string
+	controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 2}, func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	})
+	controller.diskSpace = func(string) (string, uint64, uint64, error) {
+		return "disk", floor, math.MaxUint64, nil
+	}
+	request := TaskDiskRequest{Workspace: workspace.Manager{Root: t.TempDir()}}
+	_, release, err := controller.AcquireWorkspace(t.Context(), "active", request, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	request.RetryAfter = time.Now().Add(time.Hour)
+	waiter := &taskWaiter{requestID: "retry", disk: &request, queued: true}
+	controller.waiters = []*taskWaiter{waiter}
+	controller.RecheckQueue()
+	request.RetryAfter = time.Now().Add(-time.Second)
+	controller.RecheckQueue()
+	controller.RecheckQueue()
+
+	if waiter.granted || len(logs) != 2 || !strings.Contains(logs[0], "retry_at=") {
+		t.Fatalf("expected cooldown followed by disk block: granted=%t logs=%v", waiter.granted, logs)
+	}
+	details := fmt.Sprintf(`free_bytes=%d required_bytes=%d reserved_bytes=%d blocking_request_ids="active" estimated_bytes=%d`, floor, floor, floor, floor)
+	if strings.Contains(logs[1], "retry_at=") || !strings.Contains(logs[1], details) {
+		t.Fatalf("expected current disk space and reservations: %s", logs[1])
 	}
 }
 

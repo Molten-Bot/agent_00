@@ -1940,6 +1940,95 @@ func TestRunLocalTaskRecordsOnlySuccessfulDiskUsageBeforeTerminalLog(t *testing.
 	}
 }
 
+func TestRunLocalIssueTaskRecordsOnlyFreshWorkspaceUsage(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	for _, name := range []string{"fresh", "retained"} {
+		t.Run(name, func(t *testing.T) {
+			store, record := lifecycleRecord(t)
+			record.Run.Prompt = "inspect tests"
+			record.Run.AgentHarness = "codex"
+			record.Run.GitHubIssue.URL = "https://github.com/acme/repo/issues/17"
+			record.Run.GitHubIssue.Claim.ExclusionLabel = "in-progress"
+			record.WorkspaceDir = filepath.Join(filepath.Dir(store.Root), "issue-workspaces", record.ID)
+			repoDir := filepath.Join(record.WorkspaceDir, "repo")
+			cache := filepath.Join(record.WorkspaceDir, workspace.AgentIODirName, "cache", "go-build", "failed-attempt")
+			if name == "retained" {
+				record.CheckoutComplete = true
+				record.Run.GitHubIssue.Claim.Attempt = 2
+				if err := os.MkdirAll(filepath.Join(repoDir, ".git"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.MkdirAll(filepath.Dir(cache), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(cache, make([]byte, 128*1024), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := store.Save(record); err != nil {
+				t.Fatal(err)
+			}
+			work, _, err := prepareIssueExecution(store, record.Run, localruntime.IssueRecoveryConfig{})
+			if err != nil || work == nil {
+				t.Fatalf("prepare issue execution = %v, %v", work, err)
+			}
+			defer work.lock.Close()
+
+			branch := record.Run.GitHubIssue.Claim.Branch
+			cloned := false
+			runner := repairPRRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+				if cmd.Name != "git" || len(cmd.Args) == 0 {
+					return execx.Result{}, nil
+				}
+				switch cmd.Args[0] {
+				case "clone":
+					cloned = true
+					return execx.Result{}, os.MkdirAll(cmd.Args[len(cmd.Args)-1], 0o700)
+				case "remote":
+					return execx.Result{Stdout: record.Run.RepoURL}, nil
+				case "branch":
+					return execx.Result{Stdout: branch}, nil
+				case "status":
+					return execx.Result{Stdout: "## " + branch + "\n"}, nil
+				case "ls-remote":
+					if slices.Contains(cmd.Args, "--symref") {
+						return execx.Result{Stdout: "ref: refs/heads/main\tHEAD\n"}, nil
+					}
+					return execx.Result{Stdout: "abc\trefs/heads/" + branch + "\n"}, nil
+				case "rev-list":
+					return execx.Result{Stdout: "0\n"}, nil
+				}
+				return execx.Result{}, nil
+			})
+			ctx, cancel := context.WithCancelCause(t.Context())
+			defer cancel(nil)
+			ctx = context.WithValue(ctx, issueExecutionContextKey{}, work)
+			handle := newLocalTaskController().Register(record.RequestID, cancel)
+			history, err := localruntime.OpenTaskDiskHistory("")
+			if err != nil {
+				t.Fatal(err)
+			}
+			key := localruntime.TaskDiskKey(record.Run.RepoList())
+			logf := func(string, ...any) {}
+			outcome := runLocalTask(ctx, runner, logf, "local", record.RequestID, record.Run, 0, handle, nil, nil, workspace.Manager{}, func(runDir string) {
+				recordLocalTaskDiskUsage(history, key, record.RequestID, runDir, logf)
+			}, false)
+			if outcome.State != "no_changes" || outcome.Result.Err != nil || outcome.Result.WorkspaceDir != record.WorkspaceDir {
+				t.Fatalf("issue outcome = %+v", outcome)
+			}
+			wantFresh := name == "fresh"
+			if got := history.RequiredBytes(key); (got > 0) != wantFresh || cloned != wantFresh {
+				t.Fatalf("issue measurement = %d, cloned = %t, want fresh workspace = %t", got, cloned, wantFresh)
+			}
+			if !wantFresh {
+				if _, err := os.Stat(cache); err != nil {
+					t.Fatalf("retained cache was removed: %v", err)
+				}
+			}
+		})
+	}
+}
+
 func testRunLocalTaskDiskUsageBeforeTerminalLog(t *testing.T, failedStage, prompt, wantState string, wantSample bool) {
 	t.Helper()
 	taskWorkspace := workspace.Manager{Root: t.TempDir()}

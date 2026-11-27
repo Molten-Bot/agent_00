@@ -259,13 +259,16 @@ tmpfs: accumulated tasks can fill it and prevent even `git clone` from starting.
 Linux workspace allocation checks for at least 512 MiB free on each allocation
 and falls back to the configured disk base when the preferred base is full.
 This reserve is an early check, not a limit on an individual build's disk usage.
-The daemon estimates workspace needs from the largest of the last four successful
-runs for each repository or combination of repositories. The measurement includes
-the checkout and tool caches still present at completion. A large run raises the
-estimate immediately and ages out after four newer successful runs. Incomplete,
-failed, and stopped runs are skipped. History is stored by repository hash in
-`.<runtime-config-filename>.task-disk-usage.json` beside the runtime config. An old
-high-water mark seeds the window as one sample.
+The daemon uses the largest measurement from up to four successful runs in fresh
+workspaces for each repository or combination of repositories. The measurement
+includes the checkout and tool caches still present at completion. A large run
+raises the estimate immediately and expires after seven days or four newer
+measurements, whichever comes first. Incomplete, failed, and stopped runs are
+skipped, as are runs with inherited workspaces. The timestamped history is stored
+by repository hash in `.<runtime-config-filename>.task-disk-usage.json.v2` beside
+the runtime config. The original `.task-disk-usage.json` sidecar retains scalar
+estimates for older releases. An imported high-water mark expires 24 hours after
+the scalar file was last written.
 
 Tasks without a history reserve 512 MiB. After accounting for active reservations
 on the same filesystem, admission requires at least 512 MiB free and enough space
