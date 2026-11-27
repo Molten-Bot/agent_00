@@ -883,6 +883,9 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 			observed = record
 		}
 	}
+	if previous.Outcome == "merged" {
+		return issueRetryResult{}, http.StatusConflict, fmt.Errorf("issue already has a merged pull request")
+	}
 	workflowRecovery := !automatic && remote.Claim.ID != "" &&
 		((savedRun == nil && observed.ID != "") || hasUnsubmittedWorkflowRecovery(previous))
 	metadataRetry := app.IsWorkflowPRMetadataFailure(previous.FailureDetail()) ||

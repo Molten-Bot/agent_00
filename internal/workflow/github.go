@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -366,6 +367,9 @@ func (g GitHub) inspect(ctx context.Context, repo, selector string, needs ScanNe
 	}
 	return i, nil
 }
+
+var errMergePending = errors.New("GitHub did not confirm the pull request merged")
+
 func (g GitHub) Merge(ctx context.Context, r Run) error {
 	ctx = githubutil.WithCaller(ctx, "workflow_merge")
 	if r.MergeHead == "" {
@@ -399,16 +403,16 @@ func (g GitHub) Merge(ctx context.Context, r Run) error {
 	if _, err = g.command(ctx, args...); err != nil {
 		return err
 	}
-	if !r.requiresReview() && appID == 0 {
-		return nil
-	}
 	raw, err := g.command(ctx, "pr", "view", r.PRURL, "--repo", r.Item.Repository, "--json", "state")
 	if err != nil {
 		return err
 	}
 	var pr struct{ State string }
-	if err := json.Unmarshal([]byte(raw), &pr); err != nil || pr.State != "MERGED" {
-		return fmt.Errorf("GitHub did not confirm the pull request merged")
+	if err := json.Unmarshal([]byte(raw), &pr); err != nil {
+		return fmt.Errorf("decode pull request state after merge: %w", err)
+	}
+	if pr.State != "MERGED" {
+		return errMergePending
 	}
 	return nil
 }

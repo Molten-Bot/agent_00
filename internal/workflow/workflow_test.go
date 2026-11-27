@@ -379,6 +379,7 @@ func TestGitHubPollingAndHeadBoundMerge(t *testing.T) {
 	t.Parallel()
 	var commands []execx.Command
 	resolved := false
+	mergeState := "OPEN"
 	g := GitHub{Runner: fakeRunner(func(_ context.Context, c execx.Command) (execx.Result, error) {
 		commands = append(commands, c)
 		args := strings.Join(c.Args, " ")
@@ -397,6 +398,9 @@ func TestGitHubPollingAndHeadBoundMerge(t *testing.T) {
 		if strings.Contains(args, "user") {
 			return execx.Result{Stdout: "agent\n"}, nil
 		}
+		if strings.Contains(args, "pr view") && strings.HasSuffix(args, "--json state") {
+			return execx.Result{Stdout: fmt.Sprintf(`{"state":%q}`, mergeState)}, nil
+		}
 		if strings.Contains(args, "pr view") {
 			return execx.Result{Stdout: `{"number":2,"state":"OPEN","headRefOid":"abc","reviewDecision":"APPROVED","statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"}]}`}, nil
 		}
@@ -413,10 +417,14 @@ func TestGitHubPollingAndHeadBoundMerge(t *testing.T) {
 		t.Fatalf("merge with unresolved finding = %v", err)
 	}
 	resolved = true
+	if err = g.Merge(t.Context(), run); !errors.Is(err, errMergePending) {
+		t.Fatalf("merge accepted into queue = %v, want pending confirmation", err)
+	}
+	mergeState = "MERGED"
 	if err = g.Merge(t.Context(), run); err != nil {
 		t.Fatal(err)
 	}
-	args := strings.Join(commands[len(commands)-1].Args, " ")
+	args := strings.Join(commands[len(commands)-2].Args, " ")
 	if !strings.Contains(args, "--match-head-commit abc") || !strings.Contains(args, "--squash") || !strings.Contains(args, "--delete-branch") || strings.Contains(args, "--admin") {
 		t.Fatal(args)
 	}
@@ -552,6 +560,9 @@ func TestImplementationMergeRequiresPersistedReceiptOnCurrentHead(t *testing.T) 
 			}
 			merges := 0
 			prState := "OPEN"
+			if tc.interrupted {
+				prState = "MERGED"
+			}
 			gh := GitHub{Runner: fakeRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
 				reply := func(raw string) (execx.Result, error) { return execx.Result{Stdout: raw}, nil }
 				args := strings.Join(cmd.Args, " ")
@@ -603,7 +614,7 @@ func TestImplementationMergeRequiresPersistedReceiptOnCurrentHead(t *testing.T) 
 			restarted := &Engine{
 				Store: e.Store, StatePath: e.StatePath, Enabled: e.Enabled, Allowed: e.Allowed,
 				Fetch: e.Fetch, Submit: e.Submit, Status: e.Status,
-				InspectPR: gh.Inspect, Merge: gh.Merge,
+				InspectPR: gh.Inspect, InspectPRState: gh.InspectState, Merge: gh.Merge,
 			}
 			tick(t, restarted)
 			tick(t, restarted)

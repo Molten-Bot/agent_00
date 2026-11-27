@@ -540,6 +540,8 @@ func (b *Broker) IngestLog(line string) {
 				t.ReviewGate = "Pull request head changed. A fresh review is required."
 			case "merge_blocked":
 				t.ReviewGate = "Merge blocked. See workflow events for details."
+			case "merge_pending":
+				t.ReviewGate = "Waiting for GitHub to confirm the pull request merged."
 			default:
 				t.ReviewGate = ""
 			}

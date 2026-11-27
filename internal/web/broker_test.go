@@ -46,6 +46,10 @@ func TestDashboardCountsWorkflowDurationOnce(t *testing.T) {
 	if got := b.Snapshot().Stats.TotalSavedSeconds; got != 0 {
 		t.Fatalf("waiting workflow time saved = %v, want 0", got)
 	}
+	b.IngestLog("workflow event=transition" + workflow + " status=waiting reason=merge_pending duration_ms=unknown")
+	if stats := b.Snapshot().Stats; stats.TotalSavedSeconds != 0 {
+		t.Fatalf("merge queue credited time before confirmation: %+v", stats)
+	}
 	now = now.Add(50 * time.Second)
 	merge := "workflow event=transition" + workflow + " status=merged duration_ms=80000"
 	b.IngestLog(merge)

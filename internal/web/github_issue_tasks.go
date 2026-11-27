@@ -134,8 +134,10 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 			task.UpdatedAt = formatTimeOrEmpty(latest.UpdatedAt)
 		}
 		switch {
-		case latest.PlanningStatus == issueDone:
+		case latest.Outcome == "merged" || task.Status == "merged" || latest.PlanningStatus == issueDone:
 			task.Status, task.Error, task.ReviewGate = "merged", "", ""
+			task.RetryAt = ""
+			task.IssueState = "fulfilled"
 		case task.IssueState == "retry_wait" || task.IssueState == localruntime.IssueChecksPending ||
 			task.IssueState == "waiting" || task.IssueState == "awaiting_review":
 			if isCompletedTaskStatus(task.Status) || !live {

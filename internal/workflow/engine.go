@@ -250,6 +250,7 @@ type Engine struct {
 
 	InspectPRState func(context.Context, string, string) (Item, error)
 	FinishReview   func(context.Context, githubutil.ReviewReceipt, *githubutil.PendingReviewGate) error
+	RecordMerge    func(Run, time.Time) error
 	// MemoryPressure defers background ticks while host memory is exhausted.
 	MemoryPressure func() bool
 
@@ -345,6 +346,8 @@ func (e *Engine) logRun(r Run, event string, mergedAt time.Time) {
 		reason = "workflow_changed"
 	case "Waiting for a submitted clean review on the current pull request head":
 		reason = "review_not_clean"
+	case "Waiting for GitHub to confirm the pull request merged":
+		reason = "merge_pending"
 	case "Waiting for the trusted review policy check on the current pull request head":
 		reason = "review_check_pending"
 	case "Review writeback paused: workflow changed or was disabled":
@@ -753,6 +756,11 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 	var mergedAt time.Time
 	finish := func() error {
 		r.UpdatedAt = e.now()
+		if r.Status == "merged" && e.RecordMerge != nil {
+			if err := e.RecordMerge(r, mergedAt); err != nil {
+				return fmt.Errorf("record confirmed workflow merge: %w", err)
+			}
+		}
 		if err := commit(); err != nil {
 			return err
 		}
@@ -769,6 +777,10 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		r.GitHubRetryAt = rate.RetryAt
 		r.Reason = "Waiting for GitHub quota. " + rate.Error()
 		return true
+	}
+	inspectState := e.InspectPRState
+	if inspectState == nil {
+		inspectState = e.InspectPR
 	}
 	active := featureEnabled && exists && w.Enabled && e.Allowed(w.Repository) && e.Allowed(r.Item.Repository)
 	if !e.now().Before(r.GitHubRetryAt) {
@@ -830,6 +842,17 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		}
 		if o.ReviewInterrupted {
 			r.PRURL = o.PRURL
+			if inspectState != nil && strings.Contains(r.PRURL, "/pull/") {
+				i, err := inspectState(ctx, r.Item.Repository, r.PRURL)
+				if err != nil {
+					waitForQuota(err)
+					return errors.Join(err, finish())
+				}
+				if !i.Merged {
+					return fmt.Errorf("GitHub did not confirm the interrupted review's pull request merged")
+				}
+				mergedAt = i.MergedAt
+			}
 			r.Status = "merged"
 			r.Reason = "Pull request merged externally during review"
 		} else if o.Status == OutcomeChecksPending {
@@ -892,11 +915,16 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 			r.Reason = "Review writeback paused: workflow changed or was disabled"
 			return finish()
 		}
-		if e.InspectPR == nil || !strings.Contains(r.PRURL, "/pull/") {
+		receipt := r.cleanReviewReceipt(r.Outcome)
+		inspect := e.InspectPR
+		if receipt == nil || e.FinishReview == nil {
+			inspect = inspectState
+		}
+		if inspect == nil || !strings.Contains(r.PRURL, "/pull/") {
 			r.Reason = "Waiting for a submitted clean review on the current pull request head"
 			return finish()
 		}
-		i, err := e.InspectPR(ctx, r.Item.Repository, r.PRURL)
+		i, err := inspect(ctx, r.Item.Repository, r.PRURL)
 		if err != nil {
 			waitForQuota(err)
 			return errors.Join(err, finish())
@@ -910,7 +938,6 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 			r.Status, r.Reason = "completed", "Pull request closed before review writeback"
 			return finish()
 		}
-		receipt := r.cleanReviewReceipt(r.Outcome)
 		if receipt == nil || e.FinishReview == nil {
 			r.Reason = "Waiting for a submitted clean review on the current pull request head"
 			return finish()
@@ -1030,6 +1057,8 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 			r.Reason = "Waiting for requested changes"
 		} else if errors.Is(mergeErr, githubutil.ErrReviewApprovalPending) {
 			r.Reason = "Waiting for human approval"
+		} else if errors.Is(mergeErr, errMergePending) {
+			r.Reason = "Waiting for GitHub to confirm the pull request merged"
 		} else if mergeErr != nil {
 			if !waitForQuota(mergeErr) {
 				r.Reason = "Merge blocked: " + mergeErr.Error()

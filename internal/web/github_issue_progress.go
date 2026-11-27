@@ -85,7 +85,8 @@ func (s Server) syncIssuePlanning(ctx context.Context, record localruntime.Issue
 		return nil
 	}
 	issue := record.Run.GitHubIssue
-	canComplete := record.Outcome == "completed" && record.PRVerification == "" && issue.LinkMode == config.GitHubIssueLinkClose
+	canComplete := (record.Outcome == "completed" || record.Outcome == "merged") &&
+		record.PRVerification == "" && issue.LinkMode == config.GitHubIssueLinkClose
 	if record.PlanningStatus == issueInReview && !canComplete {
 		return nil
 	}

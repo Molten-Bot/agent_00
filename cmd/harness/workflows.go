@@ -123,6 +123,7 @@ func configureWorkflows(ctx context.Context, cfg localruntime.InitConfig, runner
 	reviewer := app.New(runner)
 	reviewer.GitHubCooldown = server.GitHubCooldown
 	engine := &workflow.Engine{Store: store, StatePath: filepath.Join(root, "workflow-state.json"), Fetch: gh.Fetch, InspectPR: gh.Inspect, InspectPRState: gh.InspectState, FinishReview: reviewer.ResumeReviewGate, Merge: gh.Merge, Logf: logf}
+	engine.RecordMerge = server.RecordWorkflowMerge
 	engine.Enabled = func() bool {
 		s, err := localruntime.LoadRuntimeConfigUISettings(cfg.RuntimeConfigPath)
 		return err == nil && s.WorkflowEnabled

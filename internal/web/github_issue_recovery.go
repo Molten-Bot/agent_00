@@ -302,7 +302,7 @@ func (s Server) ReconcileIssueWork(ctx context.Context) error {
 }
 
 func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.IssueClaimRecord) error {
-	if record.Incident == workflowIssueRecoveryIncident {
+	if record.Incident == workflowIssueRecoveryIncident && record.Outcome != "merged" {
 		return nil
 	}
 	if !record.UnlockPending {
@@ -423,7 +423,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		}
 	}
 	if stopped, err := localruntime.IssueProcessesStopped(record); err != nil || !stopped {
-		if staleOwner {
+		if staleOwner || record.Outcome == "merged" {
 			return err
 		}
 		record.State = "waiting_for_worker"
@@ -719,6 +719,66 @@ func (s Server) resumeIssueChecks(ctx context.Context, record localruntime.Issue
 		return s.deferIssueRecord(record, err)
 	}
 	return nil
+}
+
+// RecordWorkflowMerge settles the issue attempt before a confirmed merge is
+// published to the broker. The admission and issue locks fence recovery and
+// worker writes to the same claim.
+func (s *Server) RecordWorkflowMerge(run workflow.Run, mergedAt time.Time) error {
+	if s.IssueClaims == nil || run.Item.Kind != "issue" || run.RequestID == "" ||
+		!strings.EqualFold(githubutil.PullRequestRepository(run.PRURL), run.Item.Repository) {
+		return nil
+	}
+	if s.issueAutomation != nil {
+		s.issueAutomation.admission.Lock()
+		defer s.issueAutomation.admission.Unlock()
+	}
+	records, listErr := s.IssueClaims.List()
+	for _, record := range records {
+		issue, policy := record.Run.GitHubIssue, record.Run.Workflow
+		if record.RequestID != run.RequestID || policy == nil || policy.EventID != run.ID ||
+			issue.Number != run.Item.Number || !strings.EqualFold(issue.Repository, run.Item.Repository) {
+			continue
+		}
+		lock, err := s.IssueClaims.TryControlLock(localruntime.IssueExecutionKey(issue))
+		if err != nil {
+			return err
+		}
+		if lock == nil {
+			return fmt.Errorf("issue claim is still in use")
+		}
+		defer lock.Close()
+
+		current, err := s.IssueClaims.Load(record.ID)
+		if err != nil {
+			return err
+		}
+		if current.RequestID != run.RequestID || current.Outcome == "merged" ||
+			(current.PRURL != "" && !strings.EqualFold(current.PRURL, run.PRURL)) {
+			return nil
+		}
+		current.RunError = current.FailureDetail()
+		current.State, current.Outcome = "fulfilled", "merged"
+		current.PRURL = run.PRURL
+		current.Error = ""
+		current.ExitCode = 0
+		current.NextAttemptAt = time.Time{}
+		current.UnlockPending = current.UnlockPending || current.LabelAdded
+		if current.StoppedAt.IsZero() {
+			current.StoppedAt = mergedAt
+			if current.StoppedAt.IsZero() {
+				current.StoppedAt = time.Now().UTC()
+			}
+		}
+		if err := s.IssueClaims.Save(current); err != nil {
+			return err
+		}
+		if current.UnlockPending {
+			s.WakeIssueRecovery()
+		}
+		return nil
+	}
+	return listErr
 }
 
 func (s Server) recordVerifiedIssuePR(record localruntime.IssueClaimRecord, pr issuePullRequest) error {

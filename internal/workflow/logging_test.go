@@ -75,7 +75,7 @@ func TestWorkflowTerminalTransitionDuration(t *testing.T) {
 	}{
 		{name: "success", outcome: Outcome{Status: "succeeded"}, elapsed: 3 * time.Second, want: "status=succeeded reason=succeeded duration_ms=3000"},
 		{name: "zero elapsed", outcome: Outcome{Status: "succeeded"}, want: "status=succeeded reason=succeeded duration_ms=0"},
-		{name: "review interrupted", outcome: Outcome{Status: "failed", ReviewInterrupted: true}, elapsed: 3 * time.Second, want: "status=merged reason=external_merge duration_ms=3000"},
+		{name: "archived review interrupted", outcome: Outcome{Status: "failed", ReviewInterrupted: true}, alreadyMerged: true, elapsed: time.Hour, want: "status=merged reason=external_merge duration_ms=3000"},
 		{name: "merged before review writeback", outcome: Outcome{Status: "succeeded", PendingReviewGate: &githubutil.PendingReviewGate{}}, alreadyMerged: true, hasReceipt: true, elapsed: 3 * time.Second, want: "status=merged reason=merge_unconfirmed duration_ms=3000"},
 		{name: "merged before review writeback without receipt", outcome: Outcome{Status: "succeeded", PendingReviewGate: &githubutil.PendingReviewGate{}}, alreadyMerged: true, elapsed: 3 * time.Second, want: "status=merged reason=merge_unconfirmed duration_ms=3000"},
 		{name: "completed without merge", outcome: Outcome{Status: "succeeded", PendingReviewGate: &githubutil.PendingReviewGate{}}, workflowRemoved: true, elapsed: 3 * time.Second, want: "status=completed reason=completed duration_ms=3000"},
@@ -92,14 +92,28 @@ func TestWorkflowTerminalTransitionDuration(t *testing.T) {
 			e.Now = func() time.Time { return start.Add(test.elapsed) }
 			var logs []string
 			e.Logf = func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }
+			openWithoutReceipt := test.alreadyMerged && !test.hasReceipt && !test.outcome.ReviewInterrupted
 			if test.alreadyMerged {
 				const prURL = "https://github.com/acme/repo/pull/42"
 				test.outcome.PRURL = prURL
 				if test.hasReceipt {
 					test.outcome.ReviewReceipt = fixtureReviewReceipt(w, prURL)
 				}
-				e.InspectPR = func(context.Context, string, string) (Item, error) {
-					return Item{Merged: true}, nil
+				inspect := func(_ context.Context, repo, url string) (Item, error) {
+					if repo != w.Repository || url != prURL {
+						t.Fatalf("inspected %s %s", repo, url)
+					}
+					if openWithoutReceipt {
+						return Item{Open: true}, nil
+					}
+					return Item{Merged: true, MergedAt: start.Add(3 * time.Second)}, nil
+				}
+				e.InspectPRState = inspect
+				e.InspectPR = func(ctx context.Context, repo, url string) (Item, error) {
+					if !test.hasReceipt {
+						t.Fatal("ran full inspection without a usable review receipt")
+					}
+					return inspect(ctx, repo, url)
 				}
 				e.FinishReview = func(context.Context, githubutil.ReviewReceipt, *githubutil.PendingReviewGate) error {
 					t.Fatal("review writeback ran after merge")
@@ -117,9 +131,21 @@ func TestWorkflowTerminalTransitionDuration(t *testing.T) {
 				t.Fatal(err)
 			}
 
+			if openWithoutReceipt {
+				tick(t, e)
+				tick(t, e)
+				if len(logs) != 1 || !strings.Contains(logs[0], "status=awaiting_review reason=review_not_clean") {
+					t.Fatalf("open pull request without receipt did not wait for review: %v", logs)
+				}
+				openWithoutReceipt = false
+				logs = nil
+			}
 			tick(t, e)
 			if len(logs) != 1 || !strings.Contains(logs[0], "event=transition") || !strings.HasSuffix(logs[0], test.want) {
 				t.Fatalf("terminal logs = %v, want one transition ending in %q", logs, test.want)
+			}
+			if test.alreadyMerged && !strings.Contains(logs[0], "merged_at="+start.Add(3*time.Second).Format(time.RFC3339Nano)) {
+				t.Fatalf("merge log omitted GitHub timestamp: %s", logs[0])
 			}
 		})
 	}

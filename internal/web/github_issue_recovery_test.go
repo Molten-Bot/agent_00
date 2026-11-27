@@ -880,6 +880,51 @@ func TestIssueCheckRecoveryWaitsForRateResetThenResubmitsSameClaim(t *testing.T)
 	}
 }
 
+func TestConfirmedWorkflowMergeSettlesIssueClaim(t *testing.T) {
+	t.Parallel()
+	for _, state := range []string{"blocked", "retry_wait", localruntime.IssueStateMergedUnverified} {
+		t.Run(state, func(t *testing.T) {
+			t.Parallel()
+			s, _ := recoveryServer(t)
+			const id, requestID, eventID = "abcdef0123456789abcdef0123456789", "issue-task", "workflow-activation"
+			const prURL = "https://github.com/acme/repo/pull/42"
+			mergedAt := time.Now().UTC().Truncate(time.Second)
+			record := localruntime.IssueClaimRecord{
+				Version: 2, ID: id, RequestID: requestID, State: state, Outcome: "error",
+				PRURL: prURL, LabelAdded: true, NextAttemptAt: mergedAt.Add(time.Hour),
+				PRVerification: "Verify draft checks", Error: "draft verification interrupted",
+				Run: config.Config{
+					GitHubIssue: &config.GitHubIssueConfig{Repository: "acme/repo", Number: 17, Claim: &config.GitHubIssueClaim{ID: id}},
+					Workflow:    &config.WorkflowRunConfig{ID: "issues", EventID: eventID},
+				},
+			}
+			if err := s.IssueClaims.Save(record); err != nil {
+				t.Fatal(err)
+			}
+			run := workflow.Run{ID: eventID, RequestID: requestID, PRURL: prURL,
+				Item: workflow.Item{Kind: "issue", Repository: "acme/repo", Number: 17}}
+			for range 2 {
+				if err := s.RecordWorkflowMerge(run, mergedAt); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// A fresh broker has no task log to override the claim status.
+			s.Broker = NewBroker()
+			s.IssueClaims = &localruntime.IssueClaimStore{Root: s.IssueClaims.Root}
+			got := latestRecoveryRecord(t, s)
+			if !got.Fulfilled() || got.Outcome != "merged" || !got.NextAttemptAt.IsZero() || !got.UnlockPending ||
+				got.Error != "" || got.FailureDetail() != record.Error || got.PRVerification != record.PRVerification || !got.StoppedAt.Equal(mergedAt) {
+				t.Fatalf("confirmed merge did not settle the claim: %+v", got)
+			}
+			tasks := s.snapshot().Tasks
+			if len(tasks) != 1 || tasks[0].Status != "merged" || tasks[0].PRURL != prURL ||
+				tasks[0].Error != "" || tasks[0].RetryAt != "" || !tasks[0].HistoryOnly {
+				t.Fatalf("dashboard lost the confirmed merge after restart: %+v", tasks)
+			}
+		})
+	}
+}
+
 func TestIssueRecoveryPreservesFailedVerificationAfterExternalMerge(t *testing.T) {
 	t.Parallel()
 	for _, mode := range []string{"restart", "explicit retry", "legacy fulfilled record"} {
