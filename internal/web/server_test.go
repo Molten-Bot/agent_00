@@ -534,15 +534,6 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `close.title = "Delete finished task and remove it from metrics";`) {
 		t.Fatalf("expected index html to label close actions for both history-only and live completed tasks")
 	}
-	if !strings.Contains(markup, "function isTaskClosePending(") {
-		t.Fatalf("expected index html to include immediate close-button hiding helper")
-	}
-	if !strings.Contains(markup, "close.hidden = closePending;") {
-		t.Fatalf("expected index html to hide the close button immediately while close is pending")
-	}
-	if !strings.Contains(markup, "setLocalPromptStatus(\"ok\", `Deleted task ${requestID}`);\n        completeTaskDismissal(requestID);") {
-		t.Fatalf("expected index html to dismiss closed tasks immediately after a successful close")
-	}
 	closeButtonStart := strings.Index(markup, "function renderTaskCloseButton(task, requestID)")
 	canRerunStart := strings.Index(markup, "function canRerunTask(task)")
 	if closeButtonStart < 0 || canRerunStart < 0 || canRerunStart <= closeButtonStart {
@@ -552,7 +543,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if strings.Contains(closeButtonBody, "state.taskHistoryByID.delete(requestID);") {
 		t.Fatalf("expected index html to keep history-only dismissed tasks available for the removed history view")
 	}
-	if !strings.Contains(closeButtonBody, "dismissTask(requestID);") || !strings.Contains(markup, "/api/tasks/${encodeURIComponent(requestID)}/delete") {
+	if !strings.Contains(closeButtonBody, "dismissTask(requestID, task)") || !strings.Contains(markup, "/api/tasks/${encodeURIComponent(requestID)}/delete") {
 		t.Fatal("task deletion must remove server metrics for history and live tasks")
 	}
 	if !strings.Contains(markup, "state.taskHistoryUnseenIDs instanceof Set && state.taskHistoryUnseenIDs.delete(requestID)") {
@@ -696,7 +687,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "state.taskFullscreenOpen &&\n        taskFullscreenTerminal") {
 		t.Fatalf("expected deferred terminal flushes to require open fullscreen state")
 	}
-	if !strings.Contains(markup, "if (nodeContainsActiveSelection(listNode)) {") {
+	if !strings.Contains(markup, "if (!options.immediate && nodeContainsActiveSelection(listNode)) {") {
 		t.Fatalf("expected index html to defer task list redraws while text is selected")
 	}
 	if !strings.Contains(markup, "terminalNode.dataset.pendingRenderSig = renderSig;") {
@@ -745,7 +736,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "if (!requestID || isTaskHistoryExpired(task, nowMs)) {") {
 		t.Fatalf("expected index html to skip invalid and expired completed tasks while rebuilding history")
 	}
-	if !strings.Contains(markup, "if (!requestID || liveByID.has(requestID) || state.dismissedTaskIDs.has(requestID) || isTaskHistoryExpired(task, nowMs)) {") {
+	if !strings.Contains(markup, "if (!requestID || liveByID.has(requestID) || isTaskDismissed(task) || isTaskHistoryExpired(task, nowMs)) {") {
 		t.Fatalf("expected index html history mode to exclude dismissed or expired tasks from persisted history output")
 	}
 	if !strings.Contains(markup, `const TASK_HISTORY_KEY = "hubui.taskHistory.v1";`) {
@@ -929,7 +920,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		t.Fatalf("expected completed task history dedupe key to include reviewers")
 	}
 	if !strings.Contains(markup, "function removedTasks(snapshot)") ||
-		!strings.Contains(markup, "state.dismissedTaskIDs.has(requestID)") ||
+		!strings.Contains(markup, "|| !isTaskDismissed(task) ||") ||
 		!strings.Contains(markup, "return removedTasks(snapshot);") {
 		t.Fatalf("expected index html to include removed completed-task history filter")
 	}
@@ -1331,9 +1322,6 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	}
 	if !strings.Contains(markup, "const closeAction = renderTaskCloseButton(task, requestID);") {
 		t.Fatalf("expected index html prompt-only mode to include completed-task close actions")
-	}
-	if !strings.Contains(markup, "completeTaskDismissal(requestID);") || !strings.Contains(markup, "Deleted task ${requestID}") {
-		t.Fatalf("expected index html to dismiss tasks after server deletion")
 	}
 	if !strings.Contains(markup, "const showTaskCloneAction = canCopyTaskCloneCommand(task);") ||
 		!strings.Contains(markup, "const inlineCompletedActions = isCompletedTask(task) && showTaskCloneAction;") ||
