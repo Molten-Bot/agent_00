@@ -947,14 +947,33 @@ test('Studio shows pending draft verification on the same issue task', async t =
   const task = cards.locator('xpath=self::*[@data-task-id="issue-verification"]');
   const progress = task.locator('.task-progress[data-current-step-id="pr_verification"]');
   await progress.getByText(/Waiting for GitHub checks: Web and browser tests/).waitFor();
+  await progress.locator('.current').getByRole('img', { name: 'GitHub checks logo' }).waitFor();
   await progress.getByText(new RegExp(`Reviewed head: ${head}.*Last GitHub refresh: 2026-11-26T16:00:00Z`)).waitFor();
 
   const update = changes => page.evaluate(next => {
-    queueStreamSnapshot(JSON.stringify({ ...state.snapshot, tasks: [next] }));
+    const snapshot = { ...state.snapshot, tasks: [next] };
+    if (observeTaskSnapshot(snapshot)) render(snapshot);
   }, { ...first, ...changes });
   await update({ logs: [waitLog('2026-11-26T16:00:00Z'), waitLog('2026-11-26T16:00:10Z')] });
   await progress.getByText(/Last GitHub refresh: 2026-11-26T16:00:10Z/).waitFor();
   assert.equal(await cards.count(), 1);
+
+  await update({
+    stage: 'checks', logs: [{
+      stream: 'meta', time: now,
+      text: 'task request_id=issue-run stage=checks status=waiting action=wait_for_github_checks pending_checks="Build and Go tests" last_github_refresh="2026-11-26T16:00:20Z"',
+    }],
+  });
+  const checks = task.locator('.task-progress[data-current-step-id="checks"]');
+  await checks.locator('.current').getByRole('img', { name: 'GitHub checks logo' }).waitFor();
+  await checks.getByText(/Waiting for GitHub checks: Build and Go tests.*Last GitHub refresh: 2026-11-26T16:00:20Z/).waitFor();
+
+  await update({
+    status: 'pending', stage: 'checks', stage_status: 'waiting_workspace',
+    logs: [{ stream: 'meta', time: now, text: 'task status=queued request_id=issue-run reason=disk_space' }],
+  });
+  await checks.getByText('Waiting for workspace disk space').waitFor();
+  assert.equal(await checks.getByRole('img', { name: 'GitHub checks logo' }).count(), 0);
 
   await update({
     status: 'merged', stage: 'finalize', stage_status: 'ok', issue_state: 'fulfilled',

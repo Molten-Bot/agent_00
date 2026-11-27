@@ -177,6 +177,9 @@ func (h Harness) confirmDraftPatchCommits(ctx context.Context, repo repoWorkspac
 	if err := repo.ReviewedPatch.checkCommits(commits); err != nil {
 		return err
 	}
+	if err := h.requireWorkspace(ctx); err != nil {
+		return err
+	}
 	// PR metadata can lag behind the base ref on origin, where the patch base was fetched.
 	ref := "refs/heads/" + normalizeBranchRef(repo.BaseBranch)
 	remote, err := h.runCommand(ctx, "pr_verification", gitCommand(repo.Dir, "ls-remote", "--heads", publishRemoteOrigin, ref))
@@ -201,6 +204,7 @@ func (h Harness) loadDraftPatchCommits(ctx context.Context, repo repoWorkspace) 
 		sleep = sleepWithContext
 	}
 	confirmRestoredDraft := true
+	poll := newCheckPoll("pr_verification", repo.PRURL)
 	for remaining := h.prChecksWatchTimeout(); ; {
 		res, err := h.runCheckQuery(ctx, "pr_verification", cmd, checkQueryTimeout)
 		if err != nil {
@@ -240,8 +244,9 @@ func (h Harness) loadDraftPatchCommits(ctx context.Context, repo repoWorkspace) 
 		if remaining <= 0 {
 			return draftPatchCommits{}, errDraftRestoring
 		}
-		h.logDraftVerificationWait(repo, nil, refreshedAt)
-		delay := min(remaining, draftVerificationPollInterval)
+		h.suspendWorkspace()
+		delay := min(remaining, checkPollDelay(0, 0))
+		poll.report(h, "wait_for_reviewed_head_evidence", repo.ReviewedPatch.commits.Head, nil, refreshedAt, delay)
 		if err := sleep(ctx, delay); err != nil {
 			return draftPatchCommits{}, err
 		}

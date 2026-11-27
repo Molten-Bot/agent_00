@@ -4440,7 +4440,7 @@ func TestRunNoChecksReportedAfterRetryWindowTriggersRemediation(t *testing.T) {
 	}
 	exps = append(exps,
 		expectedRun{cmd: requiredStatusChecksCommand(repoDir, "acme/repo", "main"), res: execx.Result{Stdout: `{"contexts":["ci/test"],"checks":[]}`}},
-		expectedRun{cmd: headCommitSHACommand(repoDir), res: execx.Result{Stdout: "abcdef123456\n"}},
+		expectedRun{cmd: prStateViewCommand("", prURL), res: execx.Result{Stdout: `{"state":"OPEN","headRefOid":"abcdef123456"}`}},
 		expectedRun{cmd: workflowDispatchRunsCommand(repoDir, branch), res: execx.Result{Stdout: "[]\n"}},
 		expectedRun{cmd: codexCommand(targetDir, remediationPrompt(withAgentsPrompt(cfg.Prompt, agentsPath), prURL, noChecks, 1, false))},
 		expectedRun{cmd: statusCommand(repoDir), res: execx.Result{Stdout: " M file.go\n"}},
@@ -4521,7 +4521,7 @@ func TestRunNoChecksReportedResolvesFromWorkflowDispatchSnapshot(t *testing.T) {
 	}
 	exps = append(exps,
 		expectedRun{cmd: requiredStatusChecksCommand(repoDir, "acme/repo", "main"), res: execx.Result{Stdout: `{"contexts":["ci/test"],"checks":[]}`}},
-		expectedRun{cmd: headCommitSHACommand(repoDir), res: execx.Result{Stdout: "deadbeef\n"}},
+		expectedRun{cmd: prStateViewCommand("", prURL), res: execx.Result{Stdout: `{"state":"OPEN","headRefOid":"deadbeef"}`}},
 		expectedRun{
 			cmd: workflowDispatchRunsCommand(repoDir, branch),
 			res: execx.Result{Stdout: `[{"status":"completed","conclusion":"success","workflowName":"CI","displayTitle":"CI","headSha":"deadbeef"}]`},
@@ -4532,6 +4532,14 @@ func TestRunNoChecksReportedResolvesFromWorkflowDispatchSnapshot(t *testing.T) {
 	sleepCalls := 0
 
 	h := New(fake)
+	released := false
+	h.ReleaseWorkspace = func() { released = true }
+	h.AcquireWorkspace = func(context.Context) error {
+		if released {
+			t.Fatal("dispatch reconciliation tried to reacquire workspace")
+		}
+		return nil
+	}
 	h.Now = func() time.Time { return now }
 	h.Workspace = testWorkspaceManager(guid)
 	h.TargetDirOK = func(path string) bool { return path == targetDir }
@@ -4741,6 +4749,22 @@ func TestRunNoRequiredChecksWithNoConfiguredRequiredChecksPasses(t *testing.T) {
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+}
+
+func TestBuildFailureResultPreservesFailureAfterEarlierPRMerged(t *testing.T) {
+	t.Parallel()
+	repos := []repoWorkspace{
+		{PRURL: "https://github.com/example/first/pull/1", PRAlreadyMerged: true},
+		{PRURL: "https://github.com/example/second/pull/2"},
+	}
+	checkErr := errors.New("second repository checks failed")
+	result := buildFailureResult(ExitPR, "checks", checkErr, "/workspace", repos)
+	if result.PRAlreadyMerged || result.ExitCode != ExitPR || !errors.Is(result.Err, checkErr) {
+		t.Fatalf("multi-repository failure = %+v", result)
+	}
+	if len(result.RepoResults) != 2 || result.RepoResults[1].PRURL != repos[1].PRURL {
+		t.Fatalf("repository results = %+v", result.RepoResults)
 	}
 }
 

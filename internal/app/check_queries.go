@@ -162,6 +162,9 @@ func (h Harness) requireCheckHead(ctx context.Context, repo repoWorkspace, expec
 }
 
 func checkHeadMatches(state prStateView, expected string) error {
+	if pullRequestStateIsMerged(state) {
+		return githubutil.ErrReviewInterrupted
+	}
 	if state.State == "" {
 		return fmt.Errorf("%w: pull request state was missing", ErrChecksUnavailable)
 	}
@@ -224,6 +227,9 @@ type prCheckRollupContexts struct {
 }
 
 func (h Harness) readPRCheckRollup(ctx context.Context, repo repoWorkspace, id, expected string) ([]prCheckRollupEntry, error) {
+	if id == "" {
+		return nil, fmt.Errorf("%w: pull request ID was missing", ErrChecksUnavailable)
+	}
 	var checks []prCheckRollupEntry
 	var cursor string
 	seenCursors := make(map[string]bool)
@@ -324,29 +330,10 @@ func (h Harness) confirmHeadChecks(ctx context.Context, repo repoWorkspace, expe
 	if err := checkPRMatches(state, repo, expected); err != nil {
 		return err
 	}
-	if state.ID == "" {
-		return fmt.Errorf("%w: pull request ID was missing", ErrChecksUnavailable)
-	}
-	target := githubutil.PullRequestRepository(repo.PRURL)
-	required, err := h.configuredRequiredStatusChecks(ctx, repo.Dir, target, repo.BaseBranch, repo.ReviewSanitize, ready)
+	required, err := h.requiredCIStatusChecks(ctx, repo, ready)
 	if err != nil {
-		return fmt.Errorf("load required checks: %w", err)
+		return err
 	}
-	rules, err := githubutil.RequiredBranchRuleStatusChecks(ctx, func(ctx context.Context, args ...string) (string, error) {
-		cmd := ghCommand(repo.Dir, args...)
-		if repo.ReviewSanitize {
-			cmd = commandWithoutGitHubTokenEnv(cmd)
-		}
-		res, err := h.runCheckQuery(ctx, "checks", cmd, checkQueryTimeout)
-		if ready && err == nil && strings.TrimSpace(res.Stdout) == "" {
-			return "", fmt.Errorf("missing active branch rules")
-		}
-		return res.Stdout, err
-	}, target, repo.BaseBranch)
-	if err != nil {
-		return fmt.Errorf("load required ruleset checks: %w", err)
-	}
-	required = append(required, rules...)
 	checks, err := h.readPRCheckRollup(ctx, repo, state.ID, expected)
 	if err != nil {
 		return err
@@ -379,11 +366,35 @@ func (h Harness) confirmHeadChecks(ctx context.Context, repo repoWorkspace, expe
 		passing[name] = passed
 	}
 	for _, name := range required {
-		if name != githubutil.ReviewCheckName && !passing[name] {
+		if !passing[name] {
 			return fmt.Errorf("%w: required check %q has no passing result on the current head", ErrChecksUnavailable, name)
 		}
 	}
 	return nil
+}
+
+func (h Harness) requiredCIStatusChecks(ctx context.Context, repo repoWorkspace, requireEvidence bool) ([]string, error) {
+	target := githubutil.PullRequestRepository(repo.PRURL)
+	required, err := h.configuredRequiredStatusChecks(ctx, repo.Dir, target, repo.BaseBranch, repo.ReviewSanitize, requireEvidence)
+	if err != nil {
+		return nil, fmt.Errorf("load required checks: %w", err)
+	}
+	rules, err := githubutil.RequiredBranchRuleStatusChecks(ctx, func(ctx context.Context, args ...string) (string, error) {
+		cmd := ghCommand(repo.Dir, args...)
+		if repo.ReviewSanitize {
+			cmd = commandWithoutGitHubTokenEnv(cmd)
+		}
+		res, err := h.runCheckQuery(ctx, "checks", cmd, checkQueryTimeout)
+		if requireEvidence && err == nil && strings.TrimSpace(res.Stdout) == "" {
+			return "", fmt.Errorf("missing active branch rules")
+		}
+		return res.Stdout, err
+	}, target, repo.BaseBranch)
+	if err != nil {
+		return nil, fmt.Errorf("load required ruleset checks: %w", err)
+	}
+	required = append(required, rules...)
+	return slices.DeleteFunc(required, func(name string) bool { return name == githubutil.ReviewCheckName }), nil
 }
 
 // A preserved checkout can be behind a newer published commit. Advance only

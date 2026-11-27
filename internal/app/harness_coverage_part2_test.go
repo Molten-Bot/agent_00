@@ -591,24 +591,24 @@ func TestReconcileNoChecksWithWorkflowDispatch(t *testing.T) {
 
 	t.Run("head sha query fails", func(t *testing.T) {
 		t.Parallel()
-		repo := repoWorkspace{Dir: "/repo", Branch: "work"}
+		repo := repoWorkspace{Dir: "/repo", Branch: "work", PRURL: "https://github.com/example/repo/pull/42"}
 		fake := &fakeRunner{t: t, exps: []expectedRun{
-			{cmd: headCommitSHACommand(repo.Dir), err: errors.New("boom")},
+			{cmd: prStateViewCommand("", repo.PRURL), err: errors.New("boom")},
 		}}
 		h := New(fake)
-		if _, _, err := h.reconcileNoChecksWithWorkflowDispatch(context.Background(), repo); err == nil {
+		if _, _, err := h.reconcileNoChecksWithWorkflowDispatch(context.Background(), repo, ""); err == nil {
 			t.Fatal("reconcileNoChecksWithWorkflowDispatch(head sha error) error = nil, want non-nil")
 		}
 	})
 
 	t.Run("blank head sha", func(t *testing.T) {
 		t.Parallel()
-		repo := repoWorkspace{Dir: "/repo", Branch: "work"}
+		repo := repoWorkspace{Dir: "/repo", Branch: "work", PRURL: "https://github.com/example/repo/pull/42"}
 		fake := &fakeRunner{t: t, exps: []expectedRun{
-			{cmd: headCommitSHACommand(repo.Dir), res: execx.Result{Stdout: "  "}},
+			{cmd: prStateViewCommand("", repo.PRURL), res: execx.Result{Stdout: `{}`}},
 		}}
 		h := New(fake)
-		reconciled, summary, err := h.reconcileNoChecksWithWorkflowDispatch(context.Background(), repo)
+		reconciled, summary, err := h.reconcileNoChecksWithWorkflowDispatch(context.Background(), repo, "")
 		if err != nil || reconciled || summary != "" {
 			t.Fatalf("reconcileNoChecksWithWorkflowDispatch(blank sha) = (%v, %q, %v)", reconciled, summary, err)
 		}
@@ -616,26 +616,26 @@ func TestReconcileNoChecksWithWorkflowDispatch(t *testing.T) {
 
 	t.Run("runs query fails", func(t *testing.T) {
 		t.Parallel()
-		repo := repoWorkspace{Dir: "/repo", Branch: "work"}
+		repo := repoWorkspace{Dir: "/repo", Branch: "work", PRURL: "https://github.com/example/repo/pull/42"}
 		fake := &fakeRunner{t: t, exps: []expectedRun{
-			{cmd: headCommitSHACommand(repo.Dir), res: execx.Result{Stdout: "abc123"}},
+			{cmd: prStateViewCommand("", repo.PRURL), res: execx.Result{Stdout: `{"headRefOid":"abc123"}`}},
 			{cmd: workflowDispatchRunsCommand(repo.Dir, repo.Branch), err: errors.New("boom")},
 		}}
 		h := New(fake)
-		if _, _, err := h.reconcileNoChecksWithWorkflowDispatch(context.Background(), repo); err == nil {
+		if _, _, err := h.reconcileNoChecksWithWorkflowDispatch(context.Background(), repo, ""); err == nil {
 			t.Fatal("reconcileNoChecksWithWorkflowDispatch(runs query error) error = nil, want non-nil")
 		}
 	})
 
 	t.Run("blank runs output", func(t *testing.T) {
 		t.Parallel()
-		repo := repoWorkspace{Dir: "/repo", Branch: "work"}
+		repo := repoWorkspace{Dir: "/repo", Branch: "work", PRURL: "https://github.com/example/repo/pull/42"}
 		fake := &fakeRunner{t: t, exps: []expectedRun{
-			{cmd: headCommitSHACommand(repo.Dir), res: execx.Result{Stdout: "abc123"}},
+			{cmd: prStateViewCommand("", repo.PRURL), res: execx.Result{Stdout: `{"headRefOid":"abc123"}`}},
 			{cmd: workflowDispatchRunsCommand(repo.Dir, repo.Branch), res: execx.Result{Stdout: "  "}},
 		}}
 		h := New(fake)
-		reconciled, summary, err := h.reconcileNoChecksWithWorkflowDispatch(context.Background(), repo)
+		reconciled, summary, err := h.reconcileNoChecksWithWorkflowDispatch(context.Background(), repo, "")
 		if err != nil || reconciled || summary != "" {
 			t.Fatalf("reconcileNoChecksWithWorkflowDispatch(blank runs) = (%v, %q, %v)", reconciled, summary, err)
 		}
@@ -643,26 +643,26 @@ func TestReconcileNoChecksWithWorkflowDispatch(t *testing.T) {
 
 	t.Run("invalid runs json", func(t *testing.T) {
 		t.Parallel()
-		repo := repoWorkspace{Dir: "/repo", Branch: "work"}
+		repo := repoWorkspace{Dir: "/repo", Branch: "work", PRURL: "https://github.com/example/repo/pull/42"}
 		fake := &fakeRunner{t: t, exps: []expectedRun{
-			{cmd: headCommitSHACommand(repo.Dir), res: execx.Result{Stdout: "abc123"}},
+			{cmd: prStateViewCommand("", repo.PRURL), res: execx.Result{Stdout: `{"headRefOid":"abc123"}`}},
 			{cmd: workflowDispatchRunsCommand(repo.Dir, repo.Branch), res: execx.Result{Stdout: "not json"}},
 		}}
 		h := New(fake)
-		if _, _, err := h.reconcileNoChecksWithWorkflowDispatch(context.Background(), repo); err == nil {
+		if _, _, err := h.reconcileNoChecksWithWorkflowDispatch(context.Background(), repo, ""); err == nil {
 			t.Fatal("reconcileNoChecksWithWorkflowDispatch(invalid json) error = nil, want non-nil")
 		}
 	})
 
 	t.Run("no matching run", func(t *testing.T) {
 		t.Parallel()
-		repo := repoWorkspace{Dir: "/repo", Branch: "work"}
+		repo := repoWorkspace{Dir: "/repo", Branch: "work", PRURL: "https://github.com/example/repo/pull/42"}
 		fake := &fakeRunner{t: t, exps: []expectedRun{
-			{cmd: headCommitSHACommand(repo.Dir), res: execx.Result{Stdout: "abc123"}},
+			{cmd: prStateViewCommand("", repo.PRURL), res: execx.Result{Stdout: `{"headRefOid":"abc123"}`}},
 			{cmd: workflowDispatchRunsCommand(repo.Dir, repo.Branch), res: execx.Result{Stdout: `[{"headSha":"def456","status":"completed","conclusion":"success"}]`}},
 		}}
 		h := New(fake)
-		reconciled, summary, err := h.reconcileNoChecksWithWorkflowDispatch(context.Background(), repo)
+		reconciled, summary, err := h.reconcileNoChecksWithWorkflowDispatch(context.Background(), repo, "")
 		if err != nil || reconciled || summary != "" {
 			t.Fatalf("reconcileNoChecksWithWorkflowDispatch(no match) = (%v, %q, %v)", reconciled, summary, err)
 		}
@@ -670,13 +670,12 @@ func TestReconcileNoChecksWithWorkflowDispatch(t *testing.T) {
 
 	t.Run("matching run passes", func(t *testing.T) {
 		t.Parallel()
-		repo := repoWorkspace{Dir: "/repo", Branch: "work"}
+		repo := repoWorkspace{Dir: "/repo", Branch: "work", PRURL: "https://github.com/example/repo/pull/42"}
 		fake := &fakeRunner{t: t, exps: []expectedRun{
-			{cmd: headCommitSHACommand(repo.Dir), res: execx.Result{Stdout: "ABC123"}},
 			{cmd: workflowDispatchRunsCommand(repo.Dir, repo.Branch), res: execx.Result{Stdout: `[{"headSha":"abc123","status":"completed","conclusion":"success","displayTitle":"CI"}]`}},
 		}}
 		h := New(fake)
-		reconciled, summary, err := h.reconcileNoChecksWithWorkflowDispatch(context.Background(), repo)
+		reconciled, summary, err := h.reconcileNoChecksWithWorkflowDispatch(context.Background(), repo, "ABC123")
 		if err != nil || !reconciled || !strings.Contains(summary, "pass") {
 			t.Fatalf("reconcileNoChecksWithWorkflowDispatch(match pass) = (%v, %q, %v)", reconciled, summary, err)
 		}
@@ -684,13 +683,13 @@ func TestReconcileNoChecksWithWorkflowDispatch(t *testing.T) {
 
 	t.Run("matching run still pending", func(t *testing.T) {
 		t.Parallel()
-		repo := repoWorkspace{Dir: "/repo", Branch: "work"}
+		repo := repoWorkspace{Dir: "/repo", Branch: "work", PRURL: "https://github.com/example/repo/pull/42"}
 		fake := &fakeRunner{t: t, exps: []expectedRun{
-			{cmd: headCommitSHACommand(repo.Dir), res: execx.Result{Stdout: "abc123"}},
+			{cmd: prStateViewCommand("", repo.PRURL), res: execx.Result{Stdout: `{"headRefOid":"abc123"}`}},
 			{cmd: workflowDispatchRunsCommand(repo.Dir, repo.Branch), res: execx.Result{Stdout: `[{"headSha":"abc123","status":"queued"}]`}},
 		}}
 		h := New(fake)
-		reconciled, summary, err := h.reconcileNoChecksWithWorkflowDispatch(context.Background(), repo)
+		reconciled, summary, err := h.reconcileNoChecksWithWorkflowDispatch(context.Background(), repo, "")
 		if err != nil || reconciled || !strings.Contains(summary, "pending") {
 			t.Fatalf("reconcileNoChecksWithWorkflowDispatch(pending) = (%v, %q, %v)", reconciled, summary, err)
 		}

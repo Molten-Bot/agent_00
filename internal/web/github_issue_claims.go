@@ -887,6 +887,9 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 			observed = record
 		}
 	}
+	if previous.PRAlreadyMerged {
+		return issueRetryResult{}, http.StatusConflict, errors.New(issueAlreadyMergedError)
+	}
 	workflowRecovery := !automatic && remote.Claim.ID != "" &&
 		((savedRun == nil && observed.ID != "") || hasUnsubmittedWorkflowRecovery(previous))
 	metadataRetry := app.IsWorkflowPRMetadataFailure(previous.FailureDetail()) ||
@@ -972,6 +975,12 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		if err := pr.recoveryBlocker(claimedIssue); err != nil {
 			return issueRetryResult{}, http.StatusConflict, err
 		}
+		if pr.Merged && previous.Version == 2 && previous.InstanceID == remote.InstanceID && previous.InstanceID == s.instanceID() {
+			if err := s.recordMergedIssuePR(ctx, previous, pr); err != nil {
+				return issueRetryResult{}, http.StatusServiceUnavailable, err
+			}
+			return issueRetryResult{}, http.StatusConflict, errors.New(issueAlreadyMergedError)
+		}
 		if !automatic && previous.PRRecoveryBlocker != "" && knownPR != "" && strings.EqualFold(pr.URL, knownPR) {
 			if err := s.recordIssuePRBlocker(&previous, pr, nil); err != nil {
 				return issueRetryResult{}, http.StatusServiceUnavailable, err
@@ -998,7 +1007,7 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 					return issueRetryResult{}, status, err
 				}
 				if !pr.resumesVerification(previous) {
-					if err := s.recordVerifiedIssuePR(previous, pr); err != nil {
+					if err := s.recordVerifiedIssuePR(&previous, pr); err != nil {
 						return issueRetryResult{}, 503, err
 					}
 					return issueRetryResult{PRURL: pr.URL}, http.StatusOK, nil

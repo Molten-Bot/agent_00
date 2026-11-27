@@ -2480,6 +2480,13 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 		t.PRURL = stringsx.FirstNonEmpty(taskPRURLFromFields(fields), t.PRURL)
 	}
 
+	if t.Status == "running" && strings.HasPrefix(line, "task status=queued ") && fields["action"] == "wait_for_workspace" {
+		t.Status, t.StageStatus = "pending", "waiting_workspace"
+	}
+	if strings.HasPrefix(line, "task status=admitted ") && fields["action"] == "resume_workspace" {
+		t.Status, t.StageStatus = "running", "start"
+	}
+
 	if strings.HasPrefix(line, "task status=start") {
 		t.Status = "running"
 		t.ReviewStarted = false

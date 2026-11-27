@@ -55,6 +55,7 @@ func TestMergeabilityRepairsExistingBranchBeforeReviewAndAtCompletion(t *testing
 			clean := &cleanReviewCycleRunner{t: t}
 			checks, repairs, merges, pushes, repairCommits := 0, 0, 0, 0, 0
 			conflict := false
+			admitted := true
 			h := New(sessionRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
 				if commandsEqual(cmd, prMergeabilityCommand(repo.Dir, repo.PRURL)) {
 					checks++
@@ -70,6 +71,9 @@ func TestMergeabilityRepairsExistingBranchBeforeReviewAndAtCompletion(t *testing
 					return execx.Result{Stdout: fmt.Sprintf(`{"state":"OPEN","mergeable":%q,"baseRefName":"main","headRefName":"feature"}`, state)}, nil
 				}
 				if cmd.Name == "git" && len(cmd.Args) > 0 {
+					if !admitted {
+						t.Fatalf("ran local git operation without admission: %v", cmd.Args)
+					}
 					switch cmd.Args[0] {
 					case "status":
 						if repairs > 0 && repairCommits == 0 {
@@ -112,6 +116,8 @@ func TestMergeabilityRepairsExistingBranchBeforeReviewAndAtCompletion(t *testing
 				}
 				return clean.Run(ctx, cmd)
 			}))
+			h.ReleaseWorkspace = func() { admitted = false }
+			h.AcquireWorkspace = func(context.Context) error { admitted = true; return nil }
 			h.FinalReviewPasses = 1
 			if phase == "reviews disabled" {
 				h.FinalReviewPasses = 0

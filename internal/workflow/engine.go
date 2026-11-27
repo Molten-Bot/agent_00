@@ -231,6 +231,11 @@ const OutcomeReviewPending = "review_pending"
 // OutcomeChecksPending reserves the existing activation until its worker resumes.
 const OutcomeChecksPending = "check_verification_pending"
 
+// OutcomeAlreadyMerged records that GitHub confirmed the PR was already merged.
+const OutcomeAlreadyMerged = "already_merged"
+
+const alreadyMergedReason = "GitHub confirmed the pull request was already merged"
+
 type Outcome struct {
 	ReviewReceipt     *githubutil.ReviewReceipt `json:"reviewReceipt,omitempty"`
 	ReviewInterrupted bool                      `json:"reviewInterrupted,omitempty"`
@@ -367,7 +372,7 @@ func (e *Engine) logRun(r Run, event string) {
 		reason = "review_check_pending"
 	case "Review writeback paused: workflow changed or was disabled":
 		reason = "review_writeback_paused"
-	case "Pull request merged externally during review":
+	case "Pull request merged externally during review", "Pull request was already merged when checks resumed", alreadyMergedReason:
 		reason = "external_merge"
 	case observedIssueMergeReason:
 		reason = "external_merge"
@@ -941,10 +946,14 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		} else {
 			o = e.Status(r.RequestID)
 		}
-		if o.Status == "failed" || o.Status == "succeeded" || o.Status == OutcomeReviewPending || o.Status == OutcomeChecksPending {
+		if o.Status == "failed" || o.Status == "succeeded" || o.Status == OutcomeReviewPending ||
+			o.Status == OutcomeChecksPending || o.Status == OutcomeAlreadyMerged {
 			r.Outcome = &o
 		}
-		if o.ReviewInterrupted {
+		if o.Status == OutcomeAlreadyMerged {
+			r.PRURL, r.Status, r.Reason = o.PRURL, "completed", alreadyMergedReason
+			r.MergeHead = ""
+		} else if o.ReviewInterrupted {
 			r.PRURL = o.PRURL
 			if r.Item.Kind == "issue" {
 				if r.PRURL == "" {
@@ -1338,7 +1347,11 @@ func (e *Engine) Complete(id string, outcome Outcome) error {
 		if r == nil {
 			return ErrActivationNotFound
 		}
-		if r.Status == OutcomeChecksPending || ((r.Status == awaitingReview || r.Status == "failed") && r.hasPendingReview()) {
+		if outcome.Status == OutcomeAlreadyMerged {
+			// A confirmed merge needs no further GitHub reads.
+			r.GitHubRetryAt = time.Time{}
+			r.Status = "running"
+		} else if r.Status == OutcomeChecksPending || ((r.Status == awaitingReview || r.Status == "failed") && r.hasPendingReview()) {
 			r.Status = "running"
 		}
 		r.Outcome = &outcome

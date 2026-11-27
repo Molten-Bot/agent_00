@@ -169,7 +169,7 @@ func (s Server) withIssueTaskRecords(snapshot Snapshot, records []localruntime.I
 			task.ReviewPolicy = taskReviewPolicy(latest.Run.Workflow, latest.Run.Review != nil || latest.Run.LibraryTaskName == "code-review")
 		}
 		task.PRURL = stringsx.FirstNonEmpty(latest.PRURL, task.PRURL)
-		merged := latest.PRMerged() || latest.PlanningStatus == issueDone || task.Status == "merged"
+		merged := latest.PRMerged() || latest.PRAlreadyMerged || latest.PlanningStatus == issueDone || task.Status == "merged"
 		if latest.Run.Workflow != nil && !latest.Run.Workflow.IsDefaultExecution() {
 			task.WorkflowID, task.WorkflowName = latest.Run.Workflow.ID, latest.Run.Workflow.Name
 			task.WorkflowTriggered = true

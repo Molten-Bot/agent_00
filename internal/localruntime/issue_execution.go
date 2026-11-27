@@ -249,6 +249,7 @@ type StepWatchdog struct {
 	step       string
 	generation uint64
 	timer      *time.Timer
+	deadline   time.Time
 	timeout    time.Duration
 	cancel     context.CancelCauseFunc
 	closed     bool
@@ -264,19 +265,46 @@ func (w *StepWatchdog) Advance(step string) bool {
 		return false
 	}
 	w.step = step
+	w.startTimer(w.timeout)
+	return true
+}
+
+// Pause excludes workspace admission from the current step's time budget.
+// The returned function resumes the remaining budget for that same step.
+func (w *StepWatchdog) Pause() func() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	remaining := time.Until(w.deadline)
+	if w.closed || w.timer == nil || remaining <= 0 || !w.timer.Stop() {
+		return func() {}
+	}
+	w.timer = nil
 	w.generation++
 	generation := w.generation
+	return func() {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		if !w.closed && generation == w.generation {
+			w.startTimer(remaining)
+		}
+	}
+}
+
+func (w *StepWatchdog) startTimer(remaining time.Duration) {
+	w.generation++
+	generation := w.generation
+	step := w.step
 	if w.timer != nil {
 		w.timer.Stop()
 	}
-	w.timer = time.AfterFunc(w.timeout, func() {
+	w.deadline = time.Now().Add(remaining)
+	w.timer = time.AfterFunc(remaining, func() {
 		w.mu.Lock()
 		defer w.mu.Unlock()
 		if !w.closed && generation == w.generation {
 			w.cancel(&StepTimeoutError{Step: step, Timeout: w.timeout})
 		}
 	})
-	return true
 }
 func (w *StepWatchdog) Close() {
 	w.mu.Lock()
