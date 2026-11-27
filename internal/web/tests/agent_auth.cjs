@@ -130,6 +130,37 @@ test('already authorized users can start working', async t => {
   await expect(page.locator('#local-prompt-submit')).toBeEnabled();
 });
 
+test('auth status reconnects after a restart without opening sign-in', async t => {
+  const codexReady = { ...ready, harness: 'codex' };
+  let disconnected = false;
+  let failures = 0;
+  const page = await openPage(t, route => {
+    if (disconnected) {
+      failures++;
+      return route.abort('connectionrefused');
+    }
+    return reply(route, codexReady);
+  });
+  const gate = page.locator('#agent-auth-gate');
+  const submit = page.locator('#local-prompt-submit');
+  await expect(gate).toBeHidden();
+  await expect(submit).toBeEnabled();
+
+  disconnected = true;
+  await expect.poll(() => failures, { timeout: 10000 }).toBeGreaterThanOrEqual(2);
+  await expect(gate).toBeHidden();
+
+  const failuresBeforeReload = failures;
+  await page.reload();
+  await expect.poll(() => failures).toBeGreaterThanOrEqual(failuresBeforeReload + 2);
+  await expect(page.locator('#agent-auth-message')).toHaveText('Checking agent authorization…');
+  await expect(page.locator('#agent-auth-verify')).toBeHidden();
+  await expect(submit).toBeDisabled();
+  disconnected = false;
+  await expect(gate).toBeHidden();
+  await expect(submit).toBeEnabled();
+});
+
 test('runtime auth expiry reopens sign-in without another submission and recovers', async t => {
   let auth = ready;
   const page = await openPage(t, route => reply(route, auth));
