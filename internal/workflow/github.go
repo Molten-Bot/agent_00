@@ -314,7 +314,7 @@ func (g GitHub) inspect(ctx context.Context, repo, selector string, needs ScanNe
 		fields += ",reviewDecision"
 	}
 	if needs.Checks {
-		fields += ",statusCheckRollup"
+		fields += ",statusCheckRollup,mergeStateStatus"
 	}
 	raw, err := g.command(ctx, "pr", "view", selector, "--repo", repo, "--json", fields)
 	if err != nil {
@@ -323,6 +323,7 @@ func (g GitHub) inspect(ctx context.Context, repo, selector string, needs ScanNe
 	var p struct {
 		Number                                                                        int
 		Title, Body, URL, BaseRefName, HeadRefName, HeadRefOid, ReviewDecision, State string
+		MergeStateStatus                                                              string
 		MergedAt                                                                      time.Time
 		IsDraft                                                                       bool
 		Author                                                                        struct {
@@ -372,6 +373,13 @@ func (g GitHub) inspect(ctx context.Context, repo, selector string, needs ScanNe
 		}
 	}
 	i.ChecksPassed, i.ChecksFailed = githubutil.CIStatus(p.StatusCheckRollup)
+	if p.MergeStateStatus == "CLEAN" && !slices.ContainsFunc(p.StatusCheckRollup, func(check githubutil.StatusCheck) bool {
+		return check.Name != githubutil.ReviewCheckName && check.Context != githubutil.ReviewCheckName
+	}) {
+		// GitHub confirms a passing commit status even when there are no CI
+		// results. The separate review and merge gates still verify the head.
+		i.ChecksPassed = true
+	}
 	if !needs.Reviews {
 		return i, nil
 	}
