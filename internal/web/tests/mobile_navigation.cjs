@@ -331,6 +331,26 @@ test('task output shows GitHub check wait and recovery on the same task', async 
   assert.equal(await page.locator('#task-list .task[data-request-id="issue-checks"]').count(), 1);
 });
 
+test('queued and paused tasks keep Stop in both task views', async t => {
+  const now = new Date().toISOString();
+  const tasks = ['queued', 'paused'].map(status => ({
+    request_id: `stop-${status}`, prompt: `Stop ${status} task`, source: 'prompt',
+    prompt_is_user_input: true, status, started_at: now, updated_at: now,
+    controls: { stop: true }, logs: [],
+  }));
+  const { page } = await openPage(t, 'current-work', { width: 1280, height: 900 }, false, tasks);
+  for (const status of ['queued', 'paused']) {
+    await page.locator(`#task-list .task[data-request-id="stop-${status}"] .task-stop`).waitFor();
+  }
+  await page.evaluate(() => {
+    state.taskPanelView = 'prompt';
+    render(state.snapshot, true);
+  });
+  for (const status of ['queued', 'paused']) {
+    await page.locator(`#task-list .task[data-request-id="stop-${status}"] .task-stop`).waitFor();
+  }
+});
+
 test('open task output updates when review gate and receipt arrive after completion', async t => {
   const task = {
     request_id: 'review-task', prompt: 'Review changes', repo: 'example/project',
