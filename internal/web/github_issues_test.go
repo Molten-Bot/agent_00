@@ -53,6 +53,27 @@ func TestGitHubIssueListUsesGhFiltersAndDecodesIssues(t *testing.T) {
 	}
 }
 
+func TestGitHubIssueBrowserFiltersTodo(t *testing.T) {
+	t.Parallel()
+	srv := githubIssueTestServer(githubIssueRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		if cmd.Args[0] == "issue" {
+			return execx.Result{Stdout: `[{"id":"I1","number":1},{"id":"I2","number":2},{"id":"I3","number":3}]`}, nil
+		}
+		return execx.Result{Stdout: `{"data":{"nodes":[
+			{"id":"I1","status":{"name":"Todo"},"repository":{"planningStatuses":{"totalCount":7}}},
+			{"id":"I2","status":{"name":"In review"},"repository":{"planningStatuses":{"totalCount":7}}},
+			{"id":"I3","status":null,"repository":{"planningStatuses":{"totalCount":7}}}
+		]}}`}, nil
+	}), true)
+	res := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/api/github/issues?repo=acme/repo&planning=todo", nil))
+	var body struct{ Issues []GitHubIssue }
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil || res.Code != http.StatusOK ||
+		len(body.Issues) != 1 || body.Issues[0].Number != 1 || body.Issues[0].PlanningStatus != "Todo" {
+		t.Fatalf("Todo filter = %d %s", res.Code, res.Body.String())
+	}
+}
+
 func TestGitHubIssueListCanFilterAssignedToMe(t *testing.T) {
 	t.Parallel()
 	var got execx.Command

@@ -2038,14 +2038,14 @@ func (s Server) snapshot() Snapshot {
 	if s.Broker == nil {
 		return Snapshot{}
 	}
-	return s.withTaskControls(s.Broker.Snapshot())
+	return s.withTaskControls(s.withIssueTasks(s.Broker.Snapshot()))
 }
 
 func (s Server) streamSnapshot() Snapshot {
 	if s.Broker == nil {
 		return Snapshot{}
 	}
-	return s.withTaskControls(s.Broker.StreamSnapshot())
+	return s.withTaskControls(s.withIssueTasks(s.Broker.StreamSnapshot()))
 }
 
 func (s Server) withTaskControls(snapshot Snapshot) Snapshot {

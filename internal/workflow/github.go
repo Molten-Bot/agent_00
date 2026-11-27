@@ -153,7 +153,11 @@ func (g GitHub) fetchCollection(ctx context.Context, repo, resource, viewer stri
 	if err := g.Cooldown.CheckDiscovery(); err != nil {
 		return nil, err
 	}
-	raw, err := g.command(ctx, "api", "--paginate", "repos/"+repo+"/"+resource+"?state=open&per_page=100")
+	args := []string{"api", "--paginate", "repos/" + repo + "/" + resource + "?state=open&per_page=100"}
+	if resource == "issues" {
+		args = append(args, "-H", "X-GitHub-Api-Version: 2026-03-10")
+	}
+	raw, err := g.command(ctx, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -165,6 +169,7 @@ func (g GitHub) fetchCollection(ctx context.Context, repo, resource, viewer stri
 		Labels             []struct{ Name string }
 		Assignees          []struct{ Login string }
 		Type               *struct{ Name string }
+		Status             json.RawMessage
 		PullRequest        *json.RawMessage `json:"pull_request"`
 		Draft              bool
 		Head, Base         struct{ Ref, SHA string }
@@ -231,6 +236,13 @@ func (g GitHub) fetchCollection(ctx context.Context, repo, resource, viewer stri
 						i.Reviewers = append(i.Reviewers, team.Name)
 					}
 				}
+			}
+			if !isPR && len(v.Status) != 0 {
+				var status struct{ Name string }
+				if err := json.Unmarshal(v.Status, &status); err != nil {
+					return nil, fmt.Errorf("decode GitHub issue status: %w", err)
+				}
+				i.HasIssueStatus, i.IssueStatus = true, status.Name
 			}
 			if v.Type != nil {
 				i.IssueType = v.Type.Name

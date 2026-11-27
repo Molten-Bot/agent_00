@@ -71,6 +71,15 @@ type TaskStatusTransition struct {
 }
 
 type Task struct {
+	HistoryOnly         bool               `json:"history_only,omitempty"`
+	TaskID              string             `json:"task_id,omitempty"`
+	IssueState          string             `json:"issue_state,omitempty"`
+	IssuePlanningStatus string             `json:"issue_planning_status,omitempty"`
+	IssueAttempts       []issueTaskAttempt `json:"issue_attempts,omitempty"`
+	RetryAt             string             `json:"retry_at,omitempty"`
+	WorkflowID          string             `json:"workflow_id,omitempty"`
+	WorkflowName        string             `json:"workflow_name,omitempty"`
+
 	ReviewPolicy      TaskReviewPolicy       `json:"review_policy,omitzero"`
 	Complexity        string                 `json:"complexity,omitempty"`
 	ResolvedModel     string                 `json:"resolved_model,omitempty"`
@@ -126,6 +135,17 @@ type TaskReviewPolicy struct {
 	Name       string `json:"name"`
 	FixPasses  int    `json:"fix_passes"`
 	Complexity string `json:"complexity"`
+}
+
+func taskReviewPolicy(w *config.WorkflowRunConfig, reviewOnly bool) TaskReviewPolicy {
+	if w == nil {
+		return TaskReviewPolicy{}
+	}
+	policy := TaskReviewPolicy{Name: w.Name, FixPasses: w.ReviewCycles, Complexity: w.ReviewAgent.Complexity}
+	if reviewOnly {
+		policy.FixPasses = 0
+	}
+	return policy
 }
 
 // PromptImage captures one prompt image attachment shown in task views.
@@ -892,6 +912,12 @@ func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON [
 		return
 	}
 	cfgCopy := append([]byte(nil), runConfigJSON...)
+	var identity struct {
+		GitHubIssue *config.GitHubIssueConfig
+		Workflow    *config.WorkflowRunConfig
+	}
+	_ = json.Unmarshal(cfgCopy, &identity)
+	issueRoot := issueTaskID(identity.GitHubIssue, identity.Workflow)
 	prompt := promptFromRunConfigJSON(cfgCopy)
 	images := imagesFromRunConfigJSON(cfgCopy)
 	assets := assetsFromRunConfigJSON(cfgCopy)
@@ -916,6 +942,26 @@ func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON [
 
 	b.pruneExpiredTasksLocked(now)
 
+	if issueRoot != "" {
+		old := b.taskAttemptRootLocked(requestID)
+		if old != issueRoot {
+			b.attemptRoots[requestID] = issueRoot
+			if attempts := b.attempts[old]; len(attempts) > 0 {
+				kept := slices.DeleteFunc(attempts, func(attempt taskAttemptState) bool {
+					if attempt.RequestID != requestID {
+						return false
+					}
+					b.attempts[issueRoot] = append(b.attempts[issueRoot], attempt)
+					return true
+				})
+				if len(kept) == 0 {
+					delete(b.attempts, old)
+				} else {
+					b.attempts[old] = kept
+				}
+			}
+		}
+	}
 	changed := false
 	if existing, ok := b.runConfigs[requestID]; !ok || !bytes.Equal(existing, cfgCopy) {
 		b.runConfigs[requestID] = cfgCopy
@@ -1803,12 +1849,7 @@ func (b *Broker) runConfigFieldsLocked(requestID string) runConfigFields {
 		issueTitle:   issueTitleFromRunConfigJSON(raw),
 		autoMerge:    autoMergeFromRunConfigJSON(raw),
 	}
-	if w := requested.Workflow; w != nil {
-		fields.reviewPolicy = TaskReviewPolicy{Name: w.Name, FixPasses: w.ReviewCycles, Complexity: w.ReviewAgent.Complexity}
-		if requested.Review != nil || fields.workflow == "code-review" {
-			fields.reviewPolicy.FixPasses = 0
-		}
-	}
+	fields.reviewPolicy = taskReviewPolicy(requested.Workflow, requested.Review != nil || fields.workflow == "code-review")
 	if b.runConfigFieldCache == nil {
 		b.runConfigFieldCache = map[string]runConfigFields{}
 	}
@@ -2022,6 +2063,9 @@ func (b *Broker) RecordTaskRerunAttempt(rerunOf, requestID string) {
 	defer b.mu.Unlock()
 
 	root := b.taskAttemptRootLocked(rerunOf)
+	if own := b.attemptRoots[requestID]; strings.HasPrefix(own, "github-issue-") {
+		root = own
+	}
 	if root == "" {
 		root = rerunOf
 	}

@@ -150,6 +150,9 @@ func (s Server) submitParsedWithIssueClaim(ctx context.Context, body []byte, run
 }
 
 type issueClaimTarget struct {
+	PlanningEnabled  bool
+	PlanningStatus   string
+	PlanningClosed   bool
 	ID               string
 	BaseBranch       string
 	SHA              string
@@ -165,7 +168,7 @@ func (s Server) issueClaimTarget(ctx context.Context, repository string, number 
 	if !ok {
 		return issueClaimTarget{}, fmt.Errorf("invalid issue repository")
 	}
-	const query = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){defaultBranchRef{name target{oid}} issue(number:$number){id linkedBranches(first:100){totalCount nodes{ref{name}}} closedByPullRequestsReferences(first:100,includeClosedPrs:true){totalCount nodes{url state merged}} issueDependenciesSummary{blockedBy}}}}`
+	const query = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){defaultBranchRef{name target{oid}} planningStatuses(first:1){totalCount} issue(number:$number){id closed status{name} linkedBranches(first:100){totalCount nodes{ref{name}}} closedByPullRequestsReferences(first:100,includeClosedPrs:true){totalCount nodes{url state merged}} issueDependenciesSummary{blockedBy}}}}`
 	result, err := s.runIssueGH(ctx, execx.Command{Name: "gh", Args: []string{"api", "graphql", "-f", "query=" + query, "-f", "owner=" + owner, "-f", "name=" + name, "-F", fmt.Sprintf("number=%d", number)}})
 	if err != nil {
 		return issueClaimTarget{}, err
@@ -176,12 +179,15 @@ func (s Server) issueClaimTarget(ctx context.Context, repository string, number 
 		} `json:"errors"`
 		Data struct {
 			Repository *struct {
+				PlanningStatuses *struct{ TotalCount int }
 				DefaultBranchRef *struct {
 					Name   string
 					Target struct{ OID string }
 				}
 				Issue *struct {
 					ID             string
+					Closed         bool
+					Status         struct{ Name string }
 					LinkedBranches struct {
 						TotalCount int
 						Nodes      []struct{ Ref *struct{ Name string } }
@@ -219,6 +225,8 @@ func (s Server) issueClaimTarget(ctx context.Context, repository string, number 
 		}
 	}
 	target := issueClaimTarget{ID: repo.Issue.ID, BaseBranch: repo.DefaultBranchRef.Name, SHA: repo.DefaultBranchRef.Target.OID, Linked: repo.Issue.LinkedBranches.TotalCount, ClosingPRs: blockingPRs, BlockedBy: repo.Issue.IssueDependenciesSummary.BlockedBy}
+	target.PlanningEnabled = repo.PlanningStatuses != nil && repo.PlanningStatuses.TotalCount > 0
+	target.PlanningStatus, target.PlanningClosed = repo.Issue.Status.Name, repo.Issue.Closed
 	if blockingPRs == 1 {
 		target.OnlyClosingPRURL = closingPRURL
 	}
@@ -326,7 +334,11 @@ func (s Server) claimAndSubmitIssueMode(ctx context.Context, run config.Config, 
 	if err := githubassets.Validate(run.Assets); err != nil {
 		return "", err
 	}
-	record := localruntime.IssueClaimRecord{ID: claim.ID, InstanceID: s.instanceID(), Phase: "reserving", Run: run}
+	planning, err := s.prepareIssuePlanning(ctx, issue, target, false)
+	if err != nil {
+		return "", err
+	}
+	record := localruntime.IssueClaimRecord{ID: claim.ID, InstanceID: s.instanceID(), Phase: "reserving", Run: run, PlanningStatus: planning}
 	if record.InstanceID == "" {
 		return "", fmt.Errorf("persistent instance identity is unavailable")
 	}
@@ -454,6 +466,21 @@ func (s Server) finishIssueAdmission(ctx context.Context, record localruntime.Is
 		if !exists {
 			return "", s.blockIssueClaim(record, missingReservedIssueRef(issue.Claim.Branch))
 		}
+	}
+	if record.PlanningStatus == issueTodo {
+		current, err := s.issuePlanningState(ctx, issue)
+		if err != nil {
+			return "", s.blockIssueClaim(record, err)
+		}
+		if current.State != "open" || (current.Status.Name != issueTodo && current.Status.Name != issueInProgress) {
+			return "", s.blockIssueClaim(record, fmt.Errorf("issue must still be Todo before dispatch"))
+		}
+		if current.Status.Name == issueTodo {
+			if err := s.setIssuePlanningStatus(ctx, issue, issueInProgress); err != nil {
+				return "", s.blockIssueClaim(record, err)
+			}
+		}
+		record.PlanningStatus = issueInProgress
 	}
 	record.Phase = "submitting"
 	record.Error = ""
@@ -1105,7 +1132,22 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 			return issueRetryResult{}, http.StatusConflict, err
 		}
 	}
-	record := localruntime.IssueClaimRecord{ID: claim.ID, InstanceID: s.instanceID(), Phase: "reserving", Run: run}
+	planning := previous.PlanningStatus
+	if planning == "" {
+		planning = observed.PlanningStatus
+	}
+	if planning == "" && target.PlanningEnabled &&
+		(strings.EqualFold(target.PlanningStatus, issueInProgress) || strings.EqualFold(target.PlanningStatus, issueInReview)) &&
+		remote.Claim.ID != "" {
+		planning = target.PlanningStatus
+	}
+	if remote.Claim.ID == "" && planning == "" {
+		planning, err = s.prepareIssuePlanning(ctx, &runIssue, target, !automatic)
+		if err != nil {
+			return issueRetryResult{}, http.StatusConflict, err
+		}
+	}
+	record := localruntime.IssueClaimRecord{ID: claim.ID, InstanceID: s.instanceID(), Phase: "reserving", Run: run, PlanningStatus: planning}
 	if s.IssueRecovery != nil {
 		if record.InstanceID == "" {
 			return issueRetryResult{}, 503, fmt.Errorf("persistent instance identity is unavailable")
@@ -1125,9 +1167,7 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		record.CheckoutComplete = record.CheckoutComplete || previous.CheckoutComplete || previous.PublicationReady
 		record.PublicationReady = previous.PublicationReady
 		record.PRVerification = previous.PRVerification
-		if record.PRVerification != "" {
-			record.PRURL = verificationPRURL
-		}
+		record.PRURL = verificationPRURL
 		if (record.PRVerification != "" || resumeReview) && previous.InstanceID == record.InstanceID {
 			record.RequestID = previous.RequestID
 		}

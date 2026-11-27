@@ -469,6 +469,7 @@ func runServer(args []string) int {
 		if issueWork != nil {
 			requestID = issueWork.record.RequestID
 			issueWork.cooldown = githubCooldown
+			issueWork.wake = wakeIssueRecovery
 		}
 		if repairWork != nil {
 			requestID = repairWork.record.RequestID

@@ -1110,6 +1110,7 @@ func TestManualIssueReviewRecoveryRetainsDefaultExecution(t *testing.T) {
 	if !before.Run.Workflow.IsDefaultExecution() || !ok || task.WorkflowTriggered || task.ReviewPolicy != want {
 		t.Fatalf("manual claim = %+v, task = %+v", before.Run.Workflow, task)
 	}
+	legacyID := issueTaskID(before.Run.GitHubIssue, nil)
 	const prURL = "https://github.com/acme/repo/pull/42"
 	before.PRURL = prURL
 	before.NextAttemptAt = time.Now().Add(-time.Minute)
@@ -1136,6 +1137,16 @@ func TestManualIssueReviewRecoveryRetainsDefaultExecution(t *testing.T) {
 	tasks := s.Broker.TaskList()
 	if len(tasks) != 1 || tasks[0].RequestID != id || tasks[0].Status != "pending" || tasks[0].ReviewPolicy != want {
 		t.Fatalf("retry did not reuse the visible task: %+v", tasks)
+	}
+	tasks = s.snapshot().Tasks
+	if len(tasks) != 1 || tasks[0].TaskID != legacyID || tasks[0].WorkflowTriggered || tasks[0].WorkflowID != "" ||
+		tasks[0].ReviewPolicy != want || len(tasks[0].IssueAttempts) != 2 {
+		t.Fatalf("issue snapshot did not retain manual task identity, policy, and attempts: %+v", tasks)
+	}
+	s.Broker = NewBroker()
+	tasks = s.snapshot().Tasks
+	if len(tasks) != 1 || tasks[0].TaskID != legacyID || !tasks[0].HistoryOnly || tasks[0].ReviewPolicy != want {
+		t.Fatalf("restored issue snapshot did not retain manual task identity and policy: %+v", tasks)
 	}
 }
 

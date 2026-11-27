@@ -820,3 +820,50 @@ for (const viewport of [{width:1440,height:1000},{width:1024,height:768}]) {
   assert.ok((await geometry()).gap<=16);
  });
 }
+
+test('Studio keeps issue retries and completion under one task', async t => {
+  const now = new Date().toISOString();
+  const first = {
+    task_id: 'issue-workflow-42', request_id: 'issue-first', issue_title: 'Update issue implementation',
+    workflow_name: 'Issue delivery', issue_planning_status: 'In review',
+    github_issue_url: 'https://github.com/example/project/issues/42',
+    pr_url: 'https://github.com/example/project/pull/43', repo: 'example/project',
+    started_at: now, updated_at: now, status: 'error', issue_state: 'blocked',
+    error: 'Pull request head changed', issue_attempts: [{
+      number: 1, request_id: 'issue-first', status: 'review_pending', stage: 'review',
+      error: 'Pull request head changed',
+    }],
+  };
+  const { page } = await openPage(t, 'current-work', { width: 430, height: 932 }, true, [first]);
+  const cards = page.locator('#task-list .task');
+  const task = cards.locator('xpath=self::*[@data-task-id="issue-workflow-42"]');
+  await task.getByText('Pull request head changed', { exact: true }).waitFor();
+  await task.locator('summary').click();
+
+  const update = changes => page.evaluate(next => {
+    queueStreamSnapshot(JSON.stringify({ ...state.snapshot, tasks: [next] }));
+  }, { ...first, ...changes });
+  const attempts = [...first.issue_attempts, {
+    number: 2, request_id: 'issue-retry', status: 'running', stages: ['checks', 'review', 'pr_verification'],
+  }];
+  await update({
+    request_id: 'issue-retry', status: 'queued', issue_state: 'retry_wait', error: 'GitHub checks unavailable',
+    retry_at: new Date(Date.now() + 60_000).toISOString(), issue_attempts: attempts,
+  });
+  await task.getByText(/Waiting to retry/).waitFor();
+  await task.getByText(/GitHub checks unavailable.*Retry after/).waitFor();
+  await task.getByText(/Attempt 2.*checks.*pr verification/).waitFor();
+  assert.equal(await cards.count(), 1);
+  assert.equal(await task.getByRole('link', { name: 'Open pull request on GitHub.' }).getAttribute('href'), first.pr_url);
+
+  await update({
+    request_id: 'issue-retry', status: 'merged', issue_state: 'fulfilled',
+    issue_planning_status: 'Done', error: '', issue_attempts: [
+      attempts[0], { ...attempts[1], status: 'completed' },
+    ],
+  });
+  await page.locator('#task-history-toggle').click();
+  await task.getByText(/Issue delivery · Done · Attempt history \(2\)/).waitFor();
+  assert.equal(await cards.count(), 1);
+  assert.equal(await task.getByRole('link', { name: 'Open issue on GitHub.' }).getAttribute('href'), first.github_issue_url);
+});

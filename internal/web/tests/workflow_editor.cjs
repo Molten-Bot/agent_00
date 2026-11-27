@@ -985,3 +985,16 @@ test('workflow saves and clears repository PR routing options', async t => {
  assert.equal(saved.task.prAssignee,undefined);
  assert.equal(saved.task.prLabels,undefined);
 });
+
+test('workflow links open the saved definition directly', async t => {
+ const {page,getDocument}=await openEditor(t);
+ await selectRepository(page,'acme/repo');
+ await page.getByRole('button',{name:'Implement issues',exact:true}).click();
+ await page.getByLabel('Workflow name').fill('Linked issue workflow');
+ await waitForSaved(page);
+ const saved = getDocument().workflows[0];
+ await page.goto(`${baseURL}/#workflow/${encodeURIComponent(saved.id)}`);
+ await page.reload();
+ await page.getByLabel('Workflow name').waitFor();
+ assert.equal(await page.getByLabel('Workflow name').inputValue(), 'Linked issue workflow');
+});

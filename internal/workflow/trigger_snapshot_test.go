@@ -186,7 +186,7 @@ func TestIssueLabelScanCost(t *testing.T) {
 			calls := 0
 			e.Fetch = (GitHub{Runner: fakeRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
 				calls++
-				if strings.Join(cmd.Args, " ") != "api --paginate repos/acme/repo/issues?state=open&per_page=100" {
+				if strings.Join(cmd.Args, " ") != "api --paginate repos/acme/repo/issues?state=open&per_page=100 -H X-GitHub-Api-Version: 2026-03-10" {
 					t.Fatalf("unexpected lookup %v", cmd.Args)
 				}
 				return execx.Result{Stdout: "[" + strings.Join(rows, ",") + "]"}, nil
@@ -281,5 +281,28 @@ func TestWorkflowDiscoveryDoesNotConsumeEventDuringQuotaPause(t *testing.T) {
 	runs, err := e.Runs()
 	if *submitted != 1 || len(runs) != 1 || runs[0].Item.Number != 2 || err != nil {
 		t.Fatalf("resumed discovery: submitted=%d runs=%+v err=%v", *submitted, runs, err)
+	}
+}
+
+func TestIssuePlanningStatusGatesWorkflowMatch(t *testing.T) {
+	t.Parallel()
+	w := definition("issues")
+	items, err := (GitHub{Runner: fakeRunner(func(_ context.Context, _ execx.Command) (execx.Result, error) {
+		return execx.Result{Stdout: `[
+			{"number":1,"labels":[{"name":"ready"}],"status":{"name":"Backlog"}},
+			{"number":2,"labels":[{"name":"ready"}],"status":{"name":"Todo"}},
+			{"number":3,"labels":[{"name":"ready"}],"status":{"name":"In progress"}},
+			{"number":4,"labels":[{"name":"ready"}],"status":null},
+			{"number":5,"labels":[{"name":"ready"}]}
+		]`}, nil
+	})}).Fetch(t.Context(), w.Repository, ScanNeeds{Issues: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		want := item.Number == 2 || item.Number == 5
+		if got, reason := Match(w, item); got != want {
+			t.Errorf("issue #%d matched = %v (%s), want %v", item.Number, got, reason, want)
+		}
 	}
 }

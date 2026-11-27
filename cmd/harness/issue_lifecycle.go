@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/app"
@@ -23,6 +24,7 @@ type issueExecution struct {
 	lock     *os.File
 	policy   localruntime.IssueRecoveryConfig
 	cooldown *githubutil.Cooldown
+	wake     func()
 }
 
 func checkLocalIssueOwnership(ctx context.Context, run config.Config, requestID string, task *localTaskHandle, verify func(context.Context, config.Config) error, logf func(string, ...any)) localTaskOutcome {
@@ -154,6 +156,11 @@ func (e *issueExecution) finish(ctx context.Context, state string, result app.Re
 		if result.Err != nil {
 			record.RunError = result.Err.Error()
 			record.Error = record.RunError
+			stage, _, _ := strings.Cut(record.RunError, ":")
+			switch stage {
+			case "task acquire", "task signing", "pr_verification", "review", "checks":
+				record.Step = stage
+			}
 		}
 		if cause := context.Cause(ctx); cause != nil && !errors.Is(cause, context.Canceled) {
 			record.Error = cause.Error()
@@ -163,8 +170,16 @@ func (e *issueExecution) finish(ctx context.Context, state string, result app.Re
 		} else if result.PRVerificationPassed {
 			record.PRVerification = ""
 		}
-		if record.PRVerification != "" && result.PRURL != "" {
+		if result.PRURL != "" {
 			record.PRURL = result.PRURL
+		}
+		record.ReviewRequired = result.ReviewRequired || (record.Run.Workflow != nil && record.Run.Workflow.ReviewCycles > 0)
+		record.ReviewHead = ""
+		if result.ReviewReceipt != nil && !result.ReviewInterrupted {
+			record.ReviewHead = result.ReviewReceipt.Head
+		}
+		if result.ReviewInterrupted && state == "completed" {
+			record.Outcome = "error"
 		}
 		record.NoChangeEvidence = result.NoChangeEvidence
 		if state == "interrupted" && errors.Is(context.Cause(ctx), context.Canceled) {
@@ -184,6 +199,7 @@ func (e *issueExecution) finish(ctx context.Context, state string, result app.Re
 			(state == "interrupted" && e.record.Outcome == localruntime.IssueChecksPending)
 		if waiting {
 			record.Outcome, record.State = localruntime.IssueChecksPending, localruntime.IssueChecksPending
+			recordIssueStage(record, localruntime.IssueChecksPending)
 			record.Incident = ""
 			record.UnlockPending = false
 			if result.PRURL != "" {
@@ -276,6 +292,16 @@ func (e *issueExecution) configure(ctx context.Context, h *app.Harness) (context
 			return nil
 		})
 	}
+	h.OnIssuePRPublished = func(url string) error {
+		err := e.store.Update(e.record.ID, func(record *localruntime.IssueClaimRecord) error {
+			record.PRURL = url
+			return nil
+		})
+		if err == nil && e.wake != nil {
+			e.wake()
+		}
+		return err
+	}
 	saveResume := h.SaveWorkflowPRResume
 	h.SaveWorkflowPRResume = func(url string) error {
 		if err := e.store.Update(e.record.ID, func(record *localruntime.IssueClaimRecord) error {
@@ -300,6 +326,7 @@ func (e *issueExecution) configure(ctx context.Context, h *app.Harness) (context
 		err := e.store.Update(e.record.ID, func(record *localruntime.IssueClaimRecord) error {
 			record.State = "running"
 			record.Step = step
+			recordIssueStage(record, step)
 			record.StepStartedAt = time.Now().UTC()
 			if record.StartedAt.IsZero() {
 				record.StartedAt = record.StepStartedAt
@@ -315,4 +342,14 @@ func (e *issueExecution) configure(ctx context.Context, h *app.Harness) (context
 		}
 	}
 	return runCtx, func() { watchdog.Close(); cancel(nil) }
+}
+
+func recordIssueStage(record *localruntime.IssueClaimRecord, stage string) {
+	if n := len(record.Stages); n > 0 && record.Stages[n-1] == stage {
+		return
+	}
+	if len(record.Stages) >= 50 {
+		record.Stages = record.Stages[1:]
+	}
+	record.Stages = append(record.Stages, stage)
 }

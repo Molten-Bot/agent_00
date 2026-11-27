@@ -24,17 +24,18 @@ const (
 
 // GitHubIssue is the issue data shown by the local issue browser.
 type GitHubIssue struct {
-	Number    int                  `json:"number"`
-	Title     string               `json:"title"`
-	Body      string               `json:"body,omitempty"`
-	State     string               `json:"state"`
-	URL       string               `json:"url"`
-	Author    GitHubIssueUser      `json:"author"`
-	Labels    []GitHubIssueLabel   `json:"labels,omitempty"`
-	Assignees []GitHubIssueUser    `json:"assignees,omitempty"`
-	CreatedAt string               `json:"createdAt,omitempty"`
-	UpdatedAt string               `json:"updatedAt,omitempty"`
-	Comments  []GitHubIssueComment `json:"comments,omitempty"`
+	Number         int                  `json:"number"`
+	PlanningStatus string               `json:"planningStatus,omitempty"`
+	Title          string               `json:"title"`
+	Body           string               `json:"body,omitempty"`
+	State          string               `json:"state"`
+	URL            string               `json:"url"`
+	Author         GitHubIssueUser      `json:"author"`
+	Labels         []GitHubIssueLabel   `json:"labels,omitempty"`
+	Assignees      []GitHubIssueUser    `json:"assignees,omitempty"`
+	CreatedAt      string               `json:"createdAt,omitempty"`
+	UpdatedAt      string               `json:"updatedAt,omitempty"`
+	Comments       []GitHubIssueComment `json:"comments,omitempty"`
 }
 
 type GitHubIssueUser struct {
@@ -53,7 +54,11 @@ type githubIssueListEntry struct {
 }
 
 type githubDevelopmentAssociationNode struct {
-	ID             string `json:"id"`
+	ID         string `json:"id"`
+	Status     struct{ Name string }
+	Repository struct {
+		PlanningStatuses *struct{ TotalCount int }
+	}
 	LinkedBranches struct {
 		TotalCount int `json:"totalCount"`
 	} `json:"linkedBranches"`
@@ -171,7 +176,12 @@ func (s Server) handleGitHubIssueList(w http.ResponseWriter, r *http.Request, re
 	if branch == "all" {
 		branch = ""
 	}
-	issues, err := s.listGitHubIssues(r.Context(), repository, state, search, assignee, branch)
+	planning := r.URL.Query().Get("planning")
+	if planning != "" && planning != "todo" {
+		writeJSONError(w, http.StatusBadRequest, errors.New("planning must be todo"))
+		return
+	}
+	issues, err := s.listGitHubIssues(r.Context(), repository, state, search, assignee, branch, planning == "todo")
 	if err != nil {
 		status := githubErrorStatus(w, http.StatusBadGateway, err)
 		if status != http.StatusTooManyRequests {
@@ -183,13 +193,13 @@ func (s Server) handleGitHubIssueList(w http.ResponseWriter, r *http.Request, re
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "issues": issues})
 }
 
-func (s Server) listGitHubIssues(ctx context.Context, repository, state, search, assignee, branch string) ([]GitHubIssue, error) {
+func (s Server) listGitHubIssues(ctx context.Context, repository, state, search, assignee, branch string, todo bool) ([]GitHubIssue, error) {
 	fields := "number,title,state,url,author,labels,assignees,createdAt,updatedAt"
 	limit := githubIssueListLimit
-	if branch != "" {
+	if branch != "" || todo {
 		fields = "id," + fields
 	}
-	linked := make(map[string]bool)
+	development := make(map[string]githubIssueDevelopmentState)
 	for {
 		args := []string{
 			"issue", "list", "--repo", repository, "--state", state,
@@ -211,7 +221,7 @@ func (s Server) listGitHubIssues(ctx context.Context, repository, state, search,
 			return nil, fmt.Errorf("decode GitHub issues: %w", err)
 		}
 		issues := make([]GitHubIssue, 0, min(len(entries), githubIssueListLimit))
-		if branch == "" || len(entries) == 0 {
+		if (branch == "" && !todo) || len(entries) == 0 {
 			for _, entry := range entries {
 				issues = append(issues, entry.GitHubIssue)
 			}
@@ -219,19 +229,24 @@ func (s Server) listGitHubIssues(ctx context.Context, repository, state, search,
 		}
 		unchecked := make([]githubIssueListEntry, 0, len(entries))
 		for _, entry := range entries {
-			if _, ok := linked[entry.ID]; !ok {
+			if _, ok := development[entry.ID]; !ok {
 				unchecked = append(unchecked, entry)
 			}
 		}
-		newLinked, err := s.githubIssuesWithLinkedBranches(ctx, unchecked)
+		newStates, err := s.githubIssueDevelopmentStates(ctx, unchecked)
 		if err != nil {
 			return nil, err
 		}
-		for id, hasLinkedBranch := range newLinked {
-			linked[id] = hasLinkedBranch
+		for id, state := range newStates {
+			development[id] = state
 		}
 		for _, entry := range entries {
-			if (branch == "with") == linked[entry.ID] {
+			state := development[entry.ID]
+			if todo && state.PlanningEnabled && !strings.EqualFold(state.PlanningStatus, issueTodo) {
+				continue
+			}
+			entry.PlanningStatus = state.PlanningStatus
+			if branch == "" || (branch == "with") == state.Linked {
 				issues = append(issues, entry.GitHubIssue)
 				if len(issues) == githubIssueListLimit {
 					return issues, nil
@@ -287,25 +302,15 @@ func (s Server) githubIssueSearchCount(ctx context.Context, repository, state, s
 	return response.TotalCount, nil
 }
 
-func (s Server) githubIssuesWithLinkedBranches(ctx context.Context, issues []githubIssueListEntry) (map[string]bool, error) {
-	states, err := s.githubIssueDevelopmentStates(ctx, issues)
-	if err != nil {
-		return nil, err
-	}
-	linked := make(map[string]bool, len(states))
-	for id, state := range states {
-		linked[id] = state.Linked
-	}
-	return linked, nil
-}
-
 type githubIssueDevelopmentState struct {
-	Linked  bool
-	Blocked bool
+	PlanningEnabled bool
+	PlanningStatus  string
+	Linked          bool
+	Blocked         bool
 }
 
 func (s Server) githubIssueDevelopmentStates(ctx context.Context, issues []githubIssueListEntry) (map[string]githubIssueDevelopmentState, error) {
-	const query = `query($ids:[ID!]!){nodes(ids:$ids){... on Issue{id linkedBranches(first:1){totalCount} closedByPullRequestsReferences(first:1,includeClosedPrs:true){totalCount} issueDependenciesSummary{blockedBy}}}}`
+	const query = `query($ids:[ID!]!){nodes(ids:$ids){... on Issue{id status{name} repository{planningStatuses(first:1){totalCount}} linkedBranches(first:1){totalCount} closedByPullRequestsReferences(first:1,includeClosedPrs:true){totalCount} issueDependenciesSummary{blockedBy}}}}`
 	for _, issue := range issues {
 		if strings.TrimSpace(issue.ID) == "" {
 			return nil, fmt.Errorf("GitHub issue %d is missing its node ID", issue.Number)
@@ -332,8 +337,10 @@ func (s Server) githubIssueDevelopmentStates(ctx context.Context, issues []githu
 		for _, node := range response.Data.Nodes {
 			if node.ID != "" {
 				states[node.ID] = githubIssueDevelopmentState{
-					Linked:  node.LinkedBranches.TotalCount > 0 || node.ClosedByPullRequestsReferences.TotalCount > 0,
-					Blocked: node.IssueDependenciesSummary.BlockedBy > 0,
+					PlanningEnabled: node.Repository.PlanningStatuses != nil && node.Repository.PlanningStatuses.TotalCount > 0,
+					PlanningStatus:  node.Status.Name,
+					Linked:          node.LinkedBranches.TotalCount > 0 || node.ClosedByPullRequestsReferences.TotalCount > 0,
+					Blocked:         node.IssueDependenciesSummary.BlockedBy > 0,
 				}
 			}
 		}

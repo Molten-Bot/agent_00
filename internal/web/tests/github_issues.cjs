@@ -352,3 +352,18 @@ test('a timestamp the browser cannot parse stays out of <time>, which needs a ma
   assert.equal(await updated.locator('time').count(), 0, 'an empty datetime would be invalid markup');
   assert.equal(await page.locator('.github-issue-metadata time').count(), 1, 'the parsable Created value is still a <time>');
 });
+
+test('Studio issue browser defaults to Todo and can show all open issues', async t => {
+  const requests = [];
+  const page = await openIssue(t, assignedIssue, {
+    onRequest: url => {
+      if (url.pathname === '/api/github/issues') requests.push(url.searchParams.get('planning'));
+    },
+  });
+  assert.deepEqual(requests, ['todo']);
+  const filter = page.locator('#github-issues-planning-filter');
+  const request = page.waitForRequest(req => new URL(req.url()).pathname === '/api/github/issues');
+  await filter.click();
+  assert.equal(new URL((await request).url()).searchParams.has('planning'), false);
+  assert.equal(await filter.getAttribute('aria-pressed'), 'false');
+});
