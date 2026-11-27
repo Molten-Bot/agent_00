@@ -910,6 +910,10 @@
 
   <script>
     const DISMISSED_TASKS_KEY = "hubui.dismissedTaskIds";
+    const HIDDEN_REMOVED_TASKS_KEY = "hubui.hiddenRemovedTaskIds";
+    const PENDING_TASK_DELETES_KEY = "hubui.pendingTaskDeletes";
+    const TASK_DELETE_TIMEOUT_MS = 15_000;
+    const TASK_DELETE_MAX_RETRY_DELAY_MS = 30_000;
     const REPO_HISTORY_KEY = "hubui.repoHistory.v1";
     const REVIEWER_HISTORY_KEY = "hubui.reviewerHistory.v1";
     const PROMPT_MODE_KEY = "hubui.localPromptMode";
@@ -1590,9 +1594,9 @@
       return "Agent";
     }
 
-    function loadDismissedTaskIDs() {
+    function loadStoredTaskIDs(key) {
       try {
-        const raw = localStorage.getItem(DISMISSED_TASKS_KEY);
+        const raw = localStorage.getItem(key);
         if (!raw) return new Set();
         const parsed = JSON.parse(raw);
         if (!Array.isArray(parsed)) return new Set();
@@ -1809,6 +1813,7 @@
     }
 
     const stateUI = normalizeUIConfig(window.__RUNTIME_UI_CONFIG__);
+    const pendingTaskDeletes = loadStoredTaskIDs(PENDING_TASK_DELETES_KEY);
     const state = {
       ui: stateUI,
       agentAuth: normalizeAgentAuth({ required: true, ready: false, state: "checking", message: "Checking agent authorization…" }),
@@ -1817,7 +1822,8 @@
       customLibraryGeneration: null,
       snapshot: null,
       selectedTaskId: "",
-      dismissedTaskIDs: loadDismissedTaskIDs(),
+      dismissedTaskIDs: new Set([...loadStoredTaskIDs(DISMISSED_TASKS_KEY), ...pendingTaskDeletes]),
+      hiddenRemovedTaskIDs: loadStoredTaskIDs(HIDDEN_REMOVED_TASKS_KEY),
       libraryTasks: [],
       libraryLoadError: "",
       repoHistory: loadRepoHistory(),
@@ -1830,7 +1836,6 @@
       taskFullscreenMode: "work",
       promptImages: [],
       rerunInFlight: new Set(),
-      closeInFlight: new Set(),
       taskControlInFlight: new Set(),
       taskProgressSignalCache: new Map(),
       taskProgressModelCache: new Map(),
@@ -9735,9 +9740,9 @@
       return `Duplicate ignored; existing request ${requestID} (${rawState.replace(/_/g, " ")}).`;
     }
 
-    function persistDismissedTaskIDs() {
+    function persistTaskIDs(key, ids) {
       try {
-        localStorage.setItem(DISMISSED_TASKS_KEY, JSON.stringify(Array.from(state.dismissedTaskIDs)));
+        localStorage.setItem(key, JSON.stringify(Array.from(ids)));
       } catch (_err) {
         // Ignore localStorage failures.
       }
@@ -9764,13 +9769,7 @@
       return normalized === "completed" || normalized === "no_changes" || normalized === "merged";
     }
 
-    function isTaskClosePending(requestID) {
-      requestID = String(requestID || "").trim();
-      if (!requestID) return false;
-      return state.closeInFlight.has(requestID);
-    }
-
-    function completeTaskDismissal(requestID) {
+    function completeTaskDismissal(requestID, immediate = false) {
       requestID = String(requestID || "").trim();
       if (!requestID) return;
       const task = (state.snapshot?.tasks || []).find((candidate) => String(candidate?.request_id || "").trim() === requestID);
@@ -9795,11 +9794,11 @@
       if (state.taskHistoryUnseenIDs instanceof Set && state.taskHistoryUnseenIDs.delete(requestID)) {
         persistTaskHistoryUnseenIDs();
       }
-      persistDismissedTaskIDs();
+      persistTaskIDs(DISMISSED_TASKS_KEY, state.dismissedTaskIDs);
       if (state.selectedTaskId === requestID) {
         state.selectedTaskId = "";
       }
-      render(state.snapshot);
+      render(state.snapshot, immediate);
     }
 
     function triggerTaskSparkle(requestID) {
@@ -10589,38 +10588,47 @@
       trackAnalyticsEvent("task_fullscreen_toggled", { open: false, source });
     }
 
-    async function dismissTask(requestID) {
-      if (!requestID || state.closeInFlight.has(requestID)) return;
-      trackAnalyticsEvent("task_close_started");
-      state.closeInFlight.add(requestID);
-      render(state.snapshot);
-
-      try {
-        const response = await fetch(`/api/tasks/${encodeURIComponent(requestID)}/delete`, {
-          method: "POST",
-        });
-        let body = null;
-        try {
-          body = await response.json();
-        } catch (_err) {
-          body = null;
-        }
-        // Browser history can outlive the server session that recorded the task.
-        if (!response.ok && response.status !== 404) {
-          throw new Error(body?.error || `close http ${response.status}`);
-        }
-
-        setLocalPromptStatus("ok", `Deleted task ${requestID}`);
-        completeTaskDismissal(requestID);
-        trackAnalyticsEvent("task_close_succeeded");
-        render(state.snapshot);
-      } catch (err) {
-        trackAnalyticsEvent("task_close_failed");
-        setLocalPromptStatus("error", `Delete failed: ${err.message}`);
-      } finally {
-        state.closeInFlight.delete(requestID);
-        render(state.snapshot);
+    function dismissTask(requestID) {
+      if (!requestID) return;
+      if (normalizeTaskStatusFilter(state.taskStatusFilter) === "removed") {
+        state.hiddenRemovedTaskIDs.add(requestID);
+        persistTaskIDs(HIDDEN_REMOVED_TASKS_KEY, state.hiddenRemovedTaskIDs);
+      } else if (state.dismissedTaskIDs.has(requestID)) {
+        return;
       }
+      if (pendingTaskDeletes.has(requestID)) {
+        render(state.snapshot, true);
+        return;
+      }
+      trackAnalyticsEvent("task_close_started");
+      pendingTaskDeletes.add(requestID);
+      persistTaskIDs(PENDING_TASK_DELETES_KEY, pendingTaskDeletes);
+      completeTaskDismissal(requestID, true);
+      void syncTaskDeletion(requestID);
+    }
+
+    async function syncTaskDeletion(requestID) {
+      let retryDelay = 1000;
+      for (;;) {
+        try {
+          const response = await fetch(`/api/tasks/${encodeURIComponent(requestID)}/delete`, {
+            method: "POST",
+            signal: AbortSignal.timeout(TASK_DELETE_TIMEOUT_MS),
+          });
+          // A task can already be gone if the browser missed a successful response.
+          if (response.ok || response.status === 404) break;
+        } catch (_err) {
+          // A network error or timeout leaves the delete queued.
+        }
+        if (retryDelay === 1000) {
+          trackAnalyticsEvent("task_close_failed");
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, retryDelay));
+        retryDelay = Math.min(retryDelay * 2, TASK_DELETE_MAX_RETRY_DELAY_MS);
+      }
+      pendingTaskDeletes.delete(requestID);
+      persistTaskIDs(PENDING_TASK_DELETES_KEY, pendingTaskDeletes);
+      trackAnalyticsEvent("task_close_succeeded");
     }
 
     function renderTaskCloseButton(task, requestID) {
@@ -10632,15 +10640,12 @@
         return null;
       }
 
-      const closePending = isTaskClosePending(requestID);
       const close = document.createElement("button");
       close.type = "button";
       close.className = "task-close";
       close.textContent = "X";
       close.title = "Delete finished task and remove it from metrics";
       close.setAttribute("aria-label", "Delete task");
-      close.hidden = closePending;
-      close.disabled = closePending;
       bindTaskActionButton(close, () => {
         dismissTask(requestID);
       });
@@ -11336,7 +11341,7 @@
       const out = [];
       for (const task of liveByID.values()) {
         const requestID = String(task?.request_id || "").trim();
-        if (!requestID || !state.dismissedTaskIDs.has(requestID) || !isCompletedTask(task)) {
+        if (!requestID || state.hiddenRemovedTaskIDs.has(requestID) || !state.dismissedTaskIDs.has(requestID) || !isCompletedTask(task)) {
           continue;
         }
         const historyCopy = state.taskHistoryByID.get(requestID);
@@ -11358,7 +11363,7 @@
 
       for (const task of state.taskHistoryByID.values()) {
         const requestID = String(task?.request_id || "").trim();
-        if (!requestID || liveByID.has(requestID) || !state.dismissedTaskIDs.has(requestID) || isTaskHistoryExpired(task, nowMs)) {
+        if (!requestID || liveByID.has(requestID) || state.hiddenRemovedTaskIDs.has(requestID) || !state.dismissedTaskIDs.has(requestID) || isTaskHistoryExpired(task, nowMs)) {
           continue;
         }
         out.push({
@@ -12490,7 +12495,6 @@
             },
             taskControlBusy: isTaskControlInFlight(requestID),
             rerunPending: state.rerunInFlight.has(requestID),
-            closePending: isTaskClosePending(requestID),
             uiOnly: Boolean(task?.ui_only),
             githubReposLoading: Boolean(task?.github_repos_loading),
           };
@@ -12522,7 +12526,7 @@
         listNode.dataset.pendingRenderSig = "";
         return;
       }
-      if (nodeContainsActiveSelection(listNode)) {
+      if (!options.immediate && nodeContainsActiveSelection(listNode)) {
         listNode.dataset.pendingRenderSig = renderSig;
         scheduleDeferredSelectionRenderFlush();
         return;
@@ -13111,7 +13115,7 @@
       }
     }
 
-    function renderTasks(snapshot) {
+    function renderTasks(snapshot, immediate = false) {
       const tasks = displayTasks(snapshot);
       const hasTasks = tasks.length > 0;
       const hasTaskPanelTasks = hasTaskPanelContent(snapshot);
@@ -13161,13 +13165,14 @@
           ? "Prompt-only view keeps each task compact. Completed runs keep their pull request links."
           : "New runs will appear here with their progress, replay controls, local clone actions, and PR links.";
       renderTaskCollection(tasks, taskList, null, {
+        immediate,
         emptyEyebrow,
         emptyTitle,
         emptyCopy,
       });
     }
 
-    function renderFullscreenTasks(snapshot) {
+    function renderFullscreenTasks(snapshot, immediate = false) {
       if (!state.taskFullscreenOpen) {
         if (taskFullscreenList) {
           taskFullscreenList.dataset.pendingRenderSig = "";
@@ -13201,6 +13206,7 @@
           ? "Prompt-only view keeps each task compact. Completed runs keep their pull request links."
           : "New runs will appear here with their progress, replay controls, local clone actions, and PR links.";
       renderTaskCollection(tasks, taskFullscreenList, null, {
+        immediate,
         showOutputAction: state.taskFullscreenMode !== "console",
         showImageAction: true,
         emptyEyebrow,
@@ -13770,7 +13776,7 @@
       }
     }
 
-    function render(snapshot) {
+    function render(snapshot, immediate = false) {
       if (!snapshot || snapshotIsOlder(snapshot)) return;
       syncCustomLibraryGeneration(snapshot);
       const previousSnapshot = state.snapshot;
@@ -13807,8 +13813,8 @@
       if (state.appDisplay === "dashboard") {
         renderDashboardStats(snapshot);
       }
-      renderTasks(snapshot);
-      renderFullscreenTasks(snapshot);
+      renderTasks(snapshot, immediate);
+      renderFullscreenTasks(snapshot, immediate);
       renderChatReposFromSnapshot();
       renderFullscreenTerminal(snapshot);
     }
@@ -14763,6 +14769,9 @@
     void refreshSpeechStatus();
     loadInitial();
     startStream();
+    for (const requestID of pendingTaskDeletes) {
+      void syncTaskDeletion(requestID);
+    }
   </script>
 
   <script src="/static/commit-signing.js"></script>

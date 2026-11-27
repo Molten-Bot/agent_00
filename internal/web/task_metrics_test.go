@@ -7,6 +7,23 @@ import (
 	"time"
 )
 
+func TestTaskDeleteDismissesImmediatelyAndRetriesInBrowser(t *testing.T) {
+	requireBrowserTooling(t, "task deletion checks")
+
+	b := NewBroker()
+	b.IngestLog("task status=start request_id=finished")
+	b.IngestLog("task status=completed request_id=finished")
+	b.IngestLog("task status=start request_id=running")
+	srv := NewServer("", b)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	runBrowserSuite(t, ts.URL, time.Minute, "task deletion checks", "tests/task_delete.cjs")
+	if snap := b.Snapshot(); len(snap.Tasks) != 1 || snap.Tasks[0].RequestID != "running" || snap.Stats.TotalTasks != 1 {
+		t.Fatalf("expected only the running task after retry: %#v", snap)
+	}
+}
+
 func TestTaskDeleteRemovesCompletedRerunChain(t *testing.T) {
 	t.Parallel()
 	for _, closed := range []bool{false, true} {
