@@ -201,6 +201,7 @@ type repoWorkspace struct {
 	PRAlreadyMerged             bool
 	ReviewInterrupted           bool
 	ReviewReceipt               *githubutil.ReviewReceipt
+	ReviewRepairPass            int
 	ReviewedPatch               *draftReviewPatch
 	PendingReviewGate           *githubutil.PendingReviewGate
 	ReviewRequired              bool
@@ -1441,7 +1442,21 @@ func (h Harness) checkPublishedPullRequest(
 			if err != nil {
 				return ExitGit, "git", err
 			}
-			if err := h.requireCheckHead(ctx, *repo, checkHead); err != nil {
+			if h.ResumeIssueWorkspace {
+				policy := capturedReviewPolicy(cfg, h.FinalReviewPasses)
+				if repo.ReviewRepairPass == 0 {
+					repo.ReviewRepairPass, err = loadReviewRepairPass(*repo, checkHead, policy)
+					if err != nil {
+						return ExitPR, "checks", err
+					}
+				} else {
+					progress := reviewRepairProgress{PRURL: repo.PRURL, Head: checkHead, Pass: repo.ReviewRepairPass, Policy: policy}
+					if err := saveReviewJournal(reviewRepairProgressPath(*repo), progress); err != nil {
+						return ExitPR, "checks", fmt.Errorf("save published review repair: %w", err)
+					}
+				}
+			}
+			if err := h.waitForPublishedCheckHead(ctx, *repo, checkHead); err != nil {
 				return ExitPR, "checks", err
 			}
 		}
@@ -4799,7 +4814,8 @@ func (h Harness) runFinalReviewCycle(
 	// FinalReviewPasses (either a clean confirmation or the exhausted-passes
 	// error); a redundant bound would leave an unreachable statement after
 	// the loop for Go's terminating-statement check to flag.
-	for pass := 1; ; pass++ {
+	firstPass := repo.ReviewRepairPass + 1
+	for pass := firstPass; ; pass++ {
 		if err := h.requireWorkspace(ctx); err != nil {
 			return ExitWorkspace, "workspace", err
 		}
@@ -4886,7 +4902,7 @@ func (h Harness) runFinalReviewCycle(
 				reviewOpts.Env = environWithoutKeys(reviewOpts.Env, "GH_TOKEN", "GITHUB_TOKEN")
 			}
 		}
-		if pass == 1 && reviewAgent.Complexity != "" {
+		if pass == firstPass && reviewAgent.Complexity != "" {
 			reviewHarness.resolveTaskModel = h.lazyTaskModel(ctx, runtime, repo.Dir, reviewOpts, reviewAgent.Complexity, "review", "resolve_review_model")
 		}
 		invocation := newAgentInvocationLogMetadata(runtime, "review", pass, repo.RelDir, repo.RelDir, repo.RelDir)
@@ -5038,6 +5054,7 @@ func (h Harness) runFinalReviewCycle(
 
 		fixCfg := cfg
 		fixCfg.CommitMessage = reviewFixCommitMessage(cfg.CommitMessage, pass)
+		repo.ReviewRepairPass = pass
 		h.step("review_checks")
 		h.logf(
 			"stage=review_checks status=start action=verify review_mode=%s pass=%d total=%d repo=%s repo_dir=%s pr_url=%s",
