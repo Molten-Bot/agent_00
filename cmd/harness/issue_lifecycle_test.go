@@ -386,6 +386,37 @@ func TestIssueCheckResumeRecordsAlreadyMergedPRAsFulfilled(t *testing.T) {
 	}
 }
 
+func TestIssueWorkflowStepPreservesQueuedClaim(t *testing.T) {
+	t.Parallel()
+	store, record := lifecycleRecord(t)
+	work, _, err := prepareIssueExecution(store, record.Run, localruntime.IssueRecoveryConfig{})
+	if err != nil || work == nil {
+		t.Fatalf("prepare issue execution = %v, %v", work, err)
+	}
+	defer work.lock.Close()
+	h := app.Harness{}
+	_, done := work.configure(t.Context(), &h)
+	defer done()
+
+	h.OnStep("preflight")
+	h.OnStep("checks")
+	queued, err := store.Load(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued.State != "queued" || queued.Step != "checks" || queued.StepStartedAt.IsZero() ||
+		!reflect.DeepEqual(queued.Stages, []string{"preflight", "checks"}) {
+		t.Fatalf("queued claim state = %q, step = %q, step started = %v, stages = %v", queued.State, queued.Step, queued.StepStartedAt, queued.Stages)
+	}
+
+	h.OnTaskState("running")
+	h.OnStep("pr_verification")
+	running, err := store.Load(record.ID)
+	if err != nil || running.State != "running" || running.Step != "pr_verification" {
+		t.Fatalf("admitted claim state = %q, step = %q, error = %v", running.State, running.Step, err)
+	}
+}
+
 func TestIssueExecutionDiskFullRestoresAgentBudget(t *testing.T) {
 	t.Parallel()
 	store, record := lifecycleRecord(t)

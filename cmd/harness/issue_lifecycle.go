@@ -401,9 +401,6 @@ func (e *issueExecution) configure(ctx context.Context, h *app.Harness) (context
 			if record.PRMerged() {
 				return localruntime.ErrIssuePRMerged
 			}
-			if currentState == "" {
-				record.State = "running"
-			}
 			record.Step = step
 			recordIssueStage(record, step)
 			record.StepStartedAt = time.Now().UTC()
