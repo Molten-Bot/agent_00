@@ -65,8 +65,10 @@
 .wf-interval-units { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 2px; margin-top: 12px; }
 .wf-editor .wf-interval-units button { display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 7px 0; min-width: 0; border: 0; background: transparent; color: var(--text-soft); font-size: 10px; border-radius: 6px; }
 .wf-editor .wf-interval-units button[aria-pressed="true"] { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.wf-editor input.wf-interval-scale { display: block; width: calc(80% + 16px); margin: 8px auto 0; padding: 0; min-height: 24px; accent-color: var(--accent); cursor: ew-resize; }
-.wf-field.wf-interval-amount { margin: 12px 0 0; }
+.wf-editor .wf-schedule-interval input[type="range"] { display: block; padding: 0; min-height: 24px; accent-color: var(--accent); cursor: ew-resize; }
+.wf-editor input.wf-interval-scale { width: calc(80% + 16px); margin: 8px auto 0; }
+.wf-interval-amount { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px; margin-top: 12px; color: var(--text-soft); font-size: 11px; }
+.wf-interval-amount input { width: 100%; margin: 0; }
 .wf-interval-hint { color: var(--text-soft); font-size: 10px; line-height: 1.5; margin: 8px 0 0; }
 .wf-editor button.wf-delete { color: var(--bad); }
 .wf-inspector-empty { text-align: center; padding-top: 80px; }

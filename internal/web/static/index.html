@@ -910,6 +910,10 @@
 
   <script>
     const DISMISSED_TASKS_KEY = "hubui.dismissedTaskIds";
+    const HIDDEN_REMOVED_TASKS_KEY = "hubui.hiddenRemovedTaskIds";
+    const PENDING_TASK_DELETES_KEY = "hubui.pendingTaskDeletes";
+    const TASK_DELETE_TIMEOUT_MS = 15_000;
+    const TASK_DELETE_MAX_RETRY_DELAY_MS = 30_000;
     const REPO_HISTORY_KEY = "hubui.repoHistory.v1";
     const REVIEWER_HISTORY_KEY = "hubui.reviewerHistory.v1";
     const PROMPT_MODE_KEY = "hubui.localPromptMode";
@@ -1594,9 +1598,9 @@
       return "Agent";
     }
 
-    function loadDismissedTaskIDs() {
+    function loadStoredTaskIDs(key) {
       try {
-        const raw = localStorage.getItem(DISMISSED_TASKS_KEY);
+        const raw = localStorage.getItem(key);
         if (!raw) return new Set();
         const parsed = JSON.parse(raw);
         if (!Array.isArray(parsed)) return new Set();
@@ -1604,6 +1608,89 @@
       } catch (_err) {
         return new Set();
       }
+    }
+
+    function loadTaskStorageEntries(prefix) {
+      const entries = new Map();
+      try {
+        for (const storageKey of Object.keys(localStorage)) {
+          if (storageKey.startsWith(prefix) && storageKey.length > prefix.length) {
+            const value = localStorage.getItem(storageKey);
+            if (value !== null) entries.set(storageKey.slice(prefix.length), value);
+          }
+        }
+      } catch (_err) {
+        // Keep any entries already read if storage is unavailable.
+      }
+      return entries;
+    }
+
+    function loadLegacyTaskMarkers(key) {
+      const legacyIDs = loadStoredTaskIDs(key);
+      const prefix = `${key}.`;
+      const markers = new Map(Array.from(legacyIDs, (id) => [id, "1"]));
+      for (const [id, stored] of loadTaskStorageEntries(prefix)) {
+        markers.set(id, stored);
+      }
+      try {
+        // Migrate the old shared list only after its entries have been saved individually.
+        if (legacyIDs.size > 0) {
+          for (const id of legacyIDs) {
+            const stored = localStorage.getItem(prefix + id);
+            markers.set(id, stored ?? "1");
+            if (stored === null) {
+              localStorage.setItem(prefix + id, "1");
+            }
+          }
+          localStorage.removeItem(key);
+        }
+      } catch (_err) {
+        // Keep any markers already read if storage is unavailable or full.
+      }
+      return markers;
+    }
+
+    function taskGenerationKey(requestID, generation) {
+      return JSON.stringify([requestID, generation]);
+    }
+
+    function loadTaskGenerationMarkers(key) {
+      const markers = new Set(loadTaskStorageEntries(`${key}:`).keys());
+      for (const [requestID, generation] of loadLegacyTaskMarkers(key)) {
+        markers.add(taskGenerationKey(requestID, generation));
+      }
+      return markers;
+    }
+
+    function loadPendingTaskDeletes() {
+      const key = PENDING_TASK_DELETES_KEY;
+      const entries = new Map(Array.from(loadLegacyTaskMarkers(key), ([requestID, stored]) =>
+        [`${key}.${requestID}`, { requestID, stored }]
+      ));
+      for (const [entryKey, stored] of loadTaskStorageEntries(`${key}:`)) {
+        try {
+          const [requestID, generation] = JSON.parse(entryKey);
+          if (typeof requestID === "string" && requestID) {
+            entries.set(`${key}:${entryKey}`, { requestID, generation, stored });
+          }
+        } catch (_err) {
+          // A malformed key cannot identify the request to delete.
+        }
+      }
+      const deletes = new Map();
+      for (const [storageKey, { requestID, generation, stored }] of entries) {
+        let generations = {};
+        try {
+          const scope = JSON.parse(stored);
+          if (scope && typeof scope === "object" && !Array.isArray(scope)) {
+            generations = Object.fromEntries(Object.entries(scope).filter(([, value]) => typeof value === "string"));
+          }
+        } catch (_err) {
+          // An unreadable scope, like an older ID-only queue, cannot identify a result.
+        }
+        deletes.set(storageKey, { requestID, generation: generation ?? generations[requestID], generations, stored });
+      }
+      return deletes;
     }
 
     function loadRepoHistory() {
@@ -1813,6 +1900,7 @@
     }
 
     const stateUI = normalizeUIConfig(window.__RUNTIME_UI_CONFIG__);
+    const pendingTaskDeletes = loadPendingTaskDeletes();
     const state = {
       ui: stateUI,
       agentAuth: normalizeAgentAuth({ required: true, ready: false, state: "checking", message: "Checking agent authorization…" }),
@@ -1821,7 +1909,8 @@
       customLibraryGeneration: null,
       snapshot: null,
       selectedTaskId: "",
-      dismissedTaskIDs: loadDismissedTaskIDs(),
+      dismissedTaskGenerations: loadTaskGenerationMarkers(DISMISSED_TASKS_KEY),
+      hiddenRemovedTaskGenerations: loadTaskGenerationMarkers(HIDDEN_REMOVED_TASKS_KEY),
       libraryTasks: [],
       libraryLoadError: "",
       repoHistory: loadRepoHistory(),
@@ -1834,7 +1923,6 @@
       taskFullscreenMode: "work",
       promptImages: [],
       rerunInFlight: new Set(),
-      closeInFlight: new Set(),
       taskControlInFlight: new Set(),
       taskProgressSignalCache: new Map(),
       taskProgressModelCache: new Map(),
@@ -2327,7 +2415,7 @@
       }
       for (const task of nextSnapshot?.tasks || []) {
         const requestID = taskRequestID(task);
-        if (!requestID || state.dismissedTaskIDs.has(requestID)) {
+        if (!requestID || isTaskDismissed(task)) {
           continue;
         }
         const status = normalizedTaskStatus(task?.status);
@@ -9061,11 +9149,11 @@
       if (!workflowEditorLoad) {
         const css = document.createElement("link");
         css.rel = "stylesheet";
-        css.href = "/static/workflow-editor.css?v=16";
+        css.href = "/static/workflow-editor.css?v=17";
         document.head.appendChild(css);
         workflowEditorLoad = new Promise((resolve, reject) => {
           const script = document.createElement("script");
-          script.src = "/static/workflow-editor.js?v=27";
+          script.src = "/static/workflow-editor.js?v=28";
           script.onload = resolve;
           script.onerror = () => { script.remove(); css.remove(); workflowEditorLoad = null; reject(new Error("Unable to load Workflow editor. Reload to try again.")); };
           document.head.appendChild(script);
@@ -9739,9 +9827,9 @@
       return `Duplicate ignored; existing request ${requestID} (${rawState.replace(/_/g, " ")}).`;
     }
 
-    function persistDismissedTaskIDs() {
+    function persistTaskMarker(storageKey, value = "1") {
       try {
-        localStorage.setItem(DISMISSED_TASKS_KEY, JSON.stringify(Array.from(state.dismissedTaskIDs)));
+        localStorage.setItem(storageKey, value);
       } catch (_err) {
         // Ignore localStorage failures.
       }
@@ -9768,24 +9856,63 @@
       return normalized === "completed" || normalized === "no_changes" || normalized === "merged";
     }
 
-    function isTaskClosePending(requestID) {
-      requestID = String(requestID || "").trim();
-      if (!requestID) return false;
-      return state.closeInFlight.has(requestID);
+    function taskDeleteGeneration(task) {
+      const id = taskRequestID(task);
+      return task?.delete_attempt_generations?.[id] || "1";
     }
 
-    function completeTaskDismissal(requestID) {
+    function isTaskDismissed(task) {
+      const id = taskRequestID(task);
+      const generation = taskDeleteGeneration(task);
+      return state.dismissedTaskGenerations.has(taskGenerationKey(id, generation)) ||
+        hasPendingTaskDeletion(id, generation);
+    }
+
+    function reconcileLegacyTaskDismissals(snapshot) {
+      for (const task of snapshot.tasks || []) {
+        const id = taskRequestID(task);
+        const generation = task.delete_attempt_generations?.[id];
+        if (!generation || !isCompletedTask(task) ||
+            !state.dismissedTaskGenerations.has(taskGenerationKey(id, "1"))) continue;
+        const cached = state.taskHistoryByID.get(id);
+        if (!isCompletedTask(cached) || cached.delete_attempt_generations?.[id] ||
+            normalizedTaskStatus(cached.status) !== normalizedTaskStatus(task.status)) continue;
+        // Journal-restored issue cards can have different timestamps from the
+        // live card. Their issue task ID and attempt number survive restart.
+        const attempt = task.issue_attempts?.at(-1)?.number;
+        const cachedAttempt = cached.issue_attempts?.at(-1)?.number;
+        const matches = task.task_id && task.task_id === cached.task_id && attempt && cachedAttempt
+          ? attempt === cachedAttempt
+          : cached.updated_at && cached.updated_at === task.updated_at;
+        if (!matches) continue;
+        const key = taskGenerationKey(id, generation);
+        state.dismissedTaskGenerations.add(key);
+        persistTaskMarker(`${DISMISSED_TASKS_KEY}:${key}`);
+      }
+    }
+
+    function hasPendingTaskDeletion(requestID, generation) {
+      for (const pending of pendingTaskDeletes.values()) {
+        if (pending.requestID === requestID && pending.generation === generation) return true;
+      }
+      return false;
+    }
+
+    function isRemovedTaskHidden(task) {
+      return state.hiddenRemovedTaskGenerations.has(taskGenerationKey(taskRequestID(task), taskDeleteGeneration(task)));
+    }
+
+    function completeTaskDismissal(requestID, immediate = false, observedTask = null) {
       requestID = String(requestID || "").trim();
       if (!requestID) return;
-      const task = (state.snapshot?.tasks || []).find((candidate) => String(candidate?.request_id || "").trim() === requestID);
-      if (isCompletedTask(task)) {
+      const current = (state.snapshot?.tasks || []).find((candidate) => taskRequestID(candidate) === requestID);
+      const task = observedTask || current || state.taskHistoryByID.get(requestID);
+      const generation = taskDeleteGeneration(task);
+      if (isCompletedTask(task) && (!current || taskDeleteGeneration(current) === generation)) {
         const copy = cloneTaskForHistory(task);
         if (copy) {
-          if (!(state.taskHistoryByID instanceof Map)) {
-            state.taskHistoryByID = new Map();
-          }
           const existing = state.taskHistoryByID.get(requestID);
-          if (existing?.history_completed_at) {
+          if (existing?.history_completed_at && taskDeleteGeneration(existing) === generation) {
             copy.history_completed_at = existing.history_completed_at;
           }
           if (typeof existing?.prompt === "string" && existing.prompt.trim() !== "") {
@@ -9795,15 +9922,16 @@
           persistTaskHistory();
         }
       }
-      state.dismissedTaskIDs.add(requestID);
+      const key = taskGenerationKey(requestID, generation);
+      state.dismissedTaskGenerations.add(key);
       if (state.taskHistoryUnseenIDs instanceof Set && state.taskHistoryUnseenIDs.delete(requestID)) {
         persistTaskHistoryUnseenIDs();
       }
-      persistDismissedTaskIDs();
+      persistTaskMarker(`${DISMISSED_TASKS_KEY}:${key}`);
       if (state.selectedTaskId === requestID) {
         state.selectedTaskId = "";
       }
-      render(state.snapshot);
+      render(state.snapshot, immediate);
     }
 
     function triggerTaskSparkle(requestID) {
@@ -10593,38 +10721,107 @@
       trackAnalyticsEvent("task_fullscreen_toggled", { open: false, source });
     }
 
-    async function dismissTask(requestID) {
-      if (!requestID || state.closeInFlight.has(requestID)) return;
-      trackAnalyticsEvent("task_close_started");
-      state.closeInFlight.add(requestID);
-      render(state.snapshot);
-
-      try {
-        const response = await fetch(`/api/tasks/${encodeURIComponent(requestID)}/delete`, {
-          method: "POST",
-        });
-        let body = null;
-        try {
-          body = await response.json();
-        } catch (_err) {
-          body = null;
-        }
-        // Browser history can outlive the server session that recorded the task.
-        if (!response.ok && response.status !== 404) {
-          throw new Error(body?.error || `close http ${response.status}`);
-        }
-
-        setLocalPromptStatus("ok", `Deleted task ${requestID}`);
-        completeTaskDismissal(requestID);
-        trackAnalyticsEvent("task_close_succeeded");
-        render(state.snapshot);
-      } catch (err) {
-        trackAnalyticsEvent("task_close_failed");
-        setLocalPromptStatus("error", `Delete failed: ${err.message}`);
-      } finally {
-        state.closeInFlight.delete(requestID);
-        render(state.snapshot);
+    function dismissTask(requestID, task) {
+      if (!requestID) return;
+      const generation = taskDeleteGeneration(task);
+      const key = taskGenerationKey(requestID, generation);
+      if (task.removed_history) {
+        state.hiddenRemovedTaskGenerations.add(key);
+        persistTaskMarker(`${HIDDEN_REMOVED_TASKS_KEY}:${key}`);
+      } else if (isTaskDismissed(task)) {
+        return;
       }
+      if (hasPendingTaskDeletion(requestID, generation)) {
+        render(state.snapshot, true);
+        return;
+      }
+      trackAnalyticsEvent("task_close_started");
+      // Use the rendered card's scope even if a newer snapshot is already waiting to render.
+      const observedGenerations = task.delete_attempt_generations || {};
+      // Hiding an already-dismissed card must not sweep in siblings from later snapshots.
+      const generations = task.removed_history && observedGenerations[requestID]
+        ? { [requestID]: generation }
+        : observedGenerations;
+      const stored = JSON.stringify(generations, Object.keys(generations).sort());
+      const pending = { requestID, generation, generations, stored };
+      const storageKey = `${PENDING_TASK_DELETES_KEY}:${JSON.stringify([requestID, generation, stored])}`;
+      pendingTaskDeletes.set(storageKey, pending);
+      persistTaskMarker(storageKey, pending.stored);
+      completeTaskDismissal(requestID, true, task);
+      void syncTaskDeletion(storageKey, pending);
+    }
+
+    async function syncTaskDeletion(storageKey, pending) {
+      const { requestID, generation, generations, stored } = pending;
+      let retryDelay = 1000;
+      const scope = Object.entries(generations);
+      while (pendingTaskDeletes.get(storageKey) === pending) {
+        // Prefer a covering scope so overlapping requests can settle in one delete.
+        let covering = generations;
+        let coveringSize = scope.length;
+        if (generation && generations[requestID] === generation) {
+          for (const candidate of loadPendingTaskDeletes().values()) {
+            if (candidate.requestID !== requestID || candidate.generation !== generation) continue;
+            const size = Object.keys(candidate.generations).length;
+            if (size > coveringSize && scope.every(([id, value]) => candidate.generations[id] === value)) {
+              covering = candidate.generations;
+              coveringSize = size;
+            }
+          }
+        }
+        try {
+          const response = await fetch(`/api/tasks/${encodeURIComponent(requestID)}/delete`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ attempt_generations: covering }),
+            signal: AbortSignal.timeout(TASK_DELETE_TIMEOUT_MS),
+          });
+          // The result may already be gone or have been superseded by a resumed run.
+          if (response.ok || response.status === 404) {
+            if (pendingTaskDeletes.get(storageKey) === pending) {
+              pendingTaskDeletes.delete(storageKey);
+            }
+            try {
+              if (localStorage.getItem(storageKey) === stored) localStorage.removeItem(storageKey);
+            } catch (_err) {
+              // Ignore localStorage failures.
+            }
+            trackAnalyticsEvent("task_close_succeeded");
+            return;
+          }
+        } catch (_err) {
+          // A network error or timeout leaves the delete queued.
+        }
+        if (retryDelay === 1000) {
+          trackAnalyticsEvent("task_close_failed");
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, retryDelay));
+        retryDelay = Math.min(retryDelay * 2, TASK_DELETE_MAX_RETRY_DELAY_MS);
+      }
+    }
+
+    function syncStoredTaskDeletion(event) {
+      if (event.storageArea !== localStorage || !event.key || event.newValue === null) return;
+      const dismissalPrefix = `${DISMISSED_TASKS_KEY}:`;
+      if (event.key.startsWith(dismissalPrefix)) {
+        const key = event.key.slice(dismissalPrefix.length);
+        if (!state.dismissedTaskGenerations.has(key)) {
+          state.dismissedTaskGenerations.add(key);
+          render(state.snapshot, true);
+        }
+        return;
+      }
+      if (event.key !== PENDING_TASK_DELETES_KEY &&
+          !event.key.startsWith(`${PENDING_TASK_DELETES_KEY}:`) &&
+          !event.key.startsWith(`${PENDING_TASK_DELETES_KEY}.`)) return;
+      let changed = false;
+      for (const [storageKey, pending] of loadPendingTaskDeletes()) {
+        if (pendingTaskDeletes.get(storageKey)?.stored === pending.stored) continue;
+        pendingTaskDeletes.set(storageKey, pending);
+        void syncTaskDeletion(storageKey, pending);
+        changed = true;
+      }
+      if (changed) render(state.snapshot, true);
     }
 
     function renderTaskCloseButton(task, requestID) {
@@ -10636,18 +10833,13 @@
         return null;
       }
 
-      const closePending = isTaskClosePending(requestID);
       const close = document.createElement("button");
       close.type = "button";
       close.className = "task-close";
       close.textContent = "X";
       close.title = "Delete finished task and remove it from metrics";
       close.setAttribute("aria-label", "Delete task");
-      close.hidden = closePending;
-      close.disabled = closePending;
-      bindTaskActionButton(close, () => {
-        dismissTask(requestID);
-      });
+      bindTaskActionButton(close, () => dismissTask(requestID, task));
       return close;
     }
 
@@ -11091,7 +11283,7 @@
           continue;
         }
         const existing = state.taskHistoryByID.get(requestID);
-        if (existing?.history_completed_at) {
+        if (existing?.history_completed_at && taskDeleteGeneration(existing) === taskDeleteGeneration(copy)) {
           copy.history_completed_at = existing.history_completed_at;
         }
         if (typeof existing?.prompt === "string" && existing.prompt.trim() !== "") {
@@ -11110,6 +11302,7 @@
           String(existing.pr_title_url || "") === String(copy.pr_title_url || "") &&
           taskIssueURL(existing) === taskIssueURL(copy) &&
           String(existing.pr_title_updated_at || "") === String(copy.pr_title_updated_at || "") &&
+          JSON.stringify(existing.delete_attempt_generations) === JSON.stringify(copy.delete_attempt_generations) &&
           existingLogsLength === nextLogsLength
         ) {
           continue;
@@ -11159,7 +11352,7 @@
         if (!requestID) {
           continue;
         }
-        if (state.dismissedTaskIDs.has(requestID) && isCompletedTask(task)) {
+        if (isTaskDismissed(task) && isCompletedTask(task)) {
           continue;
         }
         taskItems.push(task);
@@ -11182,7 +11375,7 @@
       const out = [];
       for (const task of liveByID.values()) {
         const requestID = String(task?.request_id || "").trim();
-        if (!requestID || state.dismissedTaskIDs.has(requestID)) {
+        if (!requestID || isTaskDismissed(task)) {
           continue;
         }
         const historyCopy = state.taskHistoryByID.get(requestID);
@@ -11205,7 +11398,7 @@
 
       for (const task of state.taskHistoryByID.values()) {
         const requestID = String(task?.request_id || "").trim();
-        if (!requestID || liveByID.has(requestID) || state.dismissedTaskIDs.has(requestID) || isTaskHistoryExpired(task, nowMs)) {
+        if (!requestID || liveByID.has(requestID) || isTaskDismissed(task) || isTaskHistoryExpired(task, nowMs)) {
           continue;
         }
         out.push({
@@ -11341,7 +11534,7 @@
       const out = [];
       for (const task of liveByID.values()) {
         const requestID = String(task?.request_id || "").trim();
-        if (!requestID || !state.dismissedTaskIDs.has(requestID) || !isCompletedTask(task)) {
+        if (!requestID || isRemovedTaskHidden(task) || !isTaskDismissed(task) || !isCompletedTask(task)) {
           continue;
         }
         const historyCopy = state.taskHistoryByID.get(requestID);
@@ -11363,7 +11556,7 @@
 
       for (const task of state.taskHistoryByID.values()) {
         const requestID = String(task?.request_id || "").trim();
-        if (!requestID || liveByID.has(requestID) || !state.dismissedTaskIDs.has(requestID) || isTaskHistoryExpired(task, nowMs)) {
+        if (!requestID || liveByID.has(requestID) || isRemovedTaskHidden(task) || !isTaskDismissed(task) || isTaskHistoryExpired(task, nowMs)) {
           continue;
         }
         out.push({
@@ -12550,6 +12743,8 @@
             canRerun: canRerunTask(task),
             canCopyClone: canCopyTaskCloneCommand(task),
             historyOnly: Boolean(task?.history_only),
+            removedHistory: Boolean(task?.removed_history),
+            deleteScope: task.delete_attempt_generations,
             controls: {
               pause: Boolean(task?.controls?.pause),
               run: Boolean(task?.controls?.run),
@@ -12558,7 +12753,6 @@
             },
             taskControlBusy: isTaskControlInFlight(requestID),
             rerunPending: state.rerunInFlight.has(requestID),
-            closePending: isTaskClosePending(requestID),
             uiOnly: Boolean(task?.ui_only),
             githubReposLoading: Boolean(task?.github_repos_loading),
           };
@@ -12590,7 +12784,7 @@
         listNode.dataset.pendingRenderSig = "";
         return;
       }
-      if (nodeContainsActiveSelection(listNode)) {
+      if (!options.immediate && nodeContainsActiveSelection(listNode)) {
         listNode.dataset.pendingRenderSig = renderSig;
         scheduleDeferredSelectionRenderFlush();
         return;
@@ -13186,7 +13380,7 @@
       }
     }
 
-    function renderTasks(snapshot) {
+    function renderTasks(snapshot, immediate = false) {
       const tasks = displayTasks(snapshot);
       const hasTasks = tasks.length > 0;
       const hasTaskPanelTasks = hasTaskPanelContent(snapshot);
@@ -13236,13 +13430,14 @@
           ? "Prompt-only view keeps each task compact. Completed runs keep their pull request links."
           : "New runs will appear here with their progress, replay controls, local clone actions, and PR links.";
       renderTaskCollection(tasks, taskList, null, {
+        immediate,
         emptyEyebrow,
         emptyTitle,
         emptyCopy,
       });
     }
 
-    function renderFullscreenTasks(snapshot) {
+    function renderFullscreenTasks(snapshot, immediate = false) {
       if (!state.taskFullscreenOpen) {
         if (taskFullscreenList) {
           taskFullscreenList.dataset.pendingRenderSig = "";
@@ -13276,6 +13471,7 @@
           ? "Prompt-only view keeps each task compact. Completed runs keep their pull request links."
           : "New runs will appear here with their progress, replay controls, local clone actions, and PR links.";
       renderTaskCollection(tasks, taskFullscreenList, null, {
+        immediate,
         showOutputAction: state.taskFullscreenMode !== "console",
         showImageAction: true,
         emptyEyebrow,
@@ -13855,8 +14051,14 @@
       }
     }
 
-    function render(snapshot) {
-      if (!snapshot || snapshotIsOlder(snapshot)) return;
+    function render(snapshot, immediate = false) {
+      if (!snapshot) {
+        renderTasks(snapshot, immediate);
+        renderFullscreenTasks(snapshot, immediate);
+        renderFullscreenTerminal(snapshot);
+        return;
+      }
+      if (snapshotIsOlder(snapshot)) return;
       syncCustomLibraryGeneration(snapshot);
       const previousSnapshot = state.snapshot;
       const selectedTask = previousSnapshot?.tasks?.find((task) => task.request_id === state.selectedTaskId);
@@ -13865,6 +14067,7 @@
         if (current) state.selectedTaskId = current.request_id;
       }
       state.snapshot = snapshot;
+      reconcileLegacyTaskDismissals(snapshot);
       renderGitHubRate(snapshot.github_rate);
       syncLocalPromptSubmitDisabled();
       syncTaskCompletionSounds(snapshot);
@@ -13892,8 +14095,8 @@
       if (state.appDisplay === "dashboard") {
         renderDashboardStats(snapshot);
       }
-      renderTasks(snapshot);
-      renderFullscreenTasks(snapshot);
+      renderTasks(snapshot, immediate);
+      renderFullscreenTasks(snapshot, immediate);
       renderChatReposFromSnapshot();
       renderFullscreenTerminal(snapshot);
     }
@@ -14848,6 +15051,10 @@
     void refreshSpeechStatus();
     loadInitial();
     startStream();
+    window.addEventListener("storage", syncStoredTaskDeletion);
+    for (const [storageKey, pending] of pendingTaskDeletes) {
+      void syncTaskDeletion(storageKey, pending);
+    }
   </script>
 
   <script src="/static/commit-signing.js"></script>

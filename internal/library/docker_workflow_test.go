@@ -62,8 +62,10 @@ func TestDeployProdPromotesExistingImageTag(t *testing.T) {
 	content := string(data)
 	for _, want := range []string{
 		"default: vnext",
+		"  promote:\n    name: Promote image to latest\n    needs: prepare\n",
 		"timeout-minutes: 5",
 		"SOURCE_TAG: ${{ github.event.inputs.source_tag }}",
+		"RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}",
 		"Invalid source_tag: ${SOURCE_TAG}",
 		"docker buildx imagetools create",
 		"--tag \"moltenai/agent_00:${RELEASE_TAG}\"",
@@ -111,7 +113,8 @@ func TestDeployProdPublishesGoReleaserGitHubRelease(t *testing.T) {
 		"first_release:",
 		"description: First release tag to create when no vX.Y.Z tag exists",
 		"default: v1.0.0",
-		"name: Publish GitHub Release artifacts",
+		"  release:\n    name: Publish GitHub Release artifacts\n    needs: prepare\n",
+		"release_tag: ${{ steps.release.outputs.tag }}",
 		"fetch-depth: 0",
 		"fetch-tags: true",
 		"id: release",
@@ -120,13 +123,12 @@ func TestDeployProdPublishesGoReleaserGitHubRelease(t *testing.T) {
 		"Release tag already exists: ${release_tag}",
 		"git tag -a \"${RELEASE_TAG}\" -m \"Release ${RELEASE_TAG}\"",
 		"git push origin \"refs/tags/${RELEASE_TAG}\"",
-		"git checkout --detach \"${RELEASE_TAG}\"",
+		"ref: refs/tags/${{ needs.prepare.outputs.release_tag }}",
 		"uses: goreleaser/goreleaser-action@v7",
 		"distribution: goreleaser",
 		"version: '~> v2'",
 		"args: release --clean",
 		"GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
-		"needs: release",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("%s missing GoReleaser release setting %q", workflowPath, want)
