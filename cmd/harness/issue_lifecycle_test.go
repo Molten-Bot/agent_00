@@ -340,7 +340,8 @@ func TestIssueCheckWaitResumesSameClaimAndPreservesBackoff(t *testing.T) {
 	h := app.Harness{}
 	ctx, done := next.configure(t.Context(), &h)
 	defer done()
-	if h.IssueChecksPRURL != prURL || !h.IssueCheckoutComplete || !reflect.DeepEqual(next.record.Run.Workflow, record.Run.Workflow) ||
+	if h.IssueChecksPRURL != prURL || !h.IssueCheckoutComplete || h.IssueWorkspaceDir != record.WorkspaceDir ||
+		!reflect.DeepEqual(next.record.Run.Workflow, record.Run.Workflow) ||
 		next.record.RequestID != record.RequestID || next.record.ID != record.ID || next.record.WorkspaceDir != record.WorkspaceDir ||
 		!next.record.LabelAdded || next.record.Run.GitHubIssue.Priority != "P0" ||
 		*next.record.Run.GitHubIssue.Claim != *record.Run.GitHubIssue.Claim {
