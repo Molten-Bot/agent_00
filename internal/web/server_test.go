@@ -648,8 +648,8 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "const baseBranch = String(task?.base_branch || \"\").trim();") {
 		t.Fatalf("expected index html to consider task base_branch when formatting branch metadata")
 	}
-	if !strings.Contains(markup, "return `from:${baseBranch} to:${branch}`;") {
-		t.Fatalf("expected index html to render base-to-head branch transitions")
+	if !strings.Contains(markup, "return `${baseBranch}:${branch}`;") {
+		t.Fatalf("expected index html to render branch pairs as base:head")
 	}
 	if !strings.Contains(markup, "function taskCloneCommand(") || !strings.Contains(markup, "function copyTaskCloneCommand(") {
 		t.Fatalf("expected index html to include task clone command helpers for completed branches")
@@ -1225,8 +1225,8 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if strings.Contains(markup, "stage.textContent = `stage:") {
 		t.Fatalf("expected index html to remove stage metadata line from task cards")
 	}
-	if !strings.Contains(markup, "branch.textContent = `branch: ${formatTaskBranch(task)}`;") {
-		t.Fatalf("expected index html to render branch metadata in task cards")
+	if !strings.Contains(markup, "branch.textContent = formatTaskBranch(task);") {
+		t.Fatalf("expected task cards to render the formatted branch without a prefix")
 	}
 	if !strings.Contains(markup, `update.className = "task-timing-summary";`) || !strings.Contains(markup, "applyTaskTimingSummary(update, task);") {
 		t.Fatalf("expected index html to render task updated/started timing summary in a dedicated node")
