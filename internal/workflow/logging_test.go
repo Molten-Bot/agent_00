@@ -291,7 +291,7 @@ func TestWorkflowRetryDurationIncludesRetiredActivationAfterRestart(t *testing.T
 				t.Fatal(err)
 			}
 			tick(t, restarted)
-			if len(logs) == 0 || !strings.HasSuffix(logs[len(logs)-1], "status=merged reason=merge_unconfirmed duration_ms=90000") ||
+			if len(logs) == 0 || !strings.HasSuffix(logs[len(logs)-1], "status=merged reason=external_merge duration_ms=90000") ||
 				!strings.Contains(logs[len(logs)-1], "started_at="+start.Format(time.RFC3339Nano)) {
 				t.Fatalf("retry logs = %v, want original start and 90-second duration", logs)
 			}

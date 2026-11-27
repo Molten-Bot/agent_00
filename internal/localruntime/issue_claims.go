@@ -48,6 +48,9 @@ type IssueClaimRecord struct {
 	WorkspaceDir     string        `json:"workspaceDir,omitempty"`
 	PRURL            string        `json:"prUrl,omitempty"`
 	PRTitle          string        `json:"prTitle,omitempty"`
+	PRMergedAt       time.Time     `json:"prMergedAt,omitzero"`
+	PRMergedByApp    bool          `json:"prMergedByApp,omitempty"`
+	ReviewDetail     string        `json:"mergeReviewDetail,omitempty"`
 	VerifiedAt       time.Time     `json:"verifiedAt,omitempty"`
 	LabelAdded       bool          `json:"labelAdded,omitempty"`
 	UnlockPending    bool          `json:"unlockPending,omitempty"`
@@ -69,6 +72,8 @@ type IssueClaimRecord struct {
 	NoChangeEvidence bool          `json:"noChangeEvidence,omitempty"`
 	Control          string        `json:"control,omitempty"`
 
+	PRRecoveryBlocker string `json:"prRecoveryBlocker,omitempty"`
+
 	// Cross-instance workflow recovery must verify this reservation again before dispatch.
 	RequireReservationSHA bool `json:"requireReservationSha,omitempty"`
 
@@ -86,7 +91,12 @@ func (r IssueClaimRecord) FailureDetail() string {
 
 // Fulfilled includes a confirmed merge even if draft verification remains in history.
 func (r IssueClaimRecord) Fulfilled() bool {
-	return r.Outcome == "merged" || (r.State == "fulfilled" && r.PRVerification == "")
+	return (r.State == "fulfilled" || r.State == IssueStateMerged) && r.PRVerification == ""
+}
+
+// PRMerged includes legacy receipts with incomplete verification evidence.
+func (r IssueClaimRecord) PRMerged() bool {
+	return r.State == IssueStateMerged || r.State == IssueStateMergedUnverified
 }
 
 type IssueClaimStore struct {
@@ -100,8 +110,10 @@ type IssueClaimStore struct {
 var issueClaimIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
 var ErrIssueOwnershipChanged = errors.New("issue ownership changed; start the issue again to create a new attempt")
+var ErrIssuePRMerged = errors.New("issue task pull request is already merged")
 
 const (
+	IssueStateMerged                = "merged"
 	IssueStateMergedUnverified      = "merged_unverified"
 	IssueChecksPending              = "checks_pending"
 	IssueIncidentUnmergedDependency = "unmerged_dependency"
@@ -125,6 +137,20 @@ func (s *IssueClaimStore) Save(record IssueClaimRecord) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Workflow reconciliation can record a merge while another caller
+	// holds a pre-merge snapshot. Keep the terminal receipt in that case.
+	if current, err := s.read(filepath.Join(s.Root, record.ID+".json")); err == nil && current.PRMerged() {
+		if !record.PRMerged() {
+			return nil
+		}
+		record.PRMergedByApp = record.PRMergedByApp || current.PRMergedByApp
+		if !current.PRMergedAt.IsZero() {
+			record.PRMergedAt = current.PRMergedAt
+		}
+		if current.ReviewDetail != "" {
+			record.ReviewDetail = current.ReviewDetail
+		}
+	}
 	return s.save(record)
 }
 
@@ -149,6 +175,13 @@ func (s *IssueClaimStore) beginExecution(record IssueClaimRecord, openReserve fu
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	current, err := s.read(filepath.Join(s.Root, record.ID+".json"))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if current.PRMerged() {
+		return ErrIssuePRMerged
+	}
 	file, err := openReserve(issueStorageReserve(s.Root, record.ID), os.O_CREATE|os.O_WRONLY, 0600)
 	if err == nil {
 		if err = file.Close(); err == nil {
@@ -280,7 +313,7 @@ func readIssueRecord(path string) (IssueClaimRecord, error) {
 	if !issueClaimIDPattern.MatchString(record.ID) || filepath.Base(path) != record.ID+".json" || record.Run.GitHubIssue == nil || record.Run.GitHubIssue.Claim == nil || record.Run.GitHubIssue.Claim.ID != record.ID {
 		return record, fmt.Errorf("invalid persisted issue claim")
 	}
-	if record.ExecutionAgentAttempts != nil && (record.Outcome == "" || record.Outcome == IssueChecksPending) {
+	if record.ExecutionAgentAttempts != nil && !record.PRMerged() && (record.Outcome == "" || record.Outcome == IssueChecksPending) {
 		_, err := os.Stat(issueStorageReserve(filepath.Dir(path), record.ID))
 		if errors.Is(err, os.ErrNotExist) {
 			record.AgentAttempts = *record.ExecutionAgentAttempts
@@ -324,8 +357,12 @@ func (s *IssueClaimStore) Update(id string, change func(*IssueClaimRecord) error
 	if err != nil {
 		return err
 	}
+	merged := record.PRMerged()
 	if err := change(&record); err != nil {
 		return err
+	}
+	if merged && !record.PRMerged() {
+		return nil
 	}
 	return s.save(record)
 }

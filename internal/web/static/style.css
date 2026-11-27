@@ -2688,7 +2688,38 @@ select.prompt-control {
   cursor: pointer;
 }
 
-.task-issue-history a {
+.task-issue-current {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.task-issue-action {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.task-issue-status {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.task-issue-blocker {
+  flex-basis: 100%;
+}
+
+.task-merged .task-issue-status,
+.task-result.merged .task-issue-status {
+  color: color-mix(in srgb, var(--good) 55%, var(--text));
+}
+
+.task-issue-history details a {
   color: var(--running);
 }
 
@@ -2708,6 +2739,11 @@ select.prompt-control {
   background: color-mix(in srgb, var(--bg-elevated) 74%, #9ca3af);
   box-shadow: none;
   filter: saturate(0.72);
+}
+
+.task.task-merged[data-task-id] {
+  opacity: 1;
+  filter: none;
 }
 
 .task.task-merged:hover {

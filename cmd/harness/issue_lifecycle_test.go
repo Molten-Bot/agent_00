@@ -206,6 +206,97 @@ func TestIssueExecutionClearsVerificationOnlyOnVerifiedCompletion(t *testing.T) 
 	}
 }
 
+func TestIssueExecutionStopPreservesObservedMerge(t *testing.T) {
+	t.Parallel()
+	store, record := lifecycleRecord(t)
+	work, _, err := prepareIssueExecution(store, record.Run, localruntime.IssueRecoveryConfig{})
+	if err != nil || work == nil {
+		t.Fatalf("prepare issue execution = %v, %v", work, err)
+	}
+	if err := store.Update(record.ID, func(r *localruntime.IssueClaimRecord) error {
+		r.State = localruntime.IssueStateMergedUnverified
+		r.Outcome = localruntime.IssueChecksPending
+		r.Error = "pull request merged before draft verification passed"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	verificationErr := errors.New("pr_verification: check failed on the draft head")
+	if err := work.finish(t.Context(), "stopped", app.Result{Err: verificationErr}, nil); err != nil {
+		t.Fatal(err)
+	}
+	restarted := &localruntime.IssueClaimStore{Root: store.Root}
+	got, err := restarted.Load(record.ID)
+	if err != nil || !got.PRMerged() || got.Outcome != localruntime.IssueChecksPending ||
+		got.FailureDetail() != verificationErr.Error() ||
+		got.Error != "pull request merged before draft verification passed" || got.StoppedAt.IsZero() || got.ExecutionAgentAttempts != nil {
+		t.Fatalf("late worker failure lost history or overwrote merge receipt: %+v, %v", got, err)
+	}
+}
+
+func TestIssueExecutionMergeSurvivesDiskFullClaimWrite(t *testing.T) {
+	t.Parallel()
+	store, record := lifecycleRecord(t)
+	work, _, err := prepareIssueExecution(store, record.Run, localruntime.IssueRecoveryConfig{})
+	if err != nil || work == nil {
+		t.Fatalf("prepare issue execution = %v, %v", work, err)
+	}
+	writes, waits := 0, 0
+	update := func(id string, change func(*localruntime.IssueClaimRecord) error) error {
+		return store.Update(id, func(r *localruntime.IssueClaimRecord) error {
+			writes++
+			if err := change(r); err != nil {
+				return err
+			}
+			if writes == 1 {
+				return syscall.ENOSPC
+			}
+			return nil
+		})
+	}
+	wait := func() bool { waits++; return waits == 1 }
+	result := app.Result{PRURL: "https://github.com/acme/repo/pull/42", ReviewInterrupted: true, Err: githubutil.ErrReviewInterrupted}
+	if err := work.finishWithClaimUpdate(t.Context(), "error", result, wait, update); err != nil {
+		t.Fatal(err)
+	}
+	restarted := &localruntime.IssueClaimStore{Root: store.Root}
+	got, err := restarted.Load(record.ID)
+	if err != nil || !got.PRMerged() || got.PRURL != result.PRURL || !got.NextAttemptAt.IsZero() ||
+		!got.UnlockPending || got.RunError != result.Err.Error() || got.ExecutionAgentAttempts != nil ||
+		waits != 1 || writes != 2 {
+		t.Fatalf("merge receipt after storage retry = %+v, %v (writes = %d, waits = %d)", got, err, writes, waits)
+	}
+}
+
+func TestIssueExecutionSavesPassedVerificationAfterAppMergeReceipt(t *testing.T) {
+	t.Parallel()
+	store, record := lifecycleRecord(t)
+	work, _, err := prepareIssueExecution(store, record.Run, localruntime.IssueRecoveryConfig{})
+	if err != nil || work == nil {
+		t.Fatalf("prepare issue execution = %v, %v", work, err)
+	}
+	defer work.lock.Close()
+	const prURL = "https://github.com/acme/repo/pull/12"
+	if err := store.Update(record.ID, func(r *localruntime.IssueClaimRecord) error {
+		r.State = localruntime.IssueStateMergedUnverified
+		r.PRMergedByApp = true
+		r.PRURL = prURL
+		r.PRVerification = "Verify draft on the current head."
+		r.Error = "pull request merged before draft verification passed"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := work.finish(t.Context(), "completed", app.Result{PRURL: prURL, PRVerificationPassed: true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Load(record.ID)
+	if err != nil || !got.PRMerged() || !got.PRMergedByApp || !got.Fulfilled() || got.VerifiedAt.IsZero() ||
+		got.Error != "" || got.ExecutionAgentAttempts != nil {
+		t.Fatalf("completed verification was lost after the merge receipt: %+v, %v", got, err)
+	}
+}
+
 func TestIssueCheckWaitResumesSameClaimAndPreservesBackoff(t *testing.T) {
 	t.Parallel()
 	store, record := lifecycleRecord(t)

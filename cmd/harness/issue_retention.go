@@ -233,8 +233,7 @@ func issueReviewRetained(bases []string, record localruntime.IssueClaimRecord, l
 }
 
 func supersededIssueOutcome(record, last localruntime.IssueClaimRecord) bool {
-	if record.Run.GitHubIssue.Claim.Attempt >= last.Run.GitHubIssue.Claim.Attempt ||
-		record.State == localruntime.IssueStateMergedUnverified {
+	if record.Run.GitHubIssue.Claim.Attempt >= last.Run.GitHubIssue.Claim.Attempt || record.PRMerged() {
 		return false
 	}
 	switch record.Outcome {

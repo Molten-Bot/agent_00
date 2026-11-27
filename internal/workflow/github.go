@@ -21,6 +21,8 @@ type GitHub struct {
 	Logf     func(string, ...any)
 }
 
+var errAppMergeVerificationPending = errors.New("could not verify the app merge")
+
 // pullRequestSnapshotError preserves the complete issue snapshot when a pull
 // request listed by GitHub cannot be inspected.
 type pullRequestSnapshotError struct{ err error }
@@ -321,8 +323,8 @@ func (g GitHub) inspect(ctx context.Context, repo, selector string, needs ScanNe
 	var p struct {
 		Number                                                                        int
 		Title, Body, URL, BaseRefName, HeadRefName, HeadRefOid, ReviewDecision, State string
-		IsDraft                                                                       bool
 		MergedAt                                                                      time.Time
+		IsDraft                                                                       bool
 		Author                                                                        struct {
 			Login string
 			IsBot bool
@@ -339,7 +341,7 @@ func (g GitHub) inspect(ctx context.Context, repo, selector string, needs ScanNe
 		return Item{}, fmt.Errorf("pull request response is missing its number")
 	}
 	if p.State == "MERGED" || p.State == "CLOSED" {
-		return Item{Repository: repo, Number: p.Number, Kind: "pr", URL: p.URL, HeadSHA: p.HeadRefOid, Merged: p.State == "MERGED", MergedAt: p.MergedAt}, nil
+		return Item{Repository: repo, Number: p.Number, Kind: "pr", URL: p.URL, Title: p.Title, HeadSHA: p.HeadRefOid, Merged: p.State == "MERGED", MergedAt: p.MergedAt}, nil
 	}
 	// Older gh versions do not expose closingIssuesReferences in pr view's
 	// JSON field list. Ask GraphQL directly for the relationship count.
@@ -420,16 +422,20 @@ func (g GitHub) Merge(ctx context.Context, r Run) error {
 	}
 	raw, err := g.command(ctx, "pr", "view", r.PRURL, "--repo", r.Item.Repository, "--json", "state")
 	if err != nil {
-		return errors.Join(errMergePending, err)
+		return errors.Join(errMergePending, errAppMergeVerificationPending, err)
 	}
 	var pr struct{ State string }
 	if err := json.Unmarshal([]byte(raw), &pr); err != nil {
-		return errors.Join(errMergePending, fmt.Errorf("decode pull request state after merge: %w", err))
+		return errors.Join(errMergePending, errAppMergeVerificationPending, err)
 	}
-	if pr.State != "MERGED" {
+	switch pr.State {
+	case "MERGED":
+		return nil
+	case "OPEN", "CLOSED":
 		return errMergePending
+	default:
+		return errors.Join(errMergePending, errAppMergeVerificationPending)
 	}
-	return nil
 }
 
 // CanonicalRepository accepts the forms used by the harness's run config.

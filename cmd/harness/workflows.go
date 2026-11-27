@@ -127,6 +127,7 @@ func configureWorkflows(ctx context.Context, cfg localruntime.InitConfig, runner
 	reviewer.GitHubCooldown = server.GitHubCooldown
 	engine := &workflow.Engine{Store: store, StatePath: filepath.Join(root, "workflow-state.json"), Fetch: gh.Fetch, InspectPR: gh.Inspect, InspectPRState: gh.InspectState, FinishReview: reviewer.ResumeReviewGate, Merge: gh.Merge, Logf: logf}
 	engine.RecordMerge = server.RecordWorkflowMerge
+	engine.RecordIssueMerge = server.RecordIssueMerge
 	engine.RecordReviewOutcome = func(requestID string, outcome workflow.Outcome) error {
 		return workflow.SaveReviewOutcome(root, requestID, outcome)
 	}
