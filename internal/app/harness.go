@@ -4758,6 +4758,20 @@ func (h Harness) runFinalReviewCycle(
 			return ExitPR, "review", err
 		}
 		patch = reviewContext.DraftPatch
+		if h.ResumeIssueWorkspace && repo.PRVerification != "" && patch != nil {
+			policy := capturedReviewPolicy(cfg, h.FinalReviewPasses)
+			saved, err := savedCleanReviewReceipt(filepath.Dir(repo.Dir), repo.PRURL, metadata.HeadRefOID, policy, h.FinalReviewPasses+1)
+			if err != nil {
+				return ExitPR, "review", fmt.Errorf("load retained clean review: %w", err)
+			}
+			if saved != nil {
+				repo.ReviewReceipt = saved
+				repo.ReviewSanitize = reviewContext.GitHubTokenEnvSanitized
+				repo.ReviewedPatch = patch
+				h.logf("stage=review status=ok action=reuse_clean_review head=%s review_id=%d", saved.Head, saved.ReviewID)
+				return ExitSuccess, "", nil
+			}
+		}
 		if err := h.priorReviewFindings(ctx, *repo, reviewContext); err != nil {
 			return ExitPR, "review", h.reviewPublicationError(ctx, repo, pass, passLabelTotal, err)
 		}

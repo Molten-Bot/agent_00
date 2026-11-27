@@ -810,6 +810,9 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			if tc.readyDuringVerifier && (draftRestorations != 1 || reviewerRuns != 1) {
 				t.Fatalf("late readiness triggered %d draft restorations and %d reviewer runs", draftRestorations, reviewerRuns)
 			}
+			if tc.retry && reviewerRuns != 1 {
+				t.Fatalf("same-head verification retry invoked the reviewer %d times", reviewerRuns)
+			}
 			if tc.earlyReady && verificationPolicyReads != 3 {
 				t.Fatalf("policy queried %d times, want initial read and two passing-rollup refreshes", verificationPolicyReads)
 			}
