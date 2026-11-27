@@ -126,6 +126,74 @@ func TestObservedIssueMergeRetainsActivationUntilReviewEvidenceIsSaved(t *testin
 	}
 }
 
+func TestIssueMergeReceiptRetriesAfterWorkflowRestart(t *testing.T) {
+	t.Parallel()
+	for _, byApp := range []bool{false, true} {
+		name := "worker reported merge"
+		if byApp {
+			name = "app merge"
+		}
+		t.Run(name, func(t *testing.T) {
+			w := definition("issue-merge")
+			w.Merge.Enabled, w.Merge.RequireApproval = true, false
+			e, _, _ := testEngine(t, w)
+			state, err := e.load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			const prURL = "https://github.com/acme/repo/pull/12"
+			run := Run{ID: "activation", RequestID: "task", Workflow: w, Status: "waiting", PRURL: prURL,
+				Item: Item{Repository: w.Repository, Kind: "issue", Number: 1}}
+			if !byApp {
+				run.Status, run.PRURL = "running", ""
+				run.Outcome = &Outcome{Status: "failed", ReviewInterrupted: true, PRURL: prURL, Reason: "review: merged before verification"}
+			}
+			state.Runs = []Run{run}
+			if err := e.save(state); err != nil {
+				t.Fatal(err)
+			}
+			merges := 0
+			mergedAt := time.Date(2026, 2, 3, 4, 5, 6, 0, time.UTC)
+			e.InspectPR = func(context.Context, string, string) (Item, error) {
+				if !byApp {
+					t.Fatal("worker already observed the merge")
+				}
+				if merges == 0 {
+					return Item{Open: true, HeadSHA: "head", ChecksPassed: true}, nil
+				}
+				return Item{Merged: true, MergedAt: mergedAt}, nil
+			}
+			e.Merge = func(context.Context, Run) error {
+				merges++
+				return nil
+			}
+			writeErr := errors.New("issue receipt unavailable")
+			writes := 0
+			e.RecordIssueMerge = func(previous Run, pr Item, mergedByApp bool) error {
+				writes++
+				if previous.ID != run.ID || pr.URL != prURL || !pr.Merged || mergedByApp != byApp ||
+					(byApp && !pr.MergedAt.Equal(mergedAt)) || (!byApp && previous.Reason != run.Outcome.Reason) {
+					t.Fatalf("incorrect merge receipt: %+v, %+v, by app %t", previous, pr, mergedByApp)
+				}
+				if writes == 1 {
+					return writeErr
+				}
+				return nil
+			}
+			if err := e.Tick(t.Context()); !errors.Is(err, writeErr) {
+				t.Fatalf("first tick error = %v, want %v", err, writeErr)
+			}
+			restarted := &Engine{Store: e.Store, StatePath: e.StatePath, Enabled: e.Enabled, Allowed: e.Allowed,
+				Fetch: e.Fetch, RecordIssueMerge: e.RecordIssueMerge}
+			tick(t, restarted)
+			runs, err := restarted.Runs()
+			if err != nil || len(runs) != 0 || writes != 2 || (merges == 1) != byApp || merges > 1 {
+				t.Fatalf("merge receipt retry: runs %+v, err %v, writes %d, app merges %d", runs, err, writes, merges)
+			}
+		})
+	}
+}
+
 func TestPendingChecksReserveActivationUntilCurrentHeadIsReviewed(t *testing.T) {
 	t.Parallel()
 	w := definition("pending-checks")

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -432,5 +433,115 @@ func TestPRMonitorPersistsIssueMergeBeforeRetiringBrokerTask(t *testing.T) {
 	tasks := s.snapshot().Tasks
 	if len(tasks) != 1 || tasks[0].Status != "merged" || tasks[0].CanRerun || len(tasks[0].IssueAttempts) != 2 {
 		t.Fatalf("restart lost terminal task status: %+v", tasks)
+	}
+}
+
+func TestIssueRecoveryUsesWorkflowLinkedPRBeforeBranchDiscovery(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	reconcileOrAdmitTestIssue(t.Context(), s)
+	record := completeRecoveryRecord(t, s, "completed", 1)
+	record.PRURL = ""
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	const linkedURL = "https://github.com/acme/repo/pull/42"
+	doc, err := s.Workflows.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := workflow.Run{
+		ID: record.Run.Workflow.EventID, RequestID: record.RequestID, Workflow: doc.Workflows[0], Status: "running",
+		Item:    workflow.Item{Repository: "acme/repo", Kind: "issue", Number: 17},
+		Outcome: &workflow.Outcome{Status: workflow.OutcomeReviewPending, PRURL: linkedURL},
+	}
+	journal, err := json.Marshal(map[string]any{
+		"version": 2, "observations": map[string]any{}, "baselines": map[string]bool{}, "runs": []workflow.Run{run},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(s.Workflows.StatePath, journal, 0600); err != nil {
+		t.Fatal(err)
+	}
+	s.Broker = NewBroker()
+	f.prs = fmt.Sprintf(`[
+		{"number":43,"state":"closed","merged_at":"2026-02-03T04:05:07Z",
+		 "head":{"ref":%q,"repo":{"full_name":"acme/repo"}},"base":{"ref":"main","repo":{"full_name":"acme/repo"}}},
+		{"number":42,"state":"closed","merged_at":"2026-02-03T04:05:06Z",
+		 "head":{"ref":%q,"repo":{"full_name":"acme/repo"}},"base":{"ref":"main","repo":{"full_name":"acme/repo"}}}
+	]`, record.Run.GitHubIssue.Claim.Branch, record.Run.GitHubIssue.Claim.Branch)
+	if err := s.reconcileIssueRecord(t.Context(), record); err != nil {
+		t.Fatal(err)
+	}
+	got := latestRecoveryRecord(t, s)
+	if !got.PRMerged() || got.PRURL != linkedURL {
+		t.Fatalf("recovery did not settle the workflow-linked pull request: %+v", got)
+	}
+	response := httptest.NewRecorder()
+	s.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/status", nil))
+	var status Snapshot
+	if err := json.Unmarshal(response.Body.Bytes(), &status); err != nil || response.Code != http.StatusOK ||
+		len(status.Tasks) != 1 || status.Tasks[0].Status != "merged" || status.Tasks[0].PRURL != linkedURL ||
+		status.Tasks[0].CanRerun {
+		t.Fatalf("issue task status endpoint did not report terminal success: HTTP %d, tasks %+v, err %v", response.Code, status.Tasks, err)
+	}
+}
+
+func TestOrdinaryPRMonitorContinuesWithUnreadableIssueClaim(t *testing.T) {
+	t.Parallel()
+	s, _ := recoveryServer(t)
+	reconcileOrAdmitTestIssue(t.Context(), s)
+	record := latestRecoveryRecord(t, s)
+	if err := os.WriteFile(filepath.Join(s.IssueClaims.Root, record.ID+".json"), []byte("invalid claim"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	monitor := PRMergeMonitor{Broker: s.Broker, Logf: t.Logf, RecordIssueMerge: s.RecordMonitoredIssueMerge}
+	const prURL = "https://github.com/acme/repo/pull/42"
+	for _, source := range []string{"prompt", "library", "github_issues"} {
+		s.Broker.IngestLog("task status=completed request_id=" + source + " pr_url=" + prURL)
+		s.Broker.RecordTaskSource(source, source)
+		task, _ := s.Broker.Task(source)
+		monitor.applyPRState(t.Context(), task, prViewState{State: "MERGED", MergedAt: "2026-02-03T04:05:06Z"}, nil)
+		task, _ = s.Broker.Task(source)
+		if (task.Status == "merged") != (source != "github_issues") {
+			t.Errorf("task source %s ended with status %q", source, task.Status)
+		}
+	}
+}
+
+func TestIssueRecoveryBackfillsReleaseMergeTimeAfterTaskRetires(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	reconcileOrAdmitTestIssue(t.Context(), s)
+	record := completeRecoveryRecord(t, s, "completed", 1)
+	record.State, record.PRURL = localruntime.IssueStateMerged, "https://github.com/acme/repo/pull/42"
+	record.PRMergedByApp = true
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	s.Broker.IngestLog("task status=completed request_id=" + record.RequestID + " pr_url=" + record.PRURL)
+	if err := s.reconcileIssueRecord(t.Context(), record); err != nil {
+		t.Fatal(err)
+	}
+	task, ok := s.Broker.Task(record.RequestID)
+	releases := s.Broker.Snapshot().Releases
+	const mergedAt = "2026-02-03T04:05:06Z"
+	if !ok || task.Status != "merged" || len(releases) != 1 || releases[0].MergedAt == mergedAt {
+		t.Fatalf("task and provisional release after merge: %+v, %+v", task, releases)
+	}
+	provisional := releases[0]
+	if err := s.Broker.CloseTask(record.RequestID); err != nil {
+		t.Fatal(err)
+	}
+	f.prs = `[{"number":42,"state":"closed","merged_at":"` + mergedAt + `"}]`
+	if err := s.reconcileIssueRecord(t.Context(), record); err != nil {
+		t.Fatal(err)
+	}
+	got := latestRecoveryRecord(t, s)
+	releases = s.Broker.Snapshot().Releases
+	if !got.PRMerged() || !got.PRMergedByApp || formatTimeOrEmpty(got.PRMergedAt) != mergedAt ||
+		len(releases) != 1 || releases[0].MergedAt != mergedAt || releases[0].ReleasedAt != provisional.ReleasedAt {
+		t.Fatalf("missing GitHub merge time or release metadata: %+v, %+v", got, releases)
 	}
 }

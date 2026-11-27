@@ -39,7 +39,10 @@ func (s Server) RecordMonitoredIssueMerge(ctx context.Context, task Task, title 
 		}
 	}
 	if latest.ID == "" {
-		return false, listErr
+		if listErr != nil && (task.GitHubIssueURL != "" || task.Source == "github_issues") {
+			return true, listErr
+		}
+		return false, nil
 	}
 	pr := issuePullRequest{URL: task.PRURL, Title: title, MergedAt: mergedAt}
 	if err := s.saveMergedIssuePR(latest, pr, "", false); err != nil {

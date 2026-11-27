@@ -176,9 +176,26 @@ type Run struct {
 	Reason        string           `json:"reason"`
 	PRURL         string           `json:"prUrl,omitempty"`
 	MergeHead     string           `json:"mergeHead,omitempty"`
+	AppMerge      *appMergeReceipt `json:"appMerge,omitempty"`
 	StartedAt     *time.Time       `json:"startedAt,omitempty"`
 	UpdatedAt     time.Time        `json:"updatedAt"`
 	GitHubRetryAt time.Time        `json:"githubRetryAt,omitzero"`
+}
+
+// Retain a successful app merge until its issue claim receipt is written.
+type appMergeReceipt struct {
+	Title    string    `json:"title,omitempty"`
+	MergedAt time.Time `json:"mergedAt,omitzero"`
+}
+
+func (r Run) LinkedPRURL() string {
+	if r.PRURL != "" {
+		return r.PRURL
+	}
+	if r.Outcome != nil && r.Outcome.PRURL != "" {
+		return r.Outcome.PRURL
+	}
+	return ""
 }
 
 func (r Run) ReviewPolicy() ExecutionPolicy {
@@ -721,7 +738,11 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 				return errJournalUnchanged
 			}
 			if r.Status == "merged" && r.Item.Kind == "issue" {
-				if err := e.recordIssueMerge(*current, r.PRURL, mergedPR, mergedByApp); err != nil {
+				previous := *current
+				if r.Outcome != nil && r.Outcome.ReviewInterrupted {
+					previous.Outcome = r.Outcome
+				}
+				if err := e.recordIssueMerge(previous, r.PRURL, mergedPR, mergedByApp); err != nil {
 					return err
 				}
 			}
@@ -732,6 +753,9 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 	}
 	finish := func() error {
 		r.UpdatedAt = e.now()
+		if r.Status == "merged" {
+			r.GitHubRetryAt = time.Time{}
+		}
 		if err := commit(); err != nil {
 			return err
 		}
@@ -748,6 +772,17 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		r.GitHubRetryAt = rate.RetryAt
 		r.Reason = "Waiting for GitHub quota. " + rate.Error()
 		return true
+	}
+	if r.AppMerge != nil {
+		mergedPR = Item{Title: r.AppMerge.Title, MergedAt: r.AppMerge.MergedAt}
+		mergedByApp = true
+		r.Status, r.Reason = "merged", "Pull request merged"
+		return finish()
+	}
+	if r.Item.Kind == "issue" && r.Outcome != nil && r.Outcome.ReviewInterrupted && r.LinkedPRURL() != "" {
+		r.PRURL = r.LinkedPRURL()
+		r.Status, r.Reason = "merged", observedIssueMergeReason
+		return finish()
 	}
 	active := featureEnabled && exists && w.Enabled && e.Allowed(w.Repository) && e.Allowed(r.Item.Repository)
 	if !e.now().Before(r.GitHubRetryAt) {
@@ -809,6 +844,15 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		}
 		if o.ReviewInterrupted {
 			r.PRURL = o.PRURL
+			if r.Item.Kind == "issue" {
+				if r.PRURL == "" {
+					r.PRURL = original.PRURL
+				}
+				if r.PRURL != "" {
+					r.Status, r.Reason = "merged", observedIssueMergeReason
+					return finish()
+				}
+			}
 			r.Status = "failed"
 			r.Reason = "Pull request merged externally during review"
 		} else if o.Status == OutcomeChecksPending {
@@ -1017,6 +1061,17 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 						mergedPR.Title = observed.Title
 					}
 				}
+				receipt := &appMergeReceipt{Title: mergedPR.Title, MergedAt: mergedPR.MergedAt}
+				if err := e.transaction(func(s *State) error {
+					current := s.run(r.ID)
+					if current == nil {
+						return ErrActivationNotFound
+					}
+					current.AppMerge = receipt
+					return nil
+				}); err != nil {
+					return err
+				}
 			}
 			mergedByApp = true
 			r.Status = "merged"
@@ -1072,8 +1127,12 @@ func (e *Engine) recordIssueMerge(r Run, prURL string, pr Item, mergedByApp bool
 	}
 	if mergedByApp || (r.Status != awaitingReview && r.Status != "waiting" && r.Status != OutcomeChecksPending && !r.hasFailedPendingReview()) {
 		r.Reason = ""
+		if !mergedByApp && r.Outcome != nil && r.Outcome.ReviewInterrupted && r.Outcome.Status == "failed" {
+			r.Reason = r.Outcome.Reason
+		}
 	}
 	pr.URL = prURL
+	pr.Merged = true
 	return e.RecordIssueMerge(r, pr, mergedByApp)
 }
 
@@ -1093,13 +1152,19 @@ func (e *Engine) ObserveIssueMerge(id, requestID, prURL string) error {
 		r := s.run(id)
 		if r == nil || e.submitting[id] || r.Status == "merged" || (r.RequestID != "" && r.RequestID != requestID) ||
 			!strings.HasPrefix(r.Workflow.Trigger.Event, "issue.") ||
-			(r.PRURL != "" && !strings.EqualFold(r.PRURL, prURL)) {
+			(r.LinkedPRURL() != "" && !strings.EqualFold(r.LinkedPRURL(), prURL)) {
 			return errJournalUnchanged
 		}
-		if err := e.recordIssueMerge(*r, prURL, Item{}, false); err != nil {
+		pr, byApp := Item{}, r.AppMerge != nil
+		reason := observedIssueMergeReason
+		if byApp {
+			pr = Item{Title: r.AppMerge.Title, MergedAt: r.AppMerge.MergedAt}
+			reason = "Pull request merged"
+		}
+		if err := e.recordIssueMerge(*r, prURL, pr, byApp); err != nil {
 			return err
 		}
-		r.Status, r.Reason, r.PRURL = "merged", observedIssueMergeReason, prURL
+		r.Status, r.Reason, r.PRURL = "merged", reason, prURL
 		r.RequestID, r.UpdatedAt, r.GitHubRetryAt = requestID, e.now(), time.Time{}
 		merged = *r
 		return nil

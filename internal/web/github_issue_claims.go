@@ -945,8 +945,15 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 	if s.IssueRecovery != nil && remote.Claim.ID != "" {
 		claimedIssue := &config.GitHubIssueConfig{Repository: repository, Number: number, Claim: &remote.Claim}
 		var pr issuePullRequest
-		if knownPR := s.knownIssuePR(previous); knownPR != "" {
+		knownPR, err := s.resolveIssuePR(previous)
+		if err != nil {
+			return issueRetryResult{}, http.StatusServiceUnavailable, err
+		}
+		if knownPR != "" {
 			pr, err = s.linkedIssuePR(ctx, repository, knownPR)
+			if previous.PRURL == "" && strings.EqualFold(pr.URL, knownPR) {
+				previous.PRURL = pr.URL
+			}
 		} else {
 			pr, err = s.findIssuePR(ctx, claimedIssue)
 		}

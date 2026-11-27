@@ -1963,6 +1963,24 @@ func (b *Broker) RecordReleaseFromTask(task Task, mergedAt string) {
 	b.notifySubscribersLocked()
 }
 
+func (b *Broker) backfillReleaseMergeTime(requestID, prURL string, mergedAt time.Time) {
+	if b == nil || mergedAt.IsZero() {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for i := range b.releases {
+		release := &b.releases[i]
+		if release.RequestID == requestID && strings.EqualFold(release.PRURL, prURL) {
+			if !release.MergedAt.Equal(mergedAt) {
+				release.MergedAt = mergedAt
+				b.notifySubscribersLocked()
+			}
+			return
+		}
+	}
+}
+
 // MarkTaskPRMerged marks the originating task as done after its pull request merges.
 func (b *Broker) MarkTaskPRMerged(requestID string, mergedAt string) error {
 	if b == nil {
