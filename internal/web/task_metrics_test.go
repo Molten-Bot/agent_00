@@ -13,6 +13,8 @@ func TestTaskDeleteDismissesImmediatelyAndRetriesInBrowser(t *testing.T) {
 	b := NewBroker()
 	b.IngestLog("task status=start request_id=finished")
 	b.IngestLog("task status=completed request_id=finished")
+	b.IngestLog("task status=start request_id=other")
+	b.IngestLog("task status=completed request_id=other")
 	b.IngestLog("task status=start request_id=running")
 	srv := NewServer("", b)
 	ts := httptest.NewServer(srv.Handler())

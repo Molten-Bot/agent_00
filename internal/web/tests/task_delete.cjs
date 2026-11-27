@@ -5,22 +5,26 @@ const { expect } = require('playwright/test');
 
 const baseURL = process.env.HARNESS_TEST_URL || 'http://127.0.0.1:7777';
 
-test('Close dismisses immediately and resumes pending deletion after reload', async t => {
+test('Close survives overlapping tab retries and a deferred Removed redraw', async t => {
   const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
   t.after(() => browser.close());
-  const page = await browser.newPage();
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const otherTab = await context.newPage();
   const errors = [];
-  page.on('pageerror', error => errors.push(error.message));
-  page.on('console', message => {
+  context.on('weberror', event => errors.push(event.error().message));
+  context.on('console', message => {
     if (message.type() === 'error' && !message.text().startsWith('Failed to load resource:')) errors.push(message.text());
   });
   t.after(() => assert.deepEqual(errors, []));
 
   let attempts = 0;
+  let otherAttempts = 0;
   let allowDelete = false;
+  let allowOtherDelete = false;
   let releaseFirstAttempt;
   const firstAttempt = new Promise(resolve => { releaseFirstAttempt = resolve; });
-  await page.route('**/*', async route => {
+  await context.route('**/*', async route => {
     const url = new URL(route.request().url());
     if (url.origin !== new URL(baseURL).origin) return route.abort();
     switch (url.pathname) {
@@ -32,6 +36,11 @@ test('Close dismisses immediately and resumes pending deletion after reload', as
           return route.abort('connectionreset');
         }
         return route.fulfill({ status: 503, json: { error: 'temporarily unavailable' } });
+      case '/api/tasks/other/delete':
+        otherAttempts++;
+        return allowOtherDelete
+          ? route.continue()
+          : route.fulfill({ status: 503, json: { error: 'temporarily unavailable' } });
       case '/api/agent-auth':
         return route.fulfill({ json: { ok: true, auth: { required: false, ready: true, state: 'ready' } } });
       case '/api/github/repos':
@@ -41,15 +50,20 @@ test('Close dismisses immediately and resumes pending deletion after reload', as
     }
   });
 
-  await page.addInitScript(() => {
+  await context.addInitScript(() => {
     if (!localStorage.getItem('hubui.taskStatusFilter')) {
       localStorage.setItem('hubui.taskStatusFilter', 'completed');
     }
   });
   await page.goto(`${baseURL}/#current-work`);
+  await otherTab.goto(`${baseURL}/#current-work`);
   const card = page.locator('#task-list .task[data-request-id="finished"]');
   const close = card.getByRole('button', { name: 'Delete task' });
+  const otherCardSelector = '#task-list .task[data-request-id="other"]';
+  const otherCard = otherTab.locator(otherCardSelector);
+  const otherClose = otherCard.getByRole('button', { name: 'Delete task' });
   await expect(close).toBeVisible();
+  await expect(otherClose).toBeVisible();
   await card.locator('.task-id').evaluate(label => window.getSelection().selectAllChildren(label));
   try {
     await close.click();
@@ -58,6 +72,9 @@ test('Close dismisses immediately and resumes pending deletion after reload', as
   } finally {
     releaseFirstAttempt();
   }
+  await otherClose.click();
+  await expect(otherCard).toHaveCount(0);
+  await expect.poll(() => otherAttempts).toBeGreaterThanOrEqual(1);
   await expect.poll(() => attempts).toBeGreaterThanOrEqual(2);
   const status = await page.request.get(`${baseURL}/api/status`);
   const snapshot = await status.json();
@@ -71,16 +88,38 @@ test('Close dismisses immediately and resumes pending deletion after reload', as
   await page.reload();
   assert.equal((await deleted).status(), 200);
   await expect(card).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('hubui.pendingTaskDeletes')))).toEqual([]);
+  await expect(page.locator(otherCardSelector)).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('hubui.pendingTaskDeletes.finished'))).toBeNull();
 
-  await page.locator('#task-history-toggle').click();
+  await otherTab.close();
+  allowOtherDelete = true;
+  await page.evaluate(() => localStorage.setItem('hubui.pendingTaskDeletes', JSON.stringify(['legacy'])));
+  const otherDeleted = page.waitForResponse(response => response.url().endsWith('/api/tasks/other/delete') && response.ok());
+  const legacyDeleted = page.waitForResponse(response => response.url().endsWith('/api/tasks/legacy/delete'));
+  await page.reload();
+  const [otherResponse, legacyResponse] = await Promise.all([otherDeleted, legacyDeleted]);
+  assert.equal(otherResponse.status(), 200);
+  assert.equal(legacyResponse.status(), 404);
+  await expect.poll(() => page.evaluate(() => Object.keys(localStorage).filter(key =>
+    key.startsWith('hubui.pendingTaskDeletes')
+  ))).toEqual([]);
+
+  const filter = page.locator('#task-history-toggle');
+  await filter.click();
+  await expect(card).toBeVisible();
+  await card.locator('.task-id').evaluate(label => window.getSelection().selectAllChildren(label));
+  await filter.dispatchEvent('click');
+  await expect(filter).toHaveAttribute('data-filter', 'running');
   await expect(card).toBeVisible();
   const alreadyDeleted = page.waitForResponse(response => response.url().endsWith('/api/tasks/finished/delete'));
   await close.click();
   await expect(card).toHaveCount(0);
   assert.equal((await alreadyDeleted).status(), 404);
-  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('hubui.pendingTaskDeletes')))).toEqual([]);
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('hubui.pendingTaskDeletes.finished'))).toBeNull();
+  await filter.click();
+  await filter.click();
   await page.reload();
-  await expect(page.locator('#task-history-toggle')).toHaveAttribute('data-filter', 'removed');
+  await expect(filter).toHaveAttribute('data-filter', 'removed');
+  await expect(page.locator(otherCardSelector)).toBeVisible();
   await expect(card).toHaveCount(0);
 });

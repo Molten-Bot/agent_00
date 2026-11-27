@@ -1606,6 +1606,29 @@
       }
     }
 
+    function loadTaskIDMarkers(key) {
+      const legacyIDs = loadStoredTaskIDs(key);
+      const ids = new Set(legacyIDs);
+      const prefix = `${key}.`;
+      try {
+        for (const storageKey of Object.keys(localStorage)) {
+          if (storageKey.startsWith(prefix) && storageKey.length > prefix.length) {
+            ids.add(storageKey.slice(prefix.length));
+          }
+        }
+        // Migrate the old shared list only after its entries have been saved individually.
+        if (legacyIDs.size > 0) {
+          for (const id of legacyIDs) {
+            localStorage.setItem(prefix + id, "1");
+          }
+          localStorage.removeItem(key);
+        }
+      } catch (_err) {
+        // Keep any IDs already read if storage is unavailable or full.
+      }
+      return ids;
+    }
+
     function loadRepoHistory() {
       try {
         const raw = localStorage.getItem(REPO_HISTORY_KEY);
@@ -1813,7 +1836,7 @@
     }
 
     const stateUI = normalizeUIConfig(window.__RUNTIME_UI_CONFIG__);
-    const pendingTaskDeletes = loadStoredTaskIDs(PENDING_TASK_DELETES_KEY);
+    const pendingTaskDeletes = loadTaskIDMarkers(PENDING_TASK_DELETES_KEY);
     const state = {
       ui: stateUI,
       agentAuth: normalizeAgentAuth({ required: true, ready: false, state: "checking", message: "Checking agent authorization…" }),
@@ -1822,7 +1845,7 @@
       customLibraryGeneration: null,
       snapshot: null,
       selectedTaskId: "",
-      dismissedTaskIDs: new Set([...loadStoredTaskIDs(DISMISSED_TASKS_KEY), ...pendingTaskDeletes]),
+      dismissedTaskIDs: new Set([...loadTaskIDMarkers(DISMISSED_TASKS_KEY), ...pendingTaskDeletes]),
       hiddenRemovedTaskIDs: loadStoredTaskIDs(HIDDEN_REMOVED_TASKS_KEY),
       libraryTasks: [],
       libraryLoadError: "",
@@ -9748,6 +9771,19 @@
       }
     }
 
+    function persistTaskIDMarker(key, requestID, present = true) {
+      try {
+        const storageKey = `${key}.${requestID}`;
+        if (present) {
+          localStorage.setItem(storageKey, "1");
+        } else {
+          localStorage.removeItem(storageKey);
+        }
+      } catch (_err) {
+        // Ignore localStorage failures.
+      }
+    }
+
     function isCompletedTask(task) {
       if (!task) {
         return false;
@@ -9794,7 +9830,7 @@
       if (state.taskHistoryUnseenIDs instanceof Set && state.taskHistoryUnseenIDs.delete(requestID)) {
         persistTaskHistoryUnseenIDs();
       }
-      persistTaskIDs(DISMISSED_TASKS_KEY, state.dismissedTaskIDs);
+      persistTaskIDMarker(DISMISSED_TASKS_KEY, requestID);
       if (state.selectedTaskId === requestID) {
         state.selectedTaskId = "";
       }
@@ -10588,9 +10624,9 @@
       trackAnalyticsEvent("task_fullscreen_toggled", { open: false, source });
     }
 
-    function dismissTask(requestID) {
+    function dismissTask(requestID, removedHistory) {
       if (!requestID) return;
-      if (normalizeTaskStatusFilter(state.taskStatusFilter) === "removed") {
+      if (removedHistory) {
         state.hiddenRemovedTaskIDs.add(requestID);
         persistTaskIDs(HIDDEN_REMOVED_TASKS_KEY, state.hiddenRemovedTaskIDs);
       } else if (state.dismissedTaskIDs.has(requestID)) {
@@ -10602,7 +10638,7 @@
       }
       trackAnalyticsEvent("task_close_started");
       pendingTaskDeletes.add(requestID);
-      persistTaskIDs(PENDING_TASK_DELETES_KEY, pendingTaskDeletes);
+      persistTaskIDMarker(PENDING_TASK_DELETES_KEY, requestID);
       completeTaskDismissal(requestID, true);
       void syncTaskDeletion(requestID);
     }
@@ -10626,8 +10662,9 @@
         await new Promise((resolve) => window.setTimeout(resolve, retryDelay));
         retryDelay = Math.min(retryDelay * 2, TASK_DELETE_MAX_RETRY_DELAY_MS);
       }
+      persistTaskIDMarker(DISMISSED_TASKS_KEY, requestID);
       pendingTaskDeletes.delete(requestID);
-      persistTaskIDs(PENDING_TASK_DELETES_KEY, pendingTaskDeletes);
+      persistTaskIDMarker(PENDING_TASK_DELETES_KEY, requestID, false);
       trackAnalyticsEvent("task_close_succeeded");
     }
 
@@ -10646,9 +10683,8 @@
       close.textContent = "X";
       close.title = "Delete finished task and remove it from metrics";
       close.setAttribute("aria-label", "Delete task");
-      bindTaskActionButton(close, () => {
-        dismissTask(requestID);
-      });
+      const removedHistory = Boolean(task.removed_history);
+      bindTaskActionButton(close, () => dismissTask(requestID, removedHistory));
       return close;
     }
 
@@ -12487,6 +12523,7 @@
             canRerun: canRerunTask(task),
             canCopyClone: canCopyTaskCloneCommand(task),
             historyOnly: Boolean(task?.history_only),
+            removedHistory: Boolean(task?.removed_history),
             controls: {
               pause: Boolean(task?.controls?.pause),
               run: Boolean(task?.controls?.run),

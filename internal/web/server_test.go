@@ -540,7 +540,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if strings.Contains(closeButtonBody, "state.taskHistoryByID.delete(requestID);") {
 		t.Fatalf("expected index html to keep history-only dismissed tasks available for the removed history view")
 	}
-	if !strings.Contains(closeButtonBody, "dismissTask(requestID);") || !strings.Contains(markup, "/api/tasks/${encodeURIComponent(requestID)}/delete") {
+	if !strings.Contains(closeButtonBody, "dismissTask(requestID, removedHistory)") || !strings.Contains(markup, "/api/tasks/${encodeURIComponent(requestID)}/delete") {
 		t.Fatal("task deletion must remove server metrics for history and live tasks")
 	}
 	if !strings.Contains(markup, "state.taskHistoryUnseenIDs instanceof Set && state.taskHistoryUnseenIDs.delete(requestID)") {
