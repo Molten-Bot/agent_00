@@ -53,6 +53,7 @@ func TestRetainMergedReviewLogs(t *testing.T) {
 		{name: "clean review", outcome: &workflow.Outcome{Status: "succeeded"}},
 		{name: "failed review", outcome: &workflow.Outcome{Status: "failed"}, want: true},
 		{name: "pending review", outcome: &workflow.Outcome{Status: workflow.OutcomeReviewPending}, want: true},
+		{name: "pending writeback", outcome: &workflow.Outcome{Status: "succeeded", PendingReviewGate: &githubutil.PendingReviewGate{}}, want: true},
 		{name: "interrupted review", outcome: &workflow.Outcome{Status: "succeeded", ReviewInterrupted: true}, want: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {

@@ -944,18 +944,19 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 	var verificationPRURL string
 	if s.IssueRecovery != nil && remote.Claim.ID != "" {
 		claimedIssue := &config.GitHubIssueConfig{Repository: repository, Number: number, Claim: &remote.Claim}
-		pr, err := s.findIssuePR(ctx, claimedIssue)
+		pr, err := s.findIssueRecoveryPR(ctx, claimedIssue, previous.PRURL)
 		if err != nil {
 			return issueRetryResult{}, 502, err
 		}
-		if err := pr.recoveryBlocker(claimedIssue); err != nil {
-			return issueRetryResult{}, http.StatusConflict, err
-		}
-		if previous.Version == 2 && previous.InstanceID == remote.InstanceID && previous.InstanceID == s.instanceID() && pr.mergedUnverified(previous) {
+		if previous.Version == 2 && previous.InstanceID == remote.InstanceID && previous.InstanceID == s.instanceID() &&
+			pr.Merged && (previous.PRURL != "" || pr.mergedUnverified(previous)) {
 			if err := s.recordRecoveredIssueMerge(previous, pr); err != nil {
 				return issueRetryResult{}, http.StatusServiceUnavailable, err
 			}
 			return issueRetryResult{}, http.StatusConflict, fmt.Errorf("issue already has a merged pull request")
+		}
+		if err := pr.recoveryBlocker(claimedIssue); err != nil {
+			return issueRetryResult{}, http.StatusConflict, err
 		}
 		if previous.State == localruntime.IssueStateMergedUnverified {
 			return issueRetryResult{}, http.StatusConflict, fmt.Errorf("issue already has a merged pull request")

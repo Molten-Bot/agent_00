@@ -43,6 +43,8 @@ func TestWorkflowLifecycleLogsAreBoundedAndDoNotRepeat(t *testing.T) {
 			if err = e.Complete(runs[0].ID, Outcome{Status: "failed", Reason: "Private instructions https://github.com/acme/repo /private/workspace"}); err != nil {
 				t.Fatal(err)
 			}
+			start := now.Add(-3 * time.Second)
+			now = now.Add(time.Hour)
 			tick(t, e)
 			tick(t, e)
 			if len(logs) != 3 || !strings.Contains(logs[2], "event=transition") || !strings.HasSuffix(logs[2], "status=failed reason=failed duration_ms=3000") {
@@ -52,7 +54,7 @@ func TestWorkflowLifecycleLogsAreBoundedAndDoNotRepeat(t *testing.T) {
 				if strings.Contains(line, "Private") || strings.Contains(line, "acme/repo") || strings.Contains(line, "/private/") {
 					t.Fatalf("private context leaked: %s", line)
 				}
-				for _, field := range []string{"workflow_id=", "run_id=", "request_id=", "started_at=" + now.Add(-3*time.Second).Format(time.RFC3339Nano), "status=", "reason="} {
+				for _, field := range []string{"workflow_id=", "run_id=", "request_id=", "started_at=" + start.Format(time.RFC3339Nano), "status=", "reason="} {
 					if !strings.Contains(line, field) {
 						t.Fatalf("missing %s: %s", field, line)
 					}
@@ -74,7 +76,7 @@ func TestWorkflowTerminalTransitionDuration(t *testing.T) {
 		elapsed          time.Duration
 		want             string
 	}{
-		{name: "success", outcome: Outcome{Status: "succeeded"}, elapsed: 3 * time.Second, want: "status=succeeded reason=succeeded duration_ms=3000"},
+		{name: "success after restart", outcome: Outcome{Status: "succeeded"}, elapsed: time.Hour, want: "status=succeeded reason=succeeded duration_ms=3000"},
 		{name: "zero elapsed", outcome: Outcome{Status: "succeeded"}, want: "status=succeeded reason=succeeded duration_ms=0"},
 		{name: "archived review interrupted", outcome: Outcome{Status: "failed", ReviewInterrupted: true}, alreadyMerged: true, elapsed: time.Hour, want: "status=merged reason=external_merge duration_ms=3000"},
 		{name: "merged before review writeback", outcome: Outcome{Status: "succeeded", PendingReviewGate: &githubutil.PendingReviewGate{}}, alreadyMerged: true, hasReceipt: true, elapsed: 3 * time.Second, want: "status=merged reason=merge_unconfirmed duration_ms=3000"},
@@ -144,6 +146,13 @@ func TestWorkflowTerminalTransitionDuration(t *testing.T) {
 				StartedAt: &start, UpdatedAt: start, Outcome: &test.outcome}}
 			if err := e.save(s); err != nil {
 				t.Fatal(err)
+			}
+			if test.name == "success after restart" {
+				e.Now = func() time.Time { return start.Add(3 * time.Second) }
+				if err := e.Complete("activation", test.outcome); err != nil {
+					t.Fatal(err)
+				}
+				e.Now = func() time.Time { return start.Add(test.elapsed) }
 			}
 
 			if openWithoutReceipt {

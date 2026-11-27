@@ -92,7 +92,7 @@ func (e *Engine) dispatch(w Definition, execution *ExecutionPolicy, item Item, r
 	err := e.transaction(func(state *State) error {
 		if retryOf != "" {
 			for _, existing := range state.Runs {
-				if existing.RetryOf == retryOf && existing.Status != awaitingReview {
+				if existing.RetryOf == retryOf && existing.Status != awaitingReview && !terminal(existing.Status) {
 					return fmt.Errorf("workflow retry already active")
 				}
 			}

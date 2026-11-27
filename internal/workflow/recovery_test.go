@@ -289,6 +289,128 @@ func TestPendingReviewUsesGitHubMergeTimeAfterRestart(t *testing.T) {
 	}
 }
 
+func TestFailedPRReviewWatchesForMergeAfterRestart(t *testing.T) {
+	t.Parallel()
+	for _, merged := range []bool{true, false} {
+		t.Run(fmt.Sprintf("merged=%t", merged), func(t *testing.T) {
+			t.Parallel()
+			w := definition("failed-pr-review")
+			w.Trigger = Trigger{Event: "pr.opened"}
+			w.Task.Kind = "review"
+			w.Merge.Enabled = true
+			e, _, _ := testEngine(t, w)
+			const prURL = "https://github.com/acme/repo/pull/42"
+			item := Item{Kind: "pr", Repository: w.Repository, Number: 42, URL: prURL}
+			if err := e.transaction(func(s *State) error {
+				s.Runs = []Run{{ID: "activation", RetryOf: "original", RequestID: "review-task", Workflow: w, Item: item, Status: "running"}}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := e.Complete("activation", Outcome{Status: "failed", Reason: "invalid structured review output"}); err != nil {
+				t.Fatal(err)
+			}
+			e.InspectPRState = func(context.Context, string, string) (Item, error) { return Item{Open: true}, nil }
+			tick(t, e)
+			state, err := e.load()
+			if err != nil || len(state.Runs) != 1 || state.Runs[0].Status != "failed" || state.busy(item) {
+				t.Fatalf("open PR failed review should stay failed and release its reservation: %+v, %v", state.Runs, err)
+			}
+			submitErr := errors.New("retry submission failed")
+			if _, err := e.DispatchRetry(t.Context(), w.ID, w.ExecutionPolicyHash(), "original", item, nil, func(Run) (string, error) {
+				return "", submitErr
+			}); !errors.Is(err, submitErr) {
+				t.Fatalf("failed review watch blocked explicit retry: %v", err)
+			}
+
+			mergedAt := time.Date(2026, 1, 1, 0, 2, 0, 0, time.UTC)
+			inspections, recorded := 0, 0
+			restarted := &Engine{Store: e.Store, StatePath: e.StatePath, Enabled: e.Enabled, Allowed: e.Allowed, Fetch: e.Fetch,
+				InspectPRState: func(_ context.Context, repo, url string) (Item, error) {
+					inspections++
+					if repo != w.Repository || url != prURL {
+						t.Fatalf("inspected %s %s", repo, url)
+					}
+					if merged {
+						return Item{Merged: true, MergedAt: mergedAt}, nil
+					}
+					return Item{}, nil
+				},
+				RecordMerge: func(run Run, got time.Time) error {
+					recorded++
+					if run.RequestID != "review-task" || run.Reason != externalMergeReason || !got.Equal(mergedAt) {
+						t.Fatalf("unexpected merge receipt: %+v, %v", run, got)
+					}
+					return nil
+				},
+			}
+			tick(t, restarted)
+			tick(t, restarted)
+			runs, err := restarted.Runs()
+			if err != nil || len(runs) != 0 || inspections != 1 || (recorded == 1) != merged {
+				t.Fatalf("terminal PR left a watch or incorrect receipt: %+v, %v, inspections=%d, receipts=%d", runs, err, inspections, recorded)
+			}
+		})
+	}
+}
+
+func TestAcceptedMergeRequestIsReconciledWithoutResubmission(t *testing.T) {
+	t.Parallel()
+	for _, mergeErr := range []error{nil, errMergePending} {
+		t.Run(fmt.Sprint(mergeErr), func(t *testing.T) {
+			t.Parallel()
+			w := definition("queued-merge")
+			w.Merge.Enabled, w.Merge.RequireApproval = true, false
+			e, _, _ := testEngine(t, w)
+			const prURL = "https://github.com/acme/repo/pull/42"
+			if err := e.transaction(func(s *State) error {
+				s.Runs = []Run{{ID: "activation", Workflow: w, Item: Item{Repository: w.Repository}, Status: "waiting", PRURL: prURL}}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			e.InspectPR = func(context.Context, string, string) (Item, error) {
+				return Item{Open: true, ChecksPassed: true, HeadSHA: "abc"}, nil
+			}
+			open := func(context.Context, string, string) (Item, error) { return Item{Open: true}, nil }
+			e.InspectPRState = open
+			merges := 0
+			e.Merge = func(context.Context, Run) error {
+				merges++
+				return mergeErr
+			}
+			tick(t, e)
+			runs, err := e.Runs()
+			if err != nil || len(runs) != 1 || merges != 1 {
+				t.Fatalf("merge did not leave one pending run: %+v, %v, submissions=%d", runs, err, merges)
+			}
+
+			mergedAt := time.Date(2026, 1, 1, 0, 2, 0, 0, time.UTC)
+			recorded := 0
+			restarted := &Engine{Store: e.Store, StatePath: e.StatePath, Enabled: e.Enabled, Allowed: e.Allowed, Fetch: e.Fetch,
+				InspectPRState: open, InspectPR: e.InspectPR, Merge: e.Merge,
+				RecordMerge: func(run Run, got time.Time) error {
+					recorded++
+					if run.Reason != "Pull request merged" || !got.Equal(mergedAt) {
+						t.Fatalf("accepted app merge misclassified: %+v, %v", run, got)
+					}
+					return nil
+				},
+			}
+			tick(t, restarted)
+			restarted.InspectPRState = func(context.Context, string, string) (Item, error) {
+				return Item{Merged: true, MergedAt: mergedAt}, nil
+			}
+			restarted.InspectPR = restarted.InspectPRState
+			tick(t, restarted)
+			tick(t, restarted)
+			if runs, err := restarted.Runs(); err != nil || len(runs) != 0 || merges != 1 || recorded != 1 {
+				t.Fatalf("queue did not settle once: %+v, %v, submissions=%d, receipts=%d", runs, err, merges, recorded)
+			}
+		})
+	}
+}
+
 func TestReviewOutcomeSurvivesWorkspaceCleanup(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

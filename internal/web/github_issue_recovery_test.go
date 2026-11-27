@@ -38,13 +38,35 @@ func (f *recoveryGitHub) Run(ctx context.Context, cmd execx.Command) (execx.Resu
 	if strings.Contains(args, "/pulls?") {
 		return execx.Result{Stdout: f.prs}, nil
 	}
-	if args == "pr view 42 --repo acme/repo --json state,mergedAt,title" {
+	if args == "pr view 42 --repo acme/repo --json state,mergedAt,title,baseRefName,headRefName,headRefOid,isCrossRepository" {
 		f.calls++
-		state := f.pendingPR
-		if state == "" {
-			state = `{"state":"OPEN"}`
+		if f.pendingPR != "" {
+			return execx.Result{Stdout: f.pendingPR}, nil
 		}
-		return execx.Result{Stdout: state}, nil
+		var prs []struct {
+			Number       int
+			State, Title string
+			MergedAt     *time.Time `json:"merged_at"`
+			Head         struct{ Ref, SHA string }
+			Base         struct{ Ref string }
+		}
+		if err := json.Unmarshal([]byte(f.prs), &prs); err != nil {
+			return execx.Result{}, err
+		}
+		for _, pr := range prs {
+			if pr.Number == 42 {
+				state := strings.ToUpper(pr.State)
+				if pr.MergedAt != nil {
+					state = "MERGED"
+				}
+				raw, err := json.Marshal(map[string]any{
+					"state": state, "mergedAt": pr.MergedAt, "title": pr.Title,
+					"baseRefName": pr.Base.Ref, "headRefName": pr.Head.Ref, "headRefOid": pr.Head.SHA,
+				})
+				return execx.Result{Stdout: string(raw)}, err
+			}
+		}
+		return execx.Result{}, errors.New("pull request 42 not found")
 	}
 	if strings.Contains(args, "--method DELETE") {
 		f.deletes++
@@ -850,6 +872,7 @@ func TestIssueCheckRecoveryWaitsForRateResetThenResubmitsSameClaim(t *testing.T)
 	if err := s.IssueClaims.Save(record); err != nil {
 		t.Fatal(err)
 	}
+	f.prs = recoveryPR("open", "null", record.Run.GitHubIssue.Claim.Branch, "main")
 	now := time.Now().UTC().Truncate(time.Second)
 	s.GitHubCooldown = &githubutil.Cooldown{Now: func() time.Time { return now }}
 	rate := s.GitHubCooldown.ClassifyFailure(http.StatusTooManyRequests, http.Header{"Retry-After": {"600"}}, "", errors.New("rate limited"))
@@ -978,6 +1001,42 @@ func TestConfirmedWorkflowMergeSettlesIssueClaim(t *testing.T) {
 				t.Fatalf("dashboard lost the confirmed merge after restart: %+v", tasks)
 			}
 		})
+	}
+}
+
+func TestIssueRecoveryChecksRecordedPRAcrossBranchReuse(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	reconcileOrAdmitTestIssue(t.Context(), s)
+	record := completeRecoveryRecord(t, s, "error", 1)
+	record.PRURL = "https://github.com/acme/repo/pull/42"
+	record.PRVerification = "Verify draft checks"
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	branch := record.Run.GitHubIssue.Claim.Branch
+	closed := recoveryPR("closed", "null", branch, "main")
+	older := strings.Replace(recoveryPR("closed", `"2026-01-01T00:01:00Z"`, branch, "main"), `"number":42`, `"number":41`, 1)
+	f.prs = strings.TrimSuffix(closed, "]") + "," + strings.TrimPrefix(older, "[")
+	if err := s.ReconcileIssueWork(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := latestRecoveryRecord(t, s); got.Fulfilled() || got.PRURL != record.PRURL {
+		t.Fatalf("older merge settled the recorded closed PR: %+v", got)
+	}
+	if response := retryIssue(t, s, record.ID, true); response.Code != http.StatusConflict ||
+		!strings.Contains(response.Body.String(), "reopen the existing pull request") {
+		t.Fatalf("retry of closed PR: status=%d body=%s", response.Code, response.Body.String())
+	}
+	// The linked PR can merge even if branch discovery no longer lists it.
+	expireIssueRetry(t, s, record.ID)
+	f.prs = older
+	f.pendingPR = `{"state":"MERGED","mergedAt":"2026-01-01T00:02:00Z"}`
+	if err := s.ReconcileIssueWork(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := latestRecoveryRecord(t, s); got.Outcome != "merged" || got.PRURL != record.PRURL || len(f.submissions) != 1 {
+		t.Fatalf("recorded merge was not settled: %+v, submissions=%d", got, len(f.submissions))
 	}
 }
 
@@ -2610,6 +2669,7 @@ func TestDisabledRepositoryPausesMonitorAndRetainedClaimAcrossRestart(t *testing
 	if err := s.IssueClaims.Save(record); err != nil {
 		t.Fatal(err)
 	}
+	f.prs = recoveryPR("open", "null", record.Run.GitHubIssue.Claim.Branch, "main")
 
 	settings, err := s.ReviewSettingsStatus(ctx)
 	if err != nil {

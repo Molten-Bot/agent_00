@@ -405,11 +405,11 @@ func (g GitHub) Merge(ctx context.Context, r Run) error {
 	}
 	raw, err := g.command(ctx, "pr", "view", r.PRURL, "--repo", r.Item.Repository, "--json", "state")
 	if err != nil {
-		return err
+		return errors.Join(errMergePending, err)
 	}
 	var pr struct{ State string }
 	if err := json.Unmarshal([]byte(raw), &pr); err != nil {
-		return fmt.Errorf("decode pull request state after merge: %w", err)
+		return errors.Join(errMergePending, fmt.Errorf("decode pull request state after merge: %w", err))
 	}
 	if pr.State != "MERGED" {
 		return errMergePending

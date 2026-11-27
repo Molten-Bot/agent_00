@@ -736,7 +736,7 @@ func runServer(args []string) int {
 				defer release()
 
 				reviewOutcome := workflow.Outcome{
-					Status: "succeeded", PRURL: outcome.Result.PRURL, Reason: "Task completed",
+					Status: "succeeded", PRURL: outcome.Result.PRURL, Reason: "Task completed", CompletedAt: time.Now().UTC(),
 					ReviewReceipt: outcome.Result.ReviewReceipt, ReviewInterrupted: outcome.Result.ReviewInterrupted,
 					PendingReviewGate: outcome.Result.PendingReviewGate,
 					ReviewRequired:    outcome.Result.ReviewRequired,
@@ -761,7 +761,8 @@ func runServer(args []string) int {
 				}
 
 				var reviewArchiveErr error
-				if reviewOutcome.ReviewReceipt != nil || reviewOutcome.ReviewInterrupted || reviewOutcome.ReviewRequired || reviewOutcome.Status == workflow.OutcomeReviewPending {
+				if reviewOutcome.ReviewReceipt != nil || reviewOutcome.ReviewInterrupted || reviewOutcome.ReviewRequired ||
+					reviewOutcome.PendingReviewGate != nil || reviewOutcome.Status == workflow.OutcomeReviewPending {
 					reviewArchiveErr = workflow.SaveReviewOutcome(filepath.Dir(cfg.RuntimeConfigPath), requestID, reviewOutcome)
 					if reviewArchiveErr != nil {
 						daemonLogger("task status=warn action=save_review_outcome request_id=%s err=%q", requestID, reviewArchiveErr)
@@ -905,6 +906,11 @@ func runServer(args []string) int {
 				return fmt.Errorf("unresolved issue evidence is retained; resolve or explicitly abandon the issue before deleting it")
 			}
 			if automatic {
+				// Terminal status can reach the monitor while the worker is still
+				// archiving review evidence.
+				if _, err := localTaskController.handleFor(requestID); err == nil {
+					return nil
+				}
 				if retainMergedIssueLogs(record) {
 					return nil
 				}

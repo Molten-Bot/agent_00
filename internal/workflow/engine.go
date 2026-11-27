@@ -179,6 +179,8 @@ type Run struct {
 	StartedAt     *time.Time       `json:"startedAt,omitempty"`
 	UpdatedAt     time.Time        `json:"updatedAt"`
 	GitHubRetryAt time.Time        `json:"githubRetryAt,omitzero"`
+
+	MergeRequested bool `json:"mergeRequested,omitempty"`
 }
 
 func (r Run) ReviewPolicy() ExecutionPolicy {
@@ -226,6 +228,7 @@ type Outcome struct {
 	Status            string                    `json:"status"`
 	PRURL             string                    `json:"prUrl,omitempty"`
 	Reason            string                    `json:"reason,omitempty"`
+	CompletedAt       time.Time                 `json:"completedAt,omitzero"`
 
 	PendingReviewGate *githubutil.PendingReviewGate `json:"pendingReviewGate,omitempty"`
 	ReviewRequired    bool                          `json:"reviewRequired,omitempty"`
@@ -313,7 +316,7 @@ func (e *Engine) ActivationStartedAt(id string) (time.Time, error) {
 func (e *Engine) save(s State) error {
 	active := make([]Run, 0, len(s.Runs))
 	for _, run := range s.Runs {
-		if !terminal(run.Status) || run.hasFailedPendingReview() {
+		if run.needsReconciliation() {
 			active = append(active, run)
 		} else if run.Status != "merged" && run.RequestID != "" && run.StartedAt != nil && !run.StartedAt.IsZero() {
 			// Keep the start for explicit retries after the activation is retired.
@@ -383,6 +386,8 @@ func (e *Engine) logRun(r Run, event string, mergedAt time.Time) {
 	if !mergedAt.IsZero() {
 		finishedAt = mergedAt
 		mergeField = " merged_at=" + mergedAt.UTC().Format(time.RFC3339Nano)
+	} else if r.Status != "merged" && r.Outcome != nil && !r.Outcome.CompletedAt.IsZero() {
+		finishedAt = r.Outcome.CompletedAt
 	}
 	if r.StartedAt != nil && !r.StartedAt.IsZero() {
 		startedAt = r.StartedAt.UTC().Format(time.RFC3339Nano)
@@ -477,7 +482,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	s, err := e.load()
 	var runs []Run
 	for _, r := range s.Runs {
-		if !e.submitting[r.ID] && (!terminal(r.Status) || r.hasFailedPendingReview()) {
+		if !e.submitting[r.ID] && r.needsReconciliation() {
 			runs = append(runs, r)
 		}
 	}
@@ -799,6 +804,23 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 	} else if active {
 		return nil
 	}
+	if r.MergeRequested {
+		if inspectState == nil || !e.Allowed(r.Item.Repository) || e.now().Before(r.GitHubRetryAt) {
+			return nil
+		}
+		state, err := inspectState(ctx, r.Item.Repository, r.PRURL)
+		if err != nil {
+			waitForQuota(err)
+			return errors.Join(err, finish())
+		}
+		if state.Merged {
+			mergedAt = state.MergedAt
+			r.Status, r.Reason = "merged", "Pull request merged"
+		} else if !state.Open {
+			r.Status, r.Reason = "completed", "Pull request closed"
+		}
+		return finish()
+	}
 	if r.Status == "pending_action" {
 		if !active || !e.StillEnabled(r.Workflow) {
 			r.Status, r.Reason = "completed", "Workflow changed or was disabled before queued repair"
@@ -892,6 +914,13 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		} else if o.Status == "failed" {
 			r.Status = "failed"
 			r.Reason = o.Reason
+			if r.Item.Kind != "issue" {
+				if o.PRURL != "" {
+					r.PRURL = o.PRURL
+				} else if r.Item.Kind == "pr" {
+					r.PRURL = r.Item.URL
+				}
+			}
 		} else if o.Status == "succeeded" {
 			r.PRURL = o.PRURL
 			if r.PRURL == "" {
@@ -908,6 +937,20 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 				r.Reason = "Task completed"
 			}
 		}
+	}
+	if r.watchesFailedPR() && inspectState != nil && e.Allowed(r.Item.Repository) && !e.now().Before(r.GitHubRetryAt) {
+		i, err := inspectState(ctx, r.Item.Repository, r.PRURL)
+		if err != nil {
+			waitForQuota(err)
+			return errors.Join(err, finish())
+		}
+		if i.Merged {
+			mergedAt = i.MergedAt
+			r.Status, r.Reason = "merged", externalMergeReason
+		} else if !i.Open {
+			r.Status, r.Reason = "completed", "Pull request closed after task failure"
+		}
+		return finish()
 	}
 	if r.Status == awaitingReview && r.hasPendingReview() {
 		if active && e.InspectPRState != nil && strings.Contains(r.PRURL, "/pull/") {
@@ -1080,6 +1123,13 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		} else if !e.Allowed(r.Item.Repository) || !e.StillEnabled(r.Workflow) {
 			r.Reason = "Workflow changed or was disabled before merge"
 		} else if mergeErr := e.Merge(ctx, r); mergeErr == nil || errors.Is(mergeErr, githubutil.ErrReviewInterrupted) {
+			if mergeErr == nil {
+				r.MergeRequested = true
+				r.Reason = "Waiting for GitHub to confirm the pull request merged"
+				if err := commit(); err != nil || stale {
+					return err
+				}
+			}
 			if e.InspectPRState != nil {
 				state, err := e.InspectPRState(ctx, r.Item.Repository, r.PRURL)
 				if err != nil {
@@ -1105,7 +1155,9 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		} else if errors.Is(mergeErr, githubutil.ErrReviewApprovalPending) {
 			r.Reason = "Waiting for human approval"
 		} else if errors.Is(mergeErr, errMergePending) {
+			r.MergeRequested = true
 			r.Reason = "Waiting for GitHub to confirm the pull request merged"
+			waitForQuota(mergeErr)
 		} else {
 			if !waitForQuota(mergeErr) {
 				r.Reason = "Merge blocked: " + mergeErr.Error()
@@ -1144,6 +1196,15 @@ func (r Run) cleanReviewReceipt(outcome *Outcome) *githubutil.ReviewReceipt {
 
 func terminal(status string) bool {
 	return contains([]string{"failed", "succeeded", "merged", "completed"}, status)
+}
+
+func (r Run) needsReconciliation() bool {
+	return !terminal(r.Status) || r.hasFailedPendingReview() || r.watchesFailedPR()
+}
+
+func (r Run) watchesFailedPR() bool {
+	return r.Status == "failed" && r.Item.Kind != "issue" &&
+		strings.EqualFold(githubutil.PullRequestRepository(r.PRURL), r.Item.Repository) && r.Item.Repository != ""
 }
 
 // A recorded pending review can supersede a failed activation status.
@@ -1213,6 +1274,9 @@ func (e *Engine) Complete(id string, outcome Outcome) error {
 		}
 		if r.Status == OutcomeChecksPending || ((r.Status == awaitingReview || r.Status == "failed") && r.hasPendingReview()) {
 			r.Status = "running"
+		}
+		if terminal(outcome.Status) && outcome.CompletedAt.IsZero() {
+			outcome.CompletedAt = e.now()
 		}
 		r.Outcome = &outcome
 		return nil

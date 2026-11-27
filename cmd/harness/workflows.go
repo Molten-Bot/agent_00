@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/app"
 	"github.com/Molten-Bot/agent_00/internal/config"
@@ -194,20 +195,28 @@ func configureWorkflows(ctx context.Context, cfg localruntime.InitConfig, runner
 			if t.RequestID != id {
 				continue
 			}
+			completedAt, _ := time.Parse(time.RFC3339Nano, t.UpdatedAt)
+			if archived.CompletedAt.IsZero() {
+				archived.CompletedAt = completedAt
+			}
 			switch t.Status {
 			case "completed", "no_changes", "merged":
 				if archiveErr == nil {
 					return archived
 				}
-				return workflow.Outcome{Status: "succeeded", PRURL: t.PRURL}
+				return workflow.Outcome{Status: "succeeded", PRURL: t.PRURL, CompletedAt: completedAt}
 			case "error", "invalid", "stopped", "duplicate":
 				if archiveErr == nil {
 					if archived.Status == workflow.OutcomeReviewPending {
 						return archived
 					}
-					return workflow.Outcome{Status: "failed", PRURL: archived.PRURL, Reason: t.Error, ReviewInterrupted: archived.ReviewInterrupted}
+					archived.Status, archived.Reason = "failed", t.Error
+					if archived.PRURL == "" {
+						archived.PRURL = t.PRURL
+					}
+					return archived
 				}
-				return workflow.Outcome{Status: "failed", Reason: t.Error}
+				return workflow.Outcome{Status: "failed", PRURL: t.PRURL, Reason: t.Error, CompletedAt: completedAt}
 			}
 			return workflow.Outcome{Status: "running"}
 		}
@@ -242,7 +251,8 @@ func retainMergedReviewLogs(root, requestID string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("load review evidence before task cleanup: %w", err)
 	}
-	return outcome.Status == "failed" || outcome.Status == workflow.OutcomeReviewPending || outcome.ReviewInterrupted, nil
+	return outcome.Status == "failed" || outcome.Status == workflow.OutcomeReviewPending ||
+		outcome.ReviewInterrupted || outcome.PendingReviewGate != nil, nil
 }
 
 func parseWorkflowOrSelection(body []byte) (config.Config, error) {

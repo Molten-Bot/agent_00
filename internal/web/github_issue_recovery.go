@@ -462,7 +462,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	}
 	if record.Outcome == localruntime.IssueChecksPending {
 		if record.PRURL != "" {
-			pr, err := s.inspectPendingIssuePR(ctx, record)
+			pr, err := s.findIssueRecoveryPR(ctx, record.Run.GitHubIssue, record.PRURL)
 			if err != nil {
 				return s.deferIssueRecord(record, err)
 			}
@@ -546,7 +546,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	// workspace before a matching PR can fulfill the claim.
 	ownsBranch := remote.Claim.ID == record.ID && record.BranchReserved
 	if (ownsBranch || record.Outcome == "") && !requiresIssueBranchRecovery(record) {
-		pr, err := s.findIssuePR(ctx, issue)
+		pr, err := s.findIssueRecoveryPR(ctx, issue, record.PRURL)
 		if err != nil {
 			return s.deferIssueRecord(record, err)
 		}
@@ -556,7 +556,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 			}
 		}
 		matchesClaim := ownsBranch && pr.URL != "" && !pr.Closed && pr.BaseBranch == issue.Claim.BaseBranch
-		if matchesClaim && pr.mergedUnverified(record) {
+		if pr.Merged && (record.PRURL != "" || (matchesClaim && pr.mergedUnverified(record))) {
 			return s.recordRecoveredIssueMerge(record, pr)
 		}
 		if matchesClaim && record.State != localruntime.IssueStateMergedUnverified && !pr.resumesVerification(record) {
@@ -700,30 +700,38 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	return nil
 }
 
-func (s Server) inspectPendingIssuePR(ctx context.Context, record localruntime.IssueClaimRecord) (issuePullRequest, error) {
-	repo := record.Run.GitHubIssue.Repository
-	if !strings.EqualFold(githubutil.PullRequestRepository(record.PRURL), repo) {
-		return issuePullRequest{}, fmt.Errorf("pending check pull request does not belong to the issue repository")
+func (s Server) findIssueRecoveryPR(ctx context.Context, issue *config.GitHubIssueConfig, prURL string) (issuePullRequest, error) {
+	if prURL == "" {
+		return s.findIssuePR(ctx, issue)
+	}
+	repo := issue.Repository
+	if !strings.EqualFold(githubutil.PullRequestRepository(prURL), repo) {
+		return issuePullRequest{}, fmt.Errorf("recorded pull request does not belong to the issue repository")
 	}
 	result, err := s.runIssueGH(ctx, execx.Command{Name: "gh", Args: []string{
-		"pr", "view", githubutil.PullRequestSelector(record.PRURL), "--repo", repo, "--json", "state,mergedAt,title",
+		"pr", "view", githubutil.PullRequestSelector(prURL), "--repo", repo, "--json", "state,mergedAt,title,baseRefName,headRefName,headRefOid,isCrossRepository",
 	}})
 	if err != nil {
 		return issuePullRequest{}, err
 	}
 	var pr struct {
-		State, Title string
-		MergedAt     time.Time
+		State, Title, BaseRefName, HeadRefName, HeadRefOid string
+		MergedAt                                           time.Time
+		IsCrossRepository                                  bool
 	}
 	if err := json.Unmarshal([]byte(result.Stdout), &pr); err != nil {
-		return issuePullRequest{}, fmt.Errorf("decode pending check pull request: %w", err)
+		return issuePullRequest{}, fmt.Errorf("decode recorded pull request: %w", err)
 	}
 	switch pr.State {
 	case "OPEN", "CLOSED", "MERGED":
 	default:
-		return issuePullRequest{}, fmt.Errorf("unexpected pending check pull request state %q", pr.State)
+		return issuePullRequest{}, fmt.Errorf("unexpected recorded pull request state %q", pr.State)
 	}
-	return issuePullRequest{URL: record.PRURL, Title: pr.Title, Merged: pr.State == "MERGED", MergedAt: pr.MergedAt}, nil
+	if pr.State == "OPEN" && (pr.IsCrossRepository || pr.HeadRefName != issue.Claim.Branch) {
+		return issuePullRequest{}, fmt.Errorf("recorded pull request no longer matches the reserved branch")
+	}
+	return issuePullRequest{URL: prURL, Title: pr.Title, BaseBranch: pr.BaseRefName, HeadSHA: pr.HeadRefOid,
+		Closed: pr.State == "CLOSED", Merged: pr.State == "MERGED", MergedAt: pr.MergedAt}, nil
 }
 
 func (s Server) resumeIssueChecks(ctx context.Context, record localruntime.IssueClaimRecord) error {

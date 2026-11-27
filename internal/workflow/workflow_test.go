@@ -380,6 +380,7 @@ func TestGitHubPollingAndHeadBoundMerge(t *testing.T) {
 	var commands []execx.Command
 	resolved := false
 	mergeState := "OPEN"
+	var stateErr error
 	g := GitHub{Runner: fakeRunner(func(_ context.Context, c execx.Command) (execx.Result, error) {
 		commands = append(commands, c)
 		args := strings.Join(c.Args, " ")
@@ -399,7 +400,7 @@ func TestGitHubPollingAndHeadBoundMerge(t *testing.T) {
 			return execx.Result{Stdout: "agent\n"}, nil
 		}
 		if strings.Contains(args, "pr view") && strings.HasSuffix(args, "--json state") {
-			return execx.Result{Stdout: fmt.Sprintf(`{"state":%q}`, mergeState)}, nil
+			return execx.Result{Stdout: fmt.Sprintf(`{"state":%q}`, mergeState)}, stateErr
 		}
 		if strings.Contains(args, "pr view") {
 			return execx.Result{Stdout: `{"number":2,"state":"OPEN","headRefOid":"abc","reviewDecision":"APPROVED","statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"}]}`}, nil
@@ -420,6 +421,11 @@ func TestGitHubPollingAndHeadBoundMerge(t *testing.T) {
 	if err = g.Merge(t.Context(), run); !errors.Is(err, errMergePending) {
 		t.Fatalf("merge accepted into queue = %v, want pending confirmation", err)
 	}
+	stateErr = errors.New("temporary pull request lookup failure")
+	if err = g.Merge(t.Context(), run); !errors.Is(err, errMergePending) || !errors.Is(err, stateErr) {
+		t.Fatalf("accepted merge with failed confirmation = %v, want pending confirmation and lookup error", err)
+	}
+	stateErr = nil
 	mergeState = "MERGED"
 	if err = g.Merge(t.Context(), run); err != nil {
 		t.Fatal(err)
