@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -70,7 +71,7 @@ func TestPendingReviewRetainsActivationWithoutUsingReviewEvidence(t *testing.T) 
 		t.Fatal(err)
 	}
 	pr := Item{Open: true, HeadSHA: "abc", ChecksPassed: true}
-	e.InspectPR = func(context.Context, string, string) (Item, error) { return pr, nil }
+	e.InspectPRState = func(context.Context, string, string) (Item, error) { return pr, nil }
 	e.Merge = func(context.Context, Run) error {
 		t.Fatal("pending review authorized workflow merge")
 		return nil
@@ -187,8 +188,8 @@ func TestPendingReviewRecoversFailedActivation(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			e.InspectPR = func(context.Context, string, string) (Item, error) {
-				return Item{Open: true, HeadSHA: "abc", ChecksPassed: true}, nil
+			e.InspectPRState = func(context.Context, string, string) (Item, error) {
+				return Item{Open: true}, nil
 			}
 			e.Merge = func(context.Context, Run) error {
 				t.Fatal("pending review authorized workflow merge")
@@ -234,6 +235,57 @@ func TestIssueRecoveryReplacesPendingReviewBeforeTick(t *testing.T) {
 				t.Fatalf("recovery did not replace the pending activation: %+v, %v", runs, err)
 			}
 		})
+	}
+}
+
+func TestPendingReviewUsesGitHubMergeTimeAfterRestart(t *testing.T) {
+	t.Parallel()
+
+	w := definition("pending-review-merge")
+	e, _, _ := testEngine(t, w)
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	mergedAt := start.Add(2 * time.Minute)
+	now := start.Add(time.Minute)
+	e.Now = func() time.Time { return now }
+	const prURL = "https://github.com/acme/repo/pull/12"
+	if err := e.transaction(func(s *State) error {
+		s.Runs = []Run{{ID: "activation", RequestID: "task", Status: awaitingReview,
+			Workflow: w, Item: Item{Repository: w.Repository, Kind: "issue", Number: 1},
+			StartedAt: &start, PRURL: prURL, Outcome: &Outcome{Status: OutcomeReviewPending, PRURL: prURL}}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	state := `{"state":"OPEN","mergedAt":null}`
+	calls := 0
+	gh := GitHub{Runner: fakeRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		calls++
+		if want := []string{"pr", "view", prURL, "--repo", w.Repository, "--json", "state,mergedAt"}; cmd.Name != "gh" || !slices.Equal(cmd.Args, want) {
+			t.Fatalf("unexpected GitHub command: %s %v", cmd.Name, cmd.Args)
+		}
+		return execx.Result{Stdout: state}, nil
+	})}
+	e.InspectPR, e.InspectPRState = gh.Inspect, gh.InspectState
+	tick(t, e)
+	if runs, err := e.Runs(); err != nil || len(runs) != 1 || runs[0].Status != awaitingReview || calls != 1 {
+		t.Fatalf("open pull request did not stay in review after one lookup: %+v, err=%v, calls=%d", runs, err, calls)
+	}
+
+	now = start.Add(24 * time.Hour)
+	state = fmt.Sprintf(`{"state":"MERGED","mergedAt":%q}`, mergedAt.Format(time.RFC3339))
+	var transitions []string
+	restarted := &Engine{Store: e.Store, StatePath: e.StatePath, Enabled: e.Enabled, Allowed: e.Allowed, Now: e.Now,
+		Fetch: e.Fetch, Status: e.Status, InspectPR: gh.Inspect, InspectPRState: gh.InspectState,
+		Logf: func(format string, args ...any) { transitions = append(transitions, fmt.Sprintf(format, args...)) }}
+	tick(t, restarted)
+	tick(t, restarted)
+	if runs, err := restarted.Runs(); err != nil || len(runs) != 0 || calls != 2 {
+		t.Fatalf("merged pull request did not retire after one more lookup: %+v, err=%v, calls=%d", runs, err, calls)
+	}
+	if len(transitions) != 1 || !strings.Contains(transitions[0], "merged_at="+mergedAt.Format(time.RFC3339)) ||
+		!strings.HasSuffix(transitions[0], "status=merged reason=merge_unconfirmed duration_ms=120000") {
+		t.Fatalf("expected two minutes of workflow time and the GitHub merge timestamp: %v", transitions)
 	}
 }
 

@@ -518,7 +518,9 @@ func (b *Broker) IngestLog(line string) {
 		b.recordWorkflowTimingLocked(requestID, fields, now)
 	}
 	if workflowEvent && fields["event"] == "transition" {
-		if t := b.tasks[requestID]; t != nil {
+		if workflowMergeConfirmed(fields) {
+			b.applyWorkflowMergeLocked(requestID, parseTimeOrZero(fields["merged_at"]), now)
+		} else if t := b.tasks[requestID]; t != nil && t.Status != "merged" {
 			switch fields["reason"] {
 			case "review_not_clean":
 				t.ReviewGate = "Waiting for a submitted clean review on the current pull request head."
@@ -536,10 +538,6 @@ func (b *Broker) IngestLog(line string) {
 				t.ReviewGate = "Waiting for human approval on the current pull request head."
 			case "head_changed":
 				t.ReviewGate = "Pull request head changed. A fresh review is required."
-			case "external_merge":
-				t.ReviewGate = "Pull request merged externally during review."
-			case "merge_unconfirmed":
-				t.ReviewGate = "Pull request was already merged when the workflow checked."
 			case "merge_blocked":
 				t.ReviewGate = "Merge blocked. See workflow events for details."
 			default:
@@ -558,13 +556,16 @@ func (b *Broker) IngestLog(line string) {
 	b.notifySubscribersLocked()
 }
 
+func workflowMergeConfirmed(fields map[string]string) bool {
+	return fields["status"] == "merged" || fields["reason"] == "external_merge" || fields["reason"] == "merge_unconfirmed"
+}
+
 func (b *Broker) recordWorkflowTimingLocked(requestID string, fields map[string]string, now time.Time) {
 	if _, forgotten := b.forgottenTasks[requestID]; forgotten {
 		return
 	}
 	startedAt := parseTimeOrZero(fields["started_at"])
-	success := fields["status"] == "succeeded" || fields["status"] == "merged" ||
-		fields["reason"] == "external_merge" || fields["reason"] == "merge_unconfirmed"
+	success := fields["status"] == "succeeded" || workflowMergeConfirmed(fields)
 	duration, err := time.ParseDuration(fields["duration_ms"] + "ms")
 	hasFinish := fields["event"] == "transition" && success && err == nil && duration >= 0
 	previous := b.workflowTaskTimes[requestID]
@@ -577,7 +578,10 @@ func (b *Broker) recordWorkflowTimingLocked(requestID string, fields map[string]
 	}
 	timing := workflowTiming{startedAt: startedAt}
 	if hasFinish {
-		timing.finishedAt = startedAt.Add(duration)
+		timing.finishedAt = parseTimeOrZero(fields["merged_at"])
+		if timing.finishedAt.IsZero() {
+			timing.finishedAt = startedAt.Add(duration)
+		}
 	}
 	if b.workflowTaskTimes == nil {
 		b.workflowTaskTimes = make(map[string]workflowTiming)
@@ -2016,11 +2020,6 @@ func (b *Broker) MarkTaskPRMerged(requestID string, mergedAt string) error {
 	}
 
 	now := b.now().UTC()
-	mergedTime := parseTimeOrZero(mergedAt)
-	if mergedTime.IsZero() {
-		mergedTime = now
-	}
-
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -2032,6 +2031,15 @@ func (b *Broker) MarkTaskPRMerged(requestID string, mergedAt string) error {
 		return ErrTaskNotCompleted
 	}
 
+	b.markTaskPRMergedLocked(task, parseTimeOrZero(mergedAt), now)
+	b.notifySubscribersLocked()
+	return nil
+}
+
+func (b *Broker) markTaskPRMergedLocked(task *taskState, mergedTime, now time.Time) {
+	if mergedTime.IsZero() {
+		mergedTime = now
+	}
 	if task.Status != "merged" {
 		previousStatus := task.Status
 		task.Status = "merged"
@@ -2039,11 +2047,13 @@ func (b *Broker) MarkTaskPRMerged(requestID string, mergedAt string) error {
 	}
 	task.Stage = "finalize"
 	task.StageStatus = "merged"
+	task.Error, task.Warning, task.ReviewGate = "", "", ""
+	task.ExitCode = 0
 	task.TerminalAt = now
 	task.UpdatedAt = mergedTime
 	b.recordTaskAttemptLocked(
-		b.taskAttemptRootLocked(requestID),
-		requestID,
+		b.taskAttemptRootLocked(task.RequestID),
+		task.RequestID,
 		"",
 		task.Status,
 		task.Error,
@@ -2054,8 +2064,28 @@ func (b *Broker) MarkTaskPRMerged(requestID string, mergedAt string) error {
 		task.PRURL,
 		mergedTime,
 	)
-	b.notifySubscribersLocked()
-	return nil
+}
+
+func (b *Broker) applyWorkflowMergeLocked(requestID string, mergedTime, now time.Time) {
+	if mergedTime.IsZero() {
+		mergedTime = now
+	}
+	if task := b.tasks[requestID]; task != nil {
+		if task.Status != "merged" {
+			b.markTaskPRMergedLocked(task, mergedTime, now)
+		}
+		return
+	}
+	// Review may remain pending after the task expires from the live monitor.
+	attempts := b.attempts[b.taskAttemptRootLocked(requestID)]
+	for i := range attempts {
+		if attempts[i].RequestID == requestID && attempts[i].Status != "merged" {
+			attempts[i].Status = "merged"
+			attempts[i].Error = ""
+			attempts[i].UpdatedAt = mergedTime
+			return
+		}
+	}
 }
 
 // TaskAttempts returns a copy of internal attempt records for requestID's root task.

@@ -268,11 +268,30 @@ func (g GitHub) Inspect(ctx context.Context, repo, selector string) (Item, error
 	return g.inspect(githubutil.WithCaller(ctx, "workflow_inspect"), repo, selector, ScanNeeds{LinkedIssues: true, Reviews: true, Checks: true})
 }
 
+func (g GitHub) InspectState(ctx context.Context, repo, selector string) (Item, error) {
+	if !repoPattern.MatchString(repo) {
+		return Item{}, fmt.Errorf("invalid repository")
+	}
+	ctx = githubutil.WithCaller(ctx, "workflow_inspect")
+	raw, err := g.command(ctx, "pr", "view", selector, "--repo", repo, "--json", "state,mergedAt")
+	if err != nil {
+		return Item{}, err
+	}
+	var pr struct {
+		State    string
+		MergedAt time.Time
+	}
+	if err := json.Unmarshal([]byte(raw), &pr); err != nil {
+		return Item{}, fmt.Errorf("decode pull request state: %w", err)
+	}
+	return Item{Open: pr.State == "OPEN", Merged: pr.State == "MERGED", MergedAt: pr.MergedAt}, nil
+}
+
 func (g GitHub) inspect(ctx context.Context, repo, selector string, needs ScanNeeds) (Item, error) {
 	if !repoPattern.MatchString(repo) {
 		return Item{}, fmt.Errorf("invalid repository")
 	}
-	fields := "number,title,body,url,author,labels,assignees,reviewRequests,baseRefName,headRefName,headRefOid,isDraft,state"
+	fields := "number,title,body,url,author,labels,assignees,reviewRequests,baseRefName,headRefName,headRefOid,isDraft,state,mergedAt"
 	if needs.Reviews {
 		fields += ",reviewDecision"
 	}
@@ -287,6 +306,7 @@ func (g GitHub) inspect(ctx context.Context, repo, selector string, needs ScanNe
 		Number                                                                        int
 		Title, Body, URL, BaseRefName, HeadRefName, HeadRefOid, ReviewDecision, State string
 		IsDraft                                                                       bool
+		MergedAt                                                                      time.Time
 		Author                                                                        struct {
 			Login string
 			IsBot bool
@@ -303,7 +323,7 @@ func (g GitHub) inspect(ctx context.Context, repo, selector string, needs ScanNe
 		return Item{}, fmt.Errorf("pull request response is missing its number")
 	}
 	if p.State == "MERGED" || p.State == "CLOSED" {
-		return Item{Repository: repo, Number: p.Number, Kind: "pr", URL: p.URL, HeadSHA: p.HeadRefOid, Merged: p.State == "MERGED"}, nil
+		return Item{Repository: repo, Number: p.Number, Kind: "pr", URL: p.URL, HeadSHA: p.HeadRefOid, Merged: p.State == "MERGED", MergedAt: p.MergedAt}, nil
 	}
 	// Older gh versions do not expose closingIssuesReferences in pr view's
 	// JSON field list. Ask GraphQL directly for the relationship count.

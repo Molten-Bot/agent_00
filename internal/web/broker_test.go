@@ -132,6 +132,51 @@ func TestDashboardLateMergeRespectsTaskRemoval(t *testing.T) {
 	}
 }
 
+func TestWorkflowMergeClearsFailedTaskState(t *testing.T) {
+	t.Parallel()
+
+	for _, delay := range []time.Duration{5 * time.Minute, 24 * time.Hour} {
+		t.Run(delay.String(), func(t *testing.T) {
+			t.Parallel()
+			b := NewBroker()
+			now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+			b.now = func() time.Time { return now }
+			const id = "failed-review"
+			const fields = " workflow_id=delivery run_id=run-1 request_id=" + id + " started_at=2026-01-01T00:00:00Z"
+			b.IngestLog("workflow event=submission" + fields + " status=running")
+			b.IngestLog("task status=start request_id=" + id)
+			now = now.Add(time.Minute)
+			b.IngestLog("task request_id=" + id + " stage=review status=warn action=leave_draft reason=fix_passes_exhausted")
+			b.IngestLog("task status=error request_id=" + id + " pr_url=https://github.com/acme/repo/pull/42 exit_code=1 err=\"review failed\"")
+			b.IngestLog("workflow event=transition" + fields + " status=awaiting_review reason=review_not_clean")
+			if stats := b.Snapshot().Stats; stats.FailedTasks != 1 || stats.TotalSavedSeconds != 0 {
+				t.Fatalf("expected failed task with no time saved before merge: %+v", stats)
+			}
+
+			const mergedAt = "2026-01-01T00:02:00Z"
+			now = now.Add(delay)
+			transition := "workflow event=transition" + fields + " merged_at=" + mergedAt + " status=merged reason=merge_unconfirmed duration_ms=120000"
+			b.IngestLog(transition)
+			b.IngestLog(transition)
+			task, ok := b.Task(id)
+			if delay < defaultTerminalTaskTimeout && (!ok || task.Status != "merged" || task.Stage != "finalize" || task.StageStatus != "merged" ||
+				task.Error != "" || task.Warning != "" || task.ReviewGate != "" || task.ExitCode != 0 || task.UpdatedAt != mergedAt) {
+				t.Fatalf("task did not move from failed review to terminal success: %+v", task)
+			}
+			if delay >= defaultTerminalTaskTimeout && ok {
+				t.Fatalf("merge recreated an expired task: %+v", task)
+			}
+			attempts := b.TaskAttempts(id)
+			if len(attempts) != 1 || attempts[0].Status != "merged" || attempts[0].Error != "" {
+				t.Fatalf("expected a single successful task attempt: %+v", attempts)
+			}
+			if stats := b.Snapshot().Stats; stats.CompletedTasks != 1 || stats.FailedTasks != 0 || stats.TotalSavedSeconds != 120 {
+				t.Fatalf("expected one completed task and two minutes saved: %+v", stats)
+			}
+		})
+	}
+}
+
 func TestBrokerShowsCheckWaitOnExistingTask(t *testing.T) {
 	t.Parallel()
 	b := NewBroker()

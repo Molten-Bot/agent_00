@@ -104,7 +104,8 @@ func shouldMonitorTaskPR(task Task) bool {
 		return false
 	}
 	switch strings.TrimSpace(task.Status) {
-	case "completed", "no_changes":
+	case "completed", "no_changes", "merged":
+		// A workflow can mark a task merged before the monitor records its release.
 		return true
 	default:
 		return false

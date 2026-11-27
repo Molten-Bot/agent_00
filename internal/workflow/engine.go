@@ -45,6 +45,8 @@ type Item struct {
 	ChecksPassed   bool     `json:"checksPassed"`
 	Open           bool     `json:"open"`
 
+	MergedAt time.Time `json:"mergedAt,omitzero"`
+
 	ActionRunID      int64 `json:"actionRunId,omitempty"`
 	ActionRunAttempt int   `json:"actionRunAttempt,omitempty"`
 }
@@ -246,7 +248,8 @@ type Engine struct {
 	Merge     func(context.Context, Run) error
 	Logf      func(string, ...any)
 
-	FinishReview func(context.Context, githubutil.ReviewReceipt, *githubutil.PendingReviewGate) error
+	InspectPRState func(context.Context, string, string) (Item, error)
+	FinishReview   func(context.Context, githubutil.ReviewReceipt, *githubutil.PendingReviewGate) error
 	// MemoryPressure defers background ticks while host memory is exhausted.
 	MemoryPressure func() bool
 
@@ -314,7 +317,7 @@ func (e *Engine) save(s State) error {
 
 // logRun emits only bounded lifecycle reasons. Detailed errors can contain
 // repository URLs, paths, or task instructions and remain in the run journal.
-func (e *Engine) logRun(r Run, event string) {
+func (e *Engine) logRun(r Run, event string, mergedAt time.Time) {
 	if e.Logf == nil {
 		return
 	}
@@ -361,13 +364,19 @@ func (e *Engine) logRun(r Run, event string) {
 		reason = "github_rate_limit"
 	}
 	startedAt, durationMS := "unknown", "unknown"
+	finishedAt := r.UpdatedAt
+	mergeField := ""
+	if !mergedAt.IsZero() {
+		finishedAt = mergedAt
+		mergeField = " merged_at=" + mergedAt.UTC().Format(time.RFC3339Nano)
+	}
 	if r.StartedAt != nil && !r.StartedAt.IsZero() {
 		startedAt = r.StartedAt.UTC().Format(time.RFC3339Nano)
-		if terminal(r.Status) && !r.UpdatedAt.Before(*r.StartedAt) {
-			durationMS = strconv.FormatInt(r.UpdatedAt.Sub(*r.StartedAt).Milliseconds(), 10)
+		if terminal(r.Status) && (!mergedAt.IsZero() || !finishedAt.Before(*r.StartedAt)) {
+			durationMS = strconv.FormatInt(max(0, finishedAt.Sub(*r.StartedAt)).Milliseconds(), 10)
 		}
 	}
-	e.Logf("workflow event=%s workflow_id=%q run_id=%q request_id=%q started_at=%s status=%s reason=%s duration_ms=%s", event, r.Workflow.ID, r.ID, r.RequestID, startedAt, r.Status, reason, durationMS)
+	e.Logf("workflow event=%s workflow_id=%q run_id=%q request_id=%q started_at=%s%s status=%s reason=%s duration_ms=%s", event, r.Workflow.ID, r.ID, r.RequestID, startedAt, mergeField, r.Status, reason, durationMS)
 }
 func (e *Engine) Preview(ctx context.Context, w Definition) ([]Decision, error) {
 	if err := w.Validate(); err != nil {
@@ -672,7 +681,7 @@ func (e *Engine) transaction(change func(*State) error) error {
 }
 
 func (e *Engine) submitReserved(ctx context.Context, r Run) error {
-	e.logRun(r, "dispatch")
+	e.logRun(r, "dispatch", time.Time{})
 	var request string
 	var submitErr error
 	if !e.StillEnabled(r.Workflow) {
@@ -716,7 +725,7 @@ func (e *Engine) finishSubmission(id, request string, submitErr error) error {
 		return nil
 	})
 	if err == nil {
-		e.logRun(result, "submission")
+		e.logRun(result, "submission", time.Time{})
 	}
 	return err
 }
@@ -741,13 +750,14 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 			return nil
 		})
 	}
+	var mergedAt time.Time
 	finish := func() error {
 		r.UpdatedAt = e.now()
 		if err := commit(); err != nil {
 			return err
 		}
 		if !stale && (original.Status != r.Status || original.Reason != r.Reason) {
-			e.logRun(r, "transition")
+			e.logRun(r, "transition", mergedAt)
 		}
 		return nil
 	}
@@ -853,13 +863,14 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		}
 	}
 	if r.Status == awaitingReview && r.hasPendingReview() {
-		if active && e.InspectPR != nil && strings.Contains(r.PRURL, "/pull/") {
-			i, err := e.InspectPR(ctx, r.Item.Repository, r.PRURL)
+		if active && e.InspectPRState != nil && strings.Contains(r.PRURL, "/pull/") {
+			i, err := e.InspectPRState(ctx, r.Item.Repository, r.PRURL)
 			if err != nil {
 				waitForQuota(err)
 				return errors.Join(err, finish())
 			}
 			if i.Merged {
+				mergedAt = i.MergedAt
 				r.Status, r.Reason = "merged", externalMergeReason
 				return finish()
 			}
@@ -891,6 +902,7 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 			return errors.Join(err, finish())
 		}
 		if i.Merged {
+			mergedAt = i.MergedAt
 			r.Status, r.Reason = "merged", externalMergeReason
 			return finish()
 		}
@@ -983,6 +995,7 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 			return nil
 		}
 		if i.Merged {
+			mergedAt = i.MergedAt
 			r.Status = "merged"
 			r.Reason = externalMergeReason
 		} else if !i.Open {
