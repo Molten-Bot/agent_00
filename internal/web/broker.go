@@ -330,7 +330,7 @@ type Broker struct {
 	repositories      []Repository
 	repoIndex         map[string]int
 	attempts          map[string][]taskAttemptState
-	workflowDurations map[string]time.Duration
+	workflowTaskTimes map[string]workflowTiming
 	attemptRoots      map[string]string
 	attemptSeq        uint64
 	rejectedSeq       uint64
@@ -432,6 +432,21 @@ type taskAttemptState struct {
 	Seq       uint64
 }
 
+type workflowTiming struct {
+	startedAt  time.Time
+	finishedAt time.Time
+}
+
+func (t workflowTiming) include(other workflowTiming) workflowTiming {
+	if t.startedAt.IsZero() || other.startedAt.Before(t.startedAt) {
+		t.startedAt = other.startedAt
+	}
+	if other.finishedAt.After(t.finishedAt) {
+		t.finishedAt = other.finishedAt
+	}
+	return t
+}
+
 // NewBroker returns a monitor state broker with safe defaults.
 func NewBroker() *Broker {
 	now := time.Now
@@ -498,16 +513,8 @@ func (b *Broker) IngestLog(line string) {
 	})
 
 	workflowEvent := strings.HasPrefix(line, "workflow event=")
-	// Workflow events describe activations. A request ID links the event to a
-	// task, but the activation can outlive the task's monitor history.
-	if workflowEvent && requestID != "" && fields["event"] == "transition" &&
-		(fields["status"] == "succeeded" || fields["status"] == "merged") {
-		if duration, err := time.ParseDuration(fields["duration_ms"] + "ms"); err == nil && duration > 0 {
-			if b.workflowDurations == nil {
-				b.workflowDurations = make(map[string]time.Duration)
-			}
-			b.workflowDurations[requestID] = duration
-		}
+	if workflowEvent && requestID != "" && (fields["event"] == "submission" || fields["event"] == "transition") {
+		b.recordWorkflowTimingLocked(requestID, fields, now)
 	}
 	if workflowEvent && fields["event"] == "transition" {
 		if t := b.tasks[requestID]; t != nil {
@@ -548,6 +555,30 @@ func (b *Broker) IngestLog(line string) {
 	b.updateResourceMetricsFromLineLocked(line, fields, now)
 
 	b.notifySubscribersLocked()
+}
+
+func (b *Broker) recordWorkflowTimingLocked(requestID string, fields map[string]string, now time.Time) {
+	startedAt := parseTimeOrZero(fields["started_at"])
+	success := fields["status"] == "succeeded" || fields["status"] == "merged" ||
+		fields["reason"] == "external_merge" || fields["reason"] == "merge_unconfirmed"
+	duration, err := time.ParseDuration(fields["duration_ms"] + "ms")
+	hasFinish := fields["event"] == "transition" && success && err == nil && duration >= 0
+	previous := b.workflowTaskTimes[requestID]
+	if startedAt.IsZero() {
+		// Older logs only reported duration at the terminal transition.
+		if !hasFinish || !previous.startedAt.IsZero() {
+			return
+		}
+		startedAt = now.Add(-duration)
+	}
+	timing := workflowTiming{startedAt: startedAt}
+	if hasFinish {
+		timing.finishedAt = startedAt.Add(duration)
+	}
+	if b.workflowTaskTimes == nil {
+		b.workflowTaskTimes = make(map[string]workflowTiming)
+	}
+	b.workflowTaskTimes[requestID] = previous.include(timing)
 }
 
 // snapshotLogMode selects how task logs are copied into a snapshot.
@@ -1260,6 +1291,13 @@ func (b *Broker) dashboardStatsLocked(now time.Time, tasks []*taskState) Dashboa
 	agentGroups := map[string]*TimeStatsGroup{}
 	sourceGroups := map[string]*CountStatsGroup{}
 	repoAttempts := b.updateRepositoryStatsLocked(now, seen)
+	// Retry request IDs can be linked to their original task after their first
+	// workflow event. Resolve those links when computing the current total.
+	workflowTimings := make(map[string]workflowTiming, len(b.workflowTaskTimes))
+	for requestID, timing := range b.workflowTaskTimes {
+		root := stringsx.FirstNonEmpty(b.attemptRoots[requestID], requestID)
+		workflowTimings[root] = workflowTimings[root].include(timing)
+	}
 	counted := map[string]struct{}{}
 	recordAttempt := func(attempt taskAttemptState) {
 		requestID := strings.TrimSpace(attempt.RequestID)
@@ -1309,8 +1347,10 @@ func (b *Broker) dashboardStatsLocked(now time.Time, tasks []*taskState) Dashboa
 		}
 		duration := taskDuration(startedAt, updatedAt, now, status)
 		savedDuration := savedDurationForAttempt(attempt, status, duration)
-		if workflowDuration := b.workflowDurations[requestID]; workflowDuration > 0 {
-			savedDuration = workflowDuration
+		root := stringsx.FirstNonEmpty(b.attemptRoots[requestID], requestID)
+		if timing, ok := workflowTimings[root]; ok {
+			savedDuration = max(0, timing.finishedAt.Sub(timing.startedAt))
+			delete(workflowTimings, root)
 		}
 		stats.TotalSavedSeconds += savedDuration.Seconds()
 		if reviewAttempt {
@@ -1329,10 +1369,9 @@ func (b *Broker) dashboardStatsLocked(now time.Time, tasks []*taskState) Dashboa
 	for _, attempt := range seen {
 		recordAttempt(attempt)
 	}
-	for requestID, duration := range b.workflowDurations {
-		if _, ok := counted[requestID]; !ok {
-			stats.TotalSavedSeconds += duration.Seconds()
-		}
+	// A workflow can finish after its task's live monitor history is gone.
+	for _, timing := range workflowTimings {
+		stats.TotalSavedSeconds += max(0, timing.finishedAt.Sub(timing.startedAt)).Seconds()
 	}
 	terminalTasks := stats.CompletedTasks + stats.FailedTasks + stats.StoppedTasks
 	if terminalTasks > 0 {
@@ -2161,6 +2200,7 @@ func (b *Broker) forgetTaskAttemptsLocked(requestID string) {
 		delete(b.tasks, attempt.RequestID)
 		b.closedTasks[attempt.RequestID] = b.now().UTC()
 		delete(b.attemptRoots, attempt.RequestID)
+		delete(b.workflowTaskTimes, attempt.RequestID)
 	}
 	if len(kept) == 0 {
 		delete(b.attemptRoots, root)

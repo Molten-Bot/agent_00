@@ -33,23 +33,70 @@ func TestDashboardCountsWorkflowDurationOnce(t *testing.T) {
 	b := NewBroker()
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	b.now = func() time.Time { return now }
+	const workflow = " workflow_id=delivery run_id=run-1 request_id=req-42 started_at=2026-01-01T00:00:00Z"
+	b.IngestLog("workflow event=submission" + workflow + " status=running duration_ms=unknown")
+	now = now.Add(10 * time.Second)
 	b.IngestLog("task status=start request_id=req-42")
 	now = now.Add(20 * time.Second)
 	b.IngestLog("task status=completed request_id=req-42")
-	if got := b.Snapshot().Stats.TotalSavedSeconds; got != 20 {
-		t.Fatalf("task time saved = %v, want 20", got)
+	if got := b.Snapshot().Stats.TotalSavedSeconds; got != 0 {
+		t.Fatalf("task time saved before workflow completion = %v, want 0", got)
 	}
-	now = now.Add(time.Minute)
-	b.IngestLog("workflow event=transition workflow_id=delivery request_id=req-42 status=waiting duration_ms=80000")
-	if got := b.Snapshot().Stats.TotalSavedSeconds; got != 20 {
-		t.Fatalf("waiting workflow time saved = %v, want 20", got)
+	b.IngestLog("workflow event=transition" + workflow + " status=waiting reason=checks_pending duration_ms=unknown")
+	if got := b.Snapshot().Stats.TotalSavedSeconds; got != 0 {
+		t.Fatalf("waiting workflow time saved = %v, want 0", got)
 	}
-	for range 2 {
-		b.IngestLog("workflow event=transition workflow_id=delivery request_id=req-42 status=merged duration_ms=80000")
-	}
+	now = now.Add(50 * time.Second)
+	merge := "workflow event=transition" + workflow + " status=merged duration_ms=80000"
+	b.IngestLog(merge)
 	b.IngestLog("workflow event=transition workflow_id=delivery request_id=restored status=merged duration_ms=30000")
-	if got := b.Snapshot().Stats.TotalSavedSeconds; got != 110 {
-		t.Fatalf("time saved = %v, want 110", got)
+	b.IngestLog("task status=start request_id=standalone")
+	now = now.Add(15 * time.Second)
+	b.IngestLog("task status=completed request_id=standalone")
+	b.IngestLog(merge)
+	if got := b.Snapshot().Stats.TotalSavedSeconds; got != 125 {
+		t.Fatalf("time saved = %v, want 125", got)
+	}
+}
+
+func TestDashboardWorkflowTimeSavedIncludesRetryAndConfirmedExternalMerge(t *testing.T) {
+	t.Parallel()
+
+	for _, requestID := range []string{"original", "retry"} {
+		t.Run(requestID, func(t *testing.T) {
+			t.Parallel()
+			b := NewBroker()
+			now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+			b.now = func() time.Time { return now }
+			const original = " workflow_id=delivery run_id=run-1 request_id=original started_at=2026-01-01T00:00:00Z"
+			b.IngestLog("workflow event=submission" + original + " status=running duration_ms=unknown")
+			b.IngestLog("task status=start request_id=original")
+			now = now.Add(time.Minute)
+			b.IngestLog("task status=completed request_id=original")
+			b.IngestLog("workflow event=transition" + original + " status=completed reason=completed duration_ms=60000")
+			if got := b.Snapshot().Stats.TotalSavedSeconds; got != 0 {
+				t.Fatalf("workflow closed without merging = %v seconds saved, want 0", got)
+			}
+			now = now.Add(20 * time.Second)
+			if requestID != "original" {
+				b.RecordTaskRerunAttempt("original", requestID)
+			}
+			retry := " workflow_id=delivery run_id=run-2 request_id=" + requestID + " started_at=2026-01-01T00:01:20Z"
+			b.IngestLog("workflow event=submission" + retry + " status=running duration_ms=unknown")
+			b.IngestLog("task status=start request_id=" + requestID)
+			now = now.Add(10 * time.Second)
+			b.IngestLog("task status=completed request_id=" + requestID)
+			b.IngestLog("workflow event=transition" + retry + " status=completed reason=merge_unconfirmed duration_ms=10000")
+			if stats := b.Snapshot().Stats; stats.TotalSavedSeconds != 90 || stats.TotalTasks != 1 {
+				t.Fatalf("retry stats = %+v, want 90 seconds saved for one task", stats)
+			}
+			if err := b.ForgetTask(requestID); err != nil {
+				t.Fatal(err)
+			}
+			if got := b.Snapshot().Stats.TotalSavedSeconds; got != 0 {
+				t.Fatalf("time saved after forgetting task = %v, want 0", got)
+			}
+		})
 	}
 }
 

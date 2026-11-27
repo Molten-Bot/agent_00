@@ -337,12 +337,14 @@ func (e *Engine) logRun(r Run, event string) {
 	if !r.GitHubRetryAt.IsZero() {
 		reason = "github_rate_limit"
 	}
-	durationMS := "unknown"
-	if terminal(r.Status) && r.StartedAt != nil && !r.StartedAt.IsZero() &&
-		!r.UpdatedAt.IsZero() && !r.UpdatedAt.Before(*r.StartedAt) {
-		durationMS = strconv.FormatInt(r.UpdatedAt.Sub(*r.StartedAt).Milliseconds(), 10)
+	startedAt, durationMS := "unknown", "unknown"
+	if r.StartedAt != nil && !r.StartedAt.IsZero() {
+		startedAt = r.StartedAt.UTC().Format(time.RFC3339Nano)
+		if terminal(r.Status) && !r.UpdatedAt.Before(*r.StartedAt) {
+			durationMS = strconv.FormatInt(r.UpdatedAt.Sub(*r.StartedAt).Milliseconds(), 10)
+		}
 	}
-	e.Logf("workflow event=%s workflow_id=%q run_id=%q request_id=%q status=%s reason=%s duration_ms=%s", event, r.Workflow.ID, r.ID, r.RequestID, r.Status, reason, durationMS)
+	e.Logf("workflow event=%s workflow_id=%q run_id=%q request_id=%q started_at=%s status=%s reason=%s duration_ms=%s", event, r.Workflow.ID, r.ID, r.RequestID, startedAt, r.Status, reason, durationMS)
 }
 func (e *Engine) Preview(ctx context.Context, w Definition) ([]Decision, error) {
 	if err := w.Validate(); err != nil {
@@ -857,6 +859,9 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		}
 		if !i.Open {
 			r.Status, r.Reason = "completed", "Pull request closed before review writeback"
+			if i.Merged {
+				r.Reason = "Pull request was already merged when the workflow checked"
+			}
 			return finish()
 		}
 		if i.HeadSHA != receipt.Head {

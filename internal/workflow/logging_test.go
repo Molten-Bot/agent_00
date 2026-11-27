@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -51,7 +52,7 @@ func TestWorkflowLifecycleLogsAreBoundedAndDoNotRepeat(t *testing.T) {
 				if strings.Contains(line, "Private") || strings.Contains(line, "acme/repo") || strings.Contains(line, "/private/") {
 					t.Fatalf("private context leaked: %s", line)
 				}
-				for _, field := range []string{"workflow_id=", "run_id=", "request_id=", "status=", "reason="} {
+				for _, field := range []string{"workflow_id=", "run_id=", "request_id=", "started_at=" + now.Add(-3*time.Second).Format(time.RFC3339Nano), "status=", "reason="} {
 					if !strings.Contains(line, field) {
 						t.Fatalf("missing %s: %s", field, line)
 					}
@@ -67,12 +68,14 @@ func TestWorkflowTerminalTransitionDuration(t *testing.T) {
 		name            string
 		outcome         Outcome
 		workflowRemoved bool
+		alreadyMerged   bool
 		elapsed         time.Duration
 		want            string
 	}{
 		{name: "success", outcome: Outcome{Status: "succeeded"}, elapsed: 3 * time.Second, want: "status=succeeded reason=succeeded duration_ms=3000"},
 		{name: "zero elapsed", outcome: Outcome{Status: "succeeded"}, want: "status=succeeded reason=succeeded duration_ms=0"},
 		{name: "review interrupted", outcome: Outcome{Status: "failed", ReviewInterrupted: true}, elapsed: 3 * time.Second, want: "status=failed reason=external_merge duration_ms=3000"},
+		{name: "merged before review writeback", outcome: Outcome{Status: "succeeded", PendingReviewGate: &githubutil.PendingReviewGate{}}, alreadyMerged: true, elapsed: 3 * time.Second, want: "status=completed reason=merge_unconfirmed duration_ms=3000"},
 		{name: "completed without merge", outcome: Outcome{Status: "succeeded", PendingReviewGate: &githubutil.PendingReviewGate{}}, workflowRemoved: true, elapsed: 3 * time.Second, want: "status=completed reason=completed duration_ms=3000"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -87,6 +90,18 @@ func TestWorkflowTerminalTransitionDuration(t *testing.T) {
 			e.Now = func() time.Time { return start.Add(test.elapsed) }
 			var logs []string
 			e.Logf = func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }
+			if test.alreadyMerged {
+				const prURL = "https://github.com/acme/repo/pull/42"
+				test.outcome.PRURL = prURL
+				test.outcome.ReviewReceipt = fixtureReviewReceipt(w, prURL)
+				e.InspectPR = func(context.Context, string, string) (Item, error) {
+					return Item{Merged: true}, nil
+				}
+				e.FinishReview = func(context.Context, githubutil.ReviewReceipt, *githubutil.PendingReviewGate) error {
+					t.Fatal("review writeback ran after merge")
+					return nil
+				}
+			}
 
 			s, err := e.load()
 			if err != nil {

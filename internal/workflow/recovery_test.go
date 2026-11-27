@@ -305,8 +305,8 @@ func TestMergeResponseLostReconcilesMergedPullRequest(t *testing.T) {
 	w.Merge.Enabled = true
 	w.Merge.RequireApproval = false
 	e, _, _ := testEngine(t, w)
-	var lastStatus string
-	e.Logf = func(format string, args ...any) { lastStatus = args[4].(string) }
+	var lastLog string
+	e.Logf = func(format string, args ...any) { lastLog = fmt.Sprintf(format, args...) }
 	merges := 0
 	prURL := "https://github.com/acme/repo/pull/42"
 	g := GitHub{Runner: fakeRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
@@ -341,13 +341,13 @@ func TestMergeResponseLostReconcilesMergedPullRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	tick(t, e)
-	if merges != 1 || lastStatus != "waiting" {
-		t.Fatalf("after timeout merges=%d status=%s", merges, lastStatus)
+	if merges != 1 || !strings.Contains(lastLog, " status=waiting ") {
+		t.Fatalf("after timeout merges=%d log=%s", merges, lastLog)
 	}
 	tick(t, e)
 	runs, err := e.Runs()
-	if merges != 1 || lastStatus != "merged" || err != nil || len(runs) != 0 {
-		t.Fatalf("after reconciliation merges=%d status=%s runs=%+v err=%v", merges, lastStatus, runs, err)
+	if merges != 1 || !strings.Contains(lastLog, " status=merged ") || err != nil || len(runs) != 0 {
+		t.Fatalf("after reconciliation merges=%d log=%s runs=%+v err=%v", merges, lastLog, runs, err)
 	}
 }
 
