@@ -163,20 +163,29 @@ func (w Definition) ExecutionPolicyHash() string {
 }
 
 type Run struct {
-	Outcome       *Outcome   `json:"outcome,omitempty"`
-	ID            string     `json:"id"`
-	RetryOf       string     `json:"retryOf,omitempty"`
-	Workflow      Definition `json:"workflow"`
-	Item          Item       `json:"item"`
-	RequestID     string     `json:"requestId,omitempty"`
-	Status        string     `json:"status"`
-	Reason        string     `json:"reason"`
-	PRURL         string     `json:"prUrl,omitempty"`
-	MergeHead     string     `json:"mergeHead,omitempty"`
-	StartedAt     *time.Time `json:"startedAt,omitempty"`
-	UpdatedAt     time.Time  `json:"updatedAt"`
-	GitHubRetryAt time.Time  `json:"githubRetryAt,omitzero"`
+	Execution     *ExecutionPolicy `json:"execution,omitempty"`
+	Outcome       *Outcome         `json:"outcome,omitempty"`
+	ID            string           `json:"id"`
+	RetryOf       string           `json:"retryOf,omitempty"`
+	Workflow      Definition       `json:"workflow"`
+	Item          Item             `json:"item"`
+	RequestID     string           `json:"requestId,omitempty"`
+	Status        string           `json:"status"`
+	Reason        string           `json:"reason"`
+	PRURL         string           `json:"prUrl,omitempty"`
+	MergeHead     string           `json:"mergeHead,omitempty"`
+	StartedAt     *time.Time       `json:"startedAt,omitempty"`
+	UpdatedAt     time.Time        `json:"updatedAt"`
+	GitHubRetryAt time.Time        `json:"githubRetryAt,omitzero"`
 }
+
+func (r Run) ReviewPolicy() ExecutionPolicy {
+	if r.Execution != nil {
+		return *r.Execution
+	}
+	return ExecutionPolicy{ReviewCycles: r.Workflow.ReviewCycles, ReviewAgent: r.Workflow.ReviewAgent}
+}
+
 type observation struct {
 	Fingerprint string `json:"fingerprint"`
 	Generation  uint64 `json:"generation"`
@@ -469,7 +478,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 			continue
 		}
 		if w.Trigger.Event == "schedule" {
-			if err := e.tickSchedule(ctx, w, s); err != nil {
+			if err := e.tickSchedule(ctx, w, d.DefaultExecution.compose(w), s); err != nil {
 				return err
 			}
 			continue
@@ -540,7 +549,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 				continue
 			}
 			now := e.now()
-			r := Run{ID: digest([]any{obsKey, fingerprint, old.Generation}), Workflow: w, Item: i, Status: "dispatching", Reason: reason, StartedAt: &now, UpdatedAt: now}
+			r := Run{ID: digest([]any{obsKey, fingerprint, old.Generation}), Workflow: w, Execution: d.DefaultExecution.compose(w), Item: i, Status: "dispatching", Reason: reason, StartedAt: &now, UpdatedAt: now}
 			reserved := false
 			err := e.transaction(func(current *State) error {
 				if current.busy(i) {
@@ -672,6 +681,11 @@ func (e *Engine) finishSubmission(id, request string, submitErr error) error {
 			// A worker may already have recorded completion before submit returns.
 			r.Status = "failed"
 			r.Reason = "Submission failed: " + submitErr.Error()
+		}
+		if submitErr == nil && request != "" && r.RetryOf != "" {
+			if prior := s.run(r.RetryOf); prior != nil && prior.RequestID == request && prior.Workflow.ID == r.Workflow.ID {
+				prior.Status, prior.Reason = "completed", "Superseded by same-task retry"
+			}
 		}
 		result = *r
 		return nil
@@ -976,7 +990,7 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 }
 
 func (r Run) requiresReview() bool {
-	return r.Workflow.Task.Kind == "review" || r.Workflow.ReviewCycles > 0 || (r.Outcome != nil && r.Outcome.ReviewRequired)
+	return r.Workflow.Task.Kind == "review" || r.ReviewPolicy().ReviewCycles > 0 || (r.Outcome != nil && r.Outcome.ReviewRequired)
 }
 
 func (r Run) cleanReviewReceipt(outcome *Outcome) *githubutil.ReviewReceipt {
@@ -989,11 +1003,13 @@ func (r Run) cleanReviewReceipt(outcome *Outcome) *githubutil.ReviewReceipt {
 		receipt.Policy.Hash != r.Workflow.ExecutionPolicyHash() {
 		return nil
 	}
-	passes := r.Workflow.ReviewCycles
+	policy := r.ReviewPolicy()
+	passes := policy.ReviewCycles
 	if r.Workflow.Task.Kind == "review" {
 		passes = 0
 	}
-	if receipt.Policy.FixPasses != passes || receipt.Pass > passes+1 {
+	if receipt.Policy.FixPasses != passes || receipt.Pass > passes+1 ||
+		(r.Execution != nil && receipt.Policy.Complexity != policy.ReviewAgent.Complexity) {
 		return nil
 	}
 	return receipt
@@ -1015,7 +1031,7 @@ func (r Run) hasPendingReview() bool {
 // PrepareIssueRecovery retains the original event and merge policy before an
 // explicit recovery can enqueue a worker. Older journals dropped the run when
 // admission failed, even though the issue store retained the event and policy.
-func (e *Engine) PrepareIssueRecovery(workflowID, policy, eventID, retryOf string, item Item) error {
+func (e *Engine) PrepareIssueRecovery(workflowID, policy, eventID, retryOf string, item Item, execution *ExecutionPolicy) error {
 	if eventID == "" || policy == "" {
 		return fmt.Errorf("issue recovery requires a saved workflow event and policy")
 	}
@@ -1049,7 +1065,7 @@ func (e *Engine) PrepareIssueRecovery(workflowID, policy, eventID, retryOf strin
 			if s.busy(item) {
 				return fmt.Errorf("issue already has an active workflow run")
 			}
-			s.Runs = append(s.Runs, Run{ID: eventID, RetryOf: retryOf, Workflow: w, Item: item, Status: "pending_issue", Reason: "Waiting for issue claim recovery", StartedAt: &now, UpdatedAt: now})
+			s.Runs = append(s.Runs, Run{ID: eventID, RetryOf: retryOf, Workflow: w, Execution: execution, Item: item, Status: "pending_issue", Reason: "Waiting for issue claim recovery", StartedAt: &now, UpdatedAt: now})
 			return nil
 		})
 	}

@@ -27,7 +27,7 @@ func issueTaskID(issue *config.GitHubIssueConfig, policy *config.WorkflowRunConf
 		return ""
 	}
 	key := localruntime.IssueExecutionKey(issue)
-	if policy != nil {
+	if policy != nil && !policy.IsDefaultExecution() {
 		key += "/" + policy.ID
 	}
 	return fmt.Sprintf("github-issue-%x", sha256.Sum256([]byte(key)))
@@ -100,9 +100,10 @@ func (s Server) withIssueTasks(snapshot Snapshot) Snapshot {
 		if !live {
 			task.HistoryOnly = true
 			task.Error = latest.FailureDetail()
+			task.ReviewPolicy = taskReviewPolicy(latest.Run.Workflow, latest.Run.Review != nil || latest.Run.LibraryTaskName == "code-review")
 		}
 		task.PRURL = stringsx.FirstNonEmpty(latest.PRURL, task.PRURL)
-		if latest.Run.Workflow != nil {
+		if latest.Run.Workflow != nil && !latest.Run.Workflow.IsDefaultExecution() {
 			task.WorkflowID, task.WorkflowName = latest.Run.Workflow.ID, latest.Run.Workflow.Name
 			task.WorkflowTriggered = true
 			if run := delivery[latest.Run.Workflow.EventID]; run.RequestID == latest.RequestID {

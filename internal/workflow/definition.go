@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -19,12 +20,62 @@ const Version = 2
 const ActionFailedEvent = "action.failed"
 
 type Document struct {
-	LibrarySchedulesMigrated bool         `json:"librarySchedulesMigrated,omitempty"`
-	Version                  int          `json:"version"`
-	Revision                 uint64       `json:"revision"`
-	Workflows                []Definition `json:"workflows"`
-	Migration                string       `json:"migration,omitempty"`
+	DefaultExecution         *ExecutionPolicy `json:"defaultExecution,omitempty"`
+	LibrarySchedulesMigrated bool             `json:"librarySchedulesMigrated,omitempty"`
+	Version                  int              `json:"version"`
+	Revision                 uint64           `json:"revision"`
+	Workflows                []Definition     `json:"workflows"`
+	Migration                string           `json:"migration,omitempty"`
 }
+
+// ExecutionPolicy is the shared review floor and the resolved review snapshot.
+type ExecutionPolicy struct {
+	ReviewCycles int                      `json:"reviewCycles"`
+	ReviewAgent  config.ReviewAgentConfig `json:"reviewAgent"`
+}
+
+func initialExecutionPolicy() *ExecutionPolicy {
+	return &ExecutionPolicy{ReviewCycles: 1, ReviewAgent: config.ReviewAgentConfig{Complexity: "standard"}}
+}
+
+func (p *ExecutionPolicy) Validate() error {
+	if p == nil {
+		return fmt.Errorf("default execution policy is missing; configure it in Workflow")
+	}
+	if p.ReviewCycles < 1 || p.ReviewCycles > 10 {
+		return fmt.Errorf("default execution policy requires between 1 and 10 review fix passes")
+	}
+	if p.ReviewAgent.Complexity == "" {
+		return fmt.Errorf("default execution policy requires a reviewer complexity")
+	}
+	return p.ReviewAgent.Validate()
+}
+
+func (p ExecutionPolicy) compose(w Definition) *ExecutionPolicy {
+	p.ReviewCycles = max(p.ReviewCycles, w.ReviewCycles)
+	levels := []string{"easy", "standard", "advanced"}
+	if slices.Index(levels, w.ReviewAgent.Complexity) > slices.Index(levels, p.ReviewAgent.Complexity) {
+		p.ReviewAgent.Complexity = w.ReviewAgent.Complexity
+	}
+	p.ReviewAgent.Instructions = strings.TrimSpace(p.ReviewAgent.Instructions + "\n\n" + w.ReviewAgent.Instructions)
+	return &p
+}
+
+func (p ExecutionPolicy) Snapshot() *config.WorkflowRunConfig {
+	return &config.WorkflowRunConfig{
+		ID: config.DefaultExecutionWorkflowID, EventID: config.DefaultExecutionWorkflowID,
+		Name: "Default execution", ReviewCycles: p.ReviewCycles, ReviewAgent: p.ReviewAgent,
+		PolicyHash: digest(p), DefaultApplied: true,
+	}
+}
+
+func CapturedExecution(w *config.WorkflowRunConfig) *ExecutionPolicy {
+	if w == nil || !w.DefaultApplied {
+		return nil
+	}
+	return &ExecutionPolicy{ReviewCycles: w.ReviewCycles, ReviewAgent: w.ReviewAgent}
+}
+
 type Definition struct {
 	ID             string                   `json:"id"`
 	Name           string                   `json:"name"`
@@ -82,7 +133,7 @@ type Merge struct {
 var repoPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,80}$`)
 var actionWorkflowPattern = regexp.MustCompile(`^([1-9][0-9]*|[A-Za-z0-9_.-]+\.ya?ml)$`)
-var Events = []string{"schedule", "app.prompt", "app.json", "app.chat", "issue.opened", "issue.assigned", "issue.labeled", "pr.opened", "pr.assigned", "pr.labeled", "pr.ready", "pr.review_requested", "pr.changes_requested", "pr.checks_failed", ActionFailedEvent}
+var Events = []string{"schedule", "app.prompt", "app.json", "app.chat", "app.library", "issue.opened", "issue.assigned", "issue.labeled", "pr.opened", "pr.assigned", "pr.labeled", "pr.ready", "pr.review_requested", "pr.changes_requested", "pr.checks_failed", ActionFailedEvent}
 
 func contains(values []string, value string) bool {
 	for _, v := range values {
@@ -112,6 +163,9 @@ func (d Document) Validate() error {
 	return nil
 }
 func (w Definition) Validate() error {
+	if w.ID == config.DefaultExecutionWorkflowID {
+		return fmt.Errorf("workflow ID %q is reserved for the default execution policy", w.ID)
+	}
 	if !idPattern.MatchString(w.ID) || strings.TrimSpace(w.Name) == "" || len(w.Name) > 100 {
 		return fmt.Errorf("a stable ID and name (1–100 characters) are required")
 	}
@@ -202,9 +256,35 @@ func (w Definition) Validate() error {
 	return nil
 }
 func Decode(data []byte) (Document, error) {
+	return decodeDocument(data, true)
+}
+
+// DecodeUpdate leaves an omitted default unset so Save can retain the current
+// value when an older client edits only repository workflows.
+func DecodeUpdate(data []byte) (Document, error) {
+	return decodeDocument(data, false)
+}
+
+func decodeDocument(data []byte, migrate bool) (Document, error) {
+	// Older documents omitted the policy. Decode an explicit policy separately
+	// so incomplete objects and null cannot inherit the migration values.
 	var d Document
-	err := decodeStrict(data, &d)
+	wire := struct {
+		*Document
+		DefaultExecution json.RawMessage `json:"defaultExecution"`
+	}{Document: &d}
+	err := decodeStrict(data, &wire)
 	if err == nil {
+		if len(wire.DefaultExecution) != 0 {
+			if err = decodeStrict(wire.DefaultExecution, &d.DefaultExecution); err != nil {
+				return d, err
+			}
+			if err = d.DefaultExecution.Validate(); err != nil {
+				return d, err
+			}
+		} else if migrate {
+			d.DefaultExecution = initialExecutionPolicy()
+		}
 		if d.Version == 1 {
 			d.Version = Version
 		}

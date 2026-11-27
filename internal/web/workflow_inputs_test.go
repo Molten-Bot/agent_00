@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -15,6 +16,124 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/workflow"
 )
+
+func TestDefaultExecutionOnAppAdmissions(t *testing.T) {
+	t.Parallel()
+	for _, source := range []string{"prompt", "chat", "json", "library"} {
+		t.Run(source, func(t *testing.T) {
+			s, _ := inputWorkflowServer(t, "prompt")
+			doc, err := s.Workflows.Store.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			doc.Workflows = nil
+			doc.DefaultExecution.ReviewCycles = 10
+			doc.DefaultExecution.ReviewAgent.Complexity = "easy"
+			if _, err := s.Workflows.Store.Save(doc); err != nil {
+				t.Fatal(err)
+			}
+			s.Workflows.Enabled = func() bool { return false }
+			s.ReviewSettingsStatus = func(context.Context) (ReviewSettingsState, error) {
+				return ReviewSettingsState{ChatEnabled: true, JSONEnabled: true}, nil
+			}
+			s.SubmitLocalPrompt = func(_ context.Context, raw []byte) (string, error) {
+				var run config.Config
+				if err := json.Unmarshal(raw, &run); err != nil {
+					t.Fatal(err)
+				}
+				if !run.Workflow.IsDefaultExecution() || !run.Workflow.DefaultApplied || run.Prompt == "" ||
+					(source == "library" && run.LibraryTaskName != "unit-test-coverage") {
+					t.Fatalf("admitted run = %+v", run)
+				}
+				s.Broker.RecordTaskRunConfig("task", raw)
+				return "task", nil
+			}
+			body := `{"repoUrl":"https://github.com/acme/repo","prompt":"Implement feature"}`
+			handler := s.handleLocalPrompt
+			if source == "library" {
+				body = `{"repoUrl":"https://github.com/acme/repo","libraryTaskName":"unit-test-coverage"}`
+				handler = s.handleLibraryRun
+			}
+			req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+			req.Header.Set(taskSourceHeader, source)
+			res := httptest.NewRecorder()
+			handler(res, req)
+			task, ok := s.Broker.Task("task")
+			want := TaskReviewPolicy{Name: "Default execution", FixPasses: 10, Complexity: "easy"}
+			if res.Code != http.StatusAccepted || !ok || task.Source != source || task.WorkflowTriggered || task.AutoMerge || task.ReviewPolicy != want {
+				t.Fatalf("admission = %d %s, task = %+v", res.Code, res.Body.String(), task)
+			}
+		})
+	}
+}
+
+func TestCustomInputCannotLowerDefaultReviewPolicy(t *testing.T) {
+	t.Parallel()
+	s, _ := inputWorkflowServer(t, "prompt")
+	doc, err := s.Workflows.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc.DefaultExecution.ReviewCycles = 10
+	doc.DefaultExecution.ReviewAgent.Instructions = "Verify tests."
+	w := &doc.Workflows[0]
+	w.ReviewCycles = 0
+	w.ReviewAgent.Complexity = "easy"
+	w.Merge.Enabled = true
+	if _, err := s.Workflows.Store.Save(doc); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{"repoUrl":"https://github.com/acme/repo","prompt":"Implement feature","assignCreator":true}`)
+	_, err = s.submitInputWorkflow(t.Context(), body, "prompt", func(_ context.Context, raw []byte) (string, error) {
+		var run config.Config
+		if err := json.Unmarshal(raw, &run); err != nil {
+			t.Fatal(err)
+		}
+		policy := run.Workflow
+		if policy == nil || policy.ReviewCycles != 10 || policy.ReviewAgent.Complexity != "standard" ||
+			policy.ReviewAgent.Instructions != "Verify tests.\n\nCheck for regressions" ||
+			policy.PRAssignee != "maintainer" || !strings.Contains(run.Prompt, "Run focused tests") {
+			t.Fatalf("lost default policy or custom constraints: %+v", run)
+		}
+		if run.AssignCreator == nil || run.AssignCreatorEnabled() {
+			t.Fatal("custom workflow's explicit assignment setting was lost")
+		}
+		return "task", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := s.Workflows.Runs()
+	if err != nil || len(runs) != 1 || !runs[0].Workflow.Merge.Enabled || !runs[0].Workflow.Merge.RequireApproval ||
+		runs[0].ReviewPolicy().ReviewCycles != 10 {
+		t.Fatalf("journal lost gate or review snapshot: %+v, %v", runs, err)
+	}
+}
+
+func TestMissingDefaultExecutionRejectsAdmission(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	if err := os.WriteFile(s.Workflows.Store.Path, []byte(`{"version":2,"workflows":[],"defaultExecution":null}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	run := issueRunConfig(GitHubRepo{FullName: "acme/repo"}, f.issue, "reference")
+	issue, err := json.Marshal(run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range [][]byte{[]byte(`{"repoUrl":"https://github.com/acme/repo","prompt":"Implement feature"}`), issue} {
+		_, err := s.submitInputWorkflow(t.Context(), body, "prompt", func(context.Context, []byte) (string, error) {
+			t.Fatal("admitted without an execution policy")
+			return "", nil
+		})
+		if err == nil || !strings.Contains(err.Error(), "default execution policy is missing") {
+			t.Fatalf("admission error = %v", err)
+		}
+	}
+	if records, err := s.IssueClaims.List(); err != nil || len(records) != 0 || f.calls != 0 {
+		t.Fatalf("invalid policy reached claim admission: claims=%d calls=%d err=%v", len(records), f.calls, err)
+	}
+}
 
 func inputWorkflowServer(t *testing.T, source string) (Server, workflow.Definition) {
 	t.Helper()
@@ -126,8 +245,16 @@ func TestInputWorkflowFallbackRetainsOriginalSubmission(t *testing.T) {
 			calls := 0
 			_, err := s.submitInputWorkflow(t.Context(), body, source, func(_ context.Context, data []byte) (string, error) {
 				calls++
-				if string(data) != string(body) {
-					t.Fatal("changed default submission")
+				if s.Workflows == nil {
+					if string(data) != string(body) {
+						t.Fatal("changed submission without an app workflow engine")
+					}
+				} else {
+					var run config.Config
+					if err := json.Unmarshal(data, &run); err != nil || run.Prompt != "Original" ||
+						!run.Workflow.IsDefaultExecution() || run.Workflow.ReviewCycles != 1 {
+						t.Fatalf("default submission = %+v, %v", run, err)
+					}
 				}
 				return "original", nil
 			})
@@ -208,7 +335,7 @@ func TestJSONSubmissionCannotSetWorkflowMarker(t *testing.T) {
 		body       string
 		wantStatus int
 	}{
-		{"event ID only", `{"repoUrl":"https://github.com/acme/repo","prompt":"Fix endpoint","workflow":{"id":"input","eventId":"client-event"}}`, http.StatusAccepted},
+		{"event ID only", `{"repoUrl":"https://github.com/acme/repo","prompt":"Fix endpoint","workflow":{"id":"input","eventId":"client-event"}}`, http.StatusBadRequest},
 		{"encoded policy hash", `"{\"repoUrl\":\"https://github.com/acme/repo\",\"prompt\":\"Fix endpoint\",\"workflow\":{\"id\":\"input\",\"eventId\":\"client-event\",\"policyHash\":\"client-policy\"}}"`, http.StatusBadRequest},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -12,11 +12,13 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/library"
+	"github.com/Molten-Bot/agent_00/internal/workflow"
 )
 
 func TestHandleReviewSettingsStatusAndConfigure(t *testing.T) {
@@ -739,6 +741,7 @@ func TestSettingsTabbarRenderedLayoutMatchesPlaywrightSpec(t *testing.T) {
 	requireBrowserTooling(t, "rendered-layout check")
 
 	srv := NewServer("", nil)
+	srv.Workflows = &workflow.Engine{Store: &workflow.Store{Path: filepath.Join(t.TempDir(), "workflows.json")}}
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 

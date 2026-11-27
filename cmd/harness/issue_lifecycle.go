@@ -94,6 +94,9 @@ func prepareIssueExecution(store *localruntime.IssueClaimStore, run config.Confi
 		record.PublicationReady = false
 	}
 	record.State = "queued"
+	if record.Run.Workflow == nil {
+		record.Run.Workflow = run.Workflow
+	}
 	record.Error = ""
 	record.NextAttemptAt = time.Time{}
 	if err := store.BeginExecution(record); err != nil {

@@ -73,16 +73,67 @@ func (h Harness) addWorkflowPRMetadata(ctx context.Context, repo repoWorkspace, 
 	return nil
 }
 
+func (h Harness) checkoutPublishedPRs(ctx context.Context, cfg config.Config, repos []repoWorkspace, targets []string) ([]repoWorkspace, int, string, error) {
+	reposByName := make(map[string]repoWorkspace, len(repos))
+	for _, repo := range repos {
+		if ref, ok := parseGitHubRepoRef(repo.URL); ok {
+			reposByName[strings.ToLower(ref.owner+"/"+ref.name)] = repo
+		}
+	}
+	published := make([]repoWorkspace, 0, len(targets))
+	for _, target := range targets {
+		name := strings.ToLower(githubutil.PullRequestRepository(target))
+		repo, ok := reposByName[name]
+		if !ok {
+			return published, ExitPR, "pr", fmt.Errorf("PR retry target must belong to a distinct configured repository")
+		}
+		delete(reposByName, name)
+		repo.PRURL = target
+		published = append(published, repo)
+	}
+	for i := range published {
+		repo := &published[i]
+		state, err := h.loadWorkflowPRToResume(ctx, cfg, repo.PRURL)
+		if err != nil {
+			return published, ExitPR, "pr", err
+		}
+		repo.PRURL = state.URL
+		repo.RequireExistingPR = true
+		repo.ResumeWorkflowPR = true
+		repo.ResumeHead = state.HeadRefOID
+		repo.Branch = state.HeadRefName
+		repo.RequiredBranch = normalizeBranchRef(state.HeadRefName)
+		repo.PRVerification = h.IssuePRVerification
+		repo.ReviewRequired = repo.PRVerification != ""
+		if h.OnPRTitle != nil {
+			h.OnPRTitle(state.URL, state.Title)
+		}
+		if h.IssueChecksPRURL == "" {
+			if err := h.applyWorkflowPRMetadata(ctx, repoWorkspace{PRURL: repo.PRURL}, cfg.Workflow); err != nil {
+				return published, ExitPR, "pr", err
+			}
+		}
+		branch := state.HeadRefName
+		fork := workflowPRFork(state)
+		if fork != "" {
+			branch = state.BaseRefName
+		}
+		if err := h.cloneRepositories(ctx, published[i:i+1], branch); err != nil {
+			return published, ExitClone, "clone", errors.Join(ErrPRFeedbackTarget, err)
+		}
+		repo.BaseBranch = state.BaseRefName
+		repo.CreateWorkBranch = false
+		if fork != "" {
+			if err := h.checkoutWorkflowPRFork(ctx, repo, state, fork); err != nil {
+				return published, ExitGit, "git", err
+			}
+		}
+	}
+	return published, ExitSuccess, "", nil
+}
+
 func (h Harness) loadWorkflowPRToResume(ctx context.Context, cfg config.Config, target string) (prStateView, error) {
-	repos := cfg.RepoList()
-	if len(repos) != 1 {
-		return prStateView{}, fmt.Errorf("PR metadata retry requires one repository")
-	}
-	ref, ok := parseGitHubRepoRef(repos[0])
 	repository := githubutil.PullRequestRepository(target)
-	if !ok || !strings.EqualFold(repository, ref.owner+"/"+ref.name) {
-		return prStateView{}, fmt.Errorf("PR metadata retry target must belong to the configured repository")
-	}
 	loadState := h.loadPullRequestState
 	if h.IssueChecksPRURL != "" {
 		loadState = h.loadCheckPRState

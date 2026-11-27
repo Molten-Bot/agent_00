@@ -1356,11 +1356,11 @@ for (const viewport of [{ width: 1280, height: 1100 }, { width: 430, height: 932
 
 
 
-test('Workflow beta is opt-in, isolated, persistent, and disabled on direct navigation', async t => {
+test('Custom workflow execution is opt-in and the default editor stays available', async t => {
   const { page, writes } = await openSettings(t, { configurePage: async page => {
     await page.route('**/api/status', route => route.fulfill({ json: { tasks: [], events: [], repositories: [], stats: {}, resources: {} } }));
   }});
-  assert.equal(await page.locator('#workflow-dock-link').isVisible(), false);
+  assert.equal(await page.locator('#workflow-dock-link').isVisible(), true);
   await select(page, 'automation');
   assert.equal(await page.locator('#review-settings-workflow-enabled').isChecked(), false);
   await toggle(page, 'review-settings-workflow-enabled');
@@ -1381,11 +1381,11 @@ test('Workflow beta is opt-in, isolated, persistent, and disabled on direct navi
   await toggle(page, 'review-settings-workflow-enabled');
   await close(page);
   assert.equal(writes.at(-1).workflow_enabled, false);
-  assert.equal(await page.locator('#workflow-dock-link').isVisible(), false);
-  assert.equal(await page.locator('body').getAttribute('data-app-display'), 'studio');
+  assert.equal(await page.locator('#workflow-dock-link').isVisible(), true);
+  assert.equal(await page.locator('body').getAttribute('data-app-display'), 'workflow');
   await page.goto(`${baseURL}/#workflow`);
-  await page.waitForFunction(() => document.body.dataset.appDisplay === 'studio');
-  assert.equal(await page.locator('#workflow-display').isVisible(), false);
+  await page.waitForFunction(() => document.body.dataset.appDisplay === 'workflow');
+  assert.equal(await page.locator('#workflow-display').isVisible(), true);
 });
 
 test('settings omit workflow defaults and preserve migrated configuration when saving features', async t => {
@@ -1429,6 +1429,7 @@ async function openTaskRuntime(t, options = {}) {
         json: {
           tasks: [{
             request_id: 'complexity-task', status: 'running', complexity: 'standard',
+            review_policy: { name: 'Default execution', fix_passes: 10, complexity: 'easy' },
             resolved_model: 'gpt-6.2-sol', cli_version: 'codex-cli 0.171.0', model_resolution: 'model/list',
           }],
           events: [], repositories: [], stats: {}, resources: {},
@@ -1450,6 +1451,7 @@ async function openTaskRuntime(t, options = {}) {
 
 test('task runtime details appear on the complexity icon', async t => {
   const { page, task, icon, details, text } = await openTaskRuntime(t);
+  await expect(task.getByText('Default execution · Easy reviewer · 10 fix passes', { exact: true })).toBeVisible();
   await task.getByRole('button', { name: 'Open task output terminal logs.' }).focus();
   await page.keyboard.press('Shift+Tab');
   await expect(icon).toBeFocused();

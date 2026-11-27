@@ -569,10 +569,13 @@ go build -o bin/harness ./cmd/harness
 
 Local `harness serve` listens on `127.0.0.1:7777` by default.
 
-Workflow is an opt-in beta under **Settings → Features → Workflow (beta)**.
-Enable a workflow to start work from a schedule, issue, review request, or other
-trigger. Workflows define their own review, repair, merge, and branch deletion
-policies. Legacy runtime settings for these actions are inactive.
+Edit **Default execution** in the Workflow tab to set the review fix-pass budget
+and reviewer complexity for Prompt, Chat, JSON, Library, and manual GitHub Issue
+starts. New installations and older definitions without this policy start with
+one fix pass and a Standard reviewer. Set 10 passes and Easy for delivery smoke
+tests. Tasks and issue claims retain the effective policy they captured.
+Enable **Custom workflow execution (beta)** in Settings → Automation to run
+repository workflows. Automatic merge still requires its separate workflow gate.
 The React Flow editor defines an executable pipeline: repository → trigger →
 filters → task → bounded review cycles → optional merge. Select a node to edit
 its policy and drag nodes to arrange the canvas. Connections describe this
@@ -582,12 +585,11 @@ Incomplete changes leave the last saved version in place. Moving nodes alone
 does not trigger a save. Enable and Pause control whether the workflow runs.
 Preview matches is read-only.
 
-The `app.prompt`, `app.json`, and `app.chat` triggers customize single-repository
-implementation submissions from their respective app sources. An enabled override
-must be unique for that repository and source. With no matching override, the
-original submission runs unchanged. The override preserves its payload and appends
-any additional instructions; review and merge steps are optional. The canvas shows
-only the steps applicable to the selected trigger and enabled policy.
+The `app.prompt`, `app.json`, `app.chat`, and `app.library` triggers customize
+single-repository submissions from their respective app sources. Enable at most
+one matching workflow per repository and source. A matching workflow adds
+instructions and routing. The effective policy uses the higher fix-pass budget
+and reviewer complexity, with instructions from both policies.
 
 Choose a repository and a **Workflow template** to create an editable, disabled
 workflow. Templates cover labeled or assigned issues, requested PR reviews,
@@ -601,7 +603,8 @@ are checked against the backend workflow schema in tests.
 
 Definitions live in **`workflows.json` beside the runtime `config.json`** (normally
 `.agent00/workflows.json`). Export downloads this same portable format. Version 2
-uses camelCase fields and a top-level `version`, `revision`, and `workflows` array.
+uses camelCase fields with top-level `version`, `revision`, `defaultExecution`,
+and `workflows`.
 IDs remain stable when renaming a workflow. Saves use atomic replacement and
 revision checks; stale browser writes receive HTTP 409. Unknown fields, invalid
 policies, and unsupported future versions fail closed without overwriting files.
@@ -625,6 +628,7 @@ and schedule due times. Overlapping scan requests can share a polling cycle.
 {
   "version": 2,
   "revision": 0,
+  "defaultExecution": {"reviewCycles": 10, "reviewAgent": {"complexity": "easy"}},
   "workflows": [{
     "id": "implement-ready-issues",
     "name": "Implement ready issues",
@@ -673,8 +677,8 @@ configured task base branch or repository default.
 
 Issue tasks retain durable claims, reserved branches, fresh issue comments, and
 recovery. PR tasks either review and comment or repair the existing head branch.
-Review limits are 0–10 repair cycles plus a final confirmation review; review-only
-tasks perform one review. Merge supports squash/merge/rebase and optional branch
+The default allows 1–10 repair passes, plus a final confirmation review when
+the last pass makes a fix. Review-only tasks perform one review. Merge supports squash/merge/rebase and optional branch
 deletion. It waits for checks, a non-draft PR, no requested changes, and optional
 human approval from an owner, member, or collaborator on the current head, then binds the merge to the observed head commit. PRs with no
 checks remain waiting. Review writeback success alone never authorizes merging:

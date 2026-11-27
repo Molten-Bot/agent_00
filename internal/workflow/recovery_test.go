@@ -208,7 +208,7 @@ func TestIssueRecoveryReplacesPendingReviewBeforeTick(t *testing.T) {
 			if err := e.save(state); err != nil {
 				t.Fatal(err)
 			}
-			if err := e.PrepareIssueRecovery(w.ID, w.ExecutionPolicyHash(), "retry", "original", item); err != nil {
+			if err := e.PrepareIssueRecovery(w.ID, w.ExecutionPolicyHash(), "retry", "original", item, nil); err != nil {
 				t.Fatal(err)
 			}
 			runs, err := e.Runs()

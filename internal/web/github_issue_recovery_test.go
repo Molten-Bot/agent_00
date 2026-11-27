@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1061,6 +1062,91 @@ func expireIssueRetry(t *testing.T, s Server, id string) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestManualIssueReviewRecoveryRetainsDefaultExecution(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	s.Workflows.Enabled = func() bool { return false }
+	doc, err := s.Workflows.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc.Workflows = nil
+	doc.DefaultExecution.ReviewCycles = 10
+	doc.DefaultExecution.ReviewAgent.Complexity = "easy"
+	doc, err = s.Workflows.Store.Save(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SubmitLocalPrompt = func(ctx context.Context, body []byte) (string, error) {
+		if _, err := f.submit(ctx, body); err != nil {
+			return "", err
+		}
+		run := f.submissions[len(f.submissions)-1]
+		record, err := s.IssueClaims.Load(run.GitHubIssue.Claim.ID)
+		if err != nil {
+			return "", err
+		}
+		if run.GitHubIssue.Claim.Attempt > 1 {
+			s.Broker.IngestLog(fmt.Sprintf("task status=queued request_id=%s action=resume_draft_verification", record.RequestID))
+		}
+		s.Broker.RecordTaskRunConfig(record.RequestID, body)
+		return record.RequestID, nil
+	}
+	run := issueRunConfig(GitHubRepo{FullName: "acme/repo", DefaultBranch: "main"}, f.issue, "reference")
+	raw, err := json.Marshal(run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.submitInputWorkflow(t.Context(), raw, "prompt", s.SubmitLocalPrompt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := completeRecoveryRecord(t, s, workflow.OutcomeReviewPending, 1)
+	task, ok := s.Broker.Task(id)
+	want := TaskReviewPolicy{Name: "Default execution", FixPasses: 10, Complexity: "easy"}
+	if !before.Run.Workflow.IsDefaultExecution() || !ok || task.WorkflowTriggered || task.ReviewPolicy != want {
+		t.Fatalf("manual claim = %+v, task = %+v", before.Run.Workflow, task)
+	}
+	legacyID := issueTaskID(before.Run.GitHubIssue, nil)
+	const prURL = "https://github.com/acme/repo/pull/42"
+	before.PRURL = prURL
+	before.NextAttemptAt = time.Now().Add(-time.Minute)
+	if err := s.IssueClaims.Save(before); err != nil {
+		t.Fatal(err)
+	}
+	s.Broker.IngestLog(fmt.Sprintf("task status=error request_id=%s pr_url=%s err=%q", id, prURL, "review pending"))
+	doc.DefaultExecution.ReviewCycles = 2
+	doc.DefaultExecution.ReviewAgent.Complexity = "advanced"
+	if _, err := s.Workflows.Store.Save(doc); err != nil {
+		t.Fatal(err)
+	}
+	f.prs = recoveryPR("open", "null", before.Run.GitHubIssue.Claim.Branch, "main")
+	if err := s.ReconcileIssueWork(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	after := latestRecoveryRecord(t, s)
+	expected := *before.Run.Workflow
+	expected.ResumePRURL = prURL
+	if len(f.submissions) != 2 || after.RequestID != id || !reflect.DeepEqual(after.Run.Workflow, &expected) ||
+		after.Run.GitHubIssue.Claim.Branch != before.Run.GitHubIssue.Claim.Branch {
+		t.Fatalf("retry did not retain task, policy, branch, and PR: %+v", after)
+	}
+	tasks := s.Broker.TaskList()
+	if len(tasks) != 1 || tasks[0].RequestID != id || tasks[0].Status != "pending" || tasks[0].ReviewPolicy != want {
+		t.Fatalf("retry did not reuse the visible task: %+v", tasks)
+	}
+	tasks = s.snapshot().Tasks
+	if len(tasks) != 1 || tasks[0].TaskID != legacyID || tasks[0].WorkflowTriggered || tasks[0].WorkflowID != "" ||
+		tasks[0].ReviewPolicy != want || len(tasks[0].IssueAttempts) != 2 {
+		t.Fatalf("issue snapshot did not retain manual task identity, policy, and attempts: %+v", tasks)
+	}
+	s.Broker = NewBroker()
+	tasks = s.snapshot().Tasks
+	if len(tasks) != 1 || tasks[0].TaskID != legacyID || !tasks[0].HistoryOnly || tasks[0].ReviewPolicy != want {
+		t.Fatalf("restored issue snapshot did not retain manual task identity and policy: %+v", tasks)
 	}
 }
 

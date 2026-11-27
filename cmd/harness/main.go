@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -353,7 +354,18 @@ func runServer(args []string) int {
 	githubCooldown := &githubutil.Cooldown{Logf: daemonLogger}
 	var workflowEngine *workflow.Engine
 	var enqueueLocalRun func(reqCtx context.Context, runCfg config.Config, source string, force bool) (string, error)
+	var reviewResumeMu sync.Mutex
 	enqueueLocalRun = func(reqCtx context.Context, runCfg config.Config, source string, force bool) (string, error) {
+		if runCfg.Workflow == nil {
+			if workflowEngine == nil {
+				return "", fmt.Errorf("default execution policy store is unavailable")
+			}
+			policy, err := workflowEngine.Store.DefaultExecution()
+			if err != nil {
+				return "", err
+			}
+			runCfg.Workflow = policy.Snapshot()
+		}
 		if err := persistentLogs.Error(); err != nil {
 			return "", fmt.Errorf("task log storage unavailable: %w", err)
 		}
@@ -462,6 +474,10 @@ func runServer(args []string) int {
 		if repairWork != nil {
 			requestID = repairWork.record.RequestID
 		}
+		resumeRequestID, _ := reqCtx.Value(reviewResumeTaskKey{}).(string)
+		if resumeRequestID != "" {
+			requestID = resumeRequestID
+		}
 		if dedupeKey != "" {
 			if accepted, state, duplicateOf := localSubmitDeduper.Begin(dedupeKey, requestID, allowCompletedDuplicate); !accepted {
 				daemonLogger(
@@ -475,8 +491,8 @@ func runServer(args []string) int {
 		}
 		runCtx, cancelRun := context.WithCancelCause(ctx)
 		taskHandle := localTaskController.Register(requestID, cancelRun)
-		if issueWork != nil && (issueWork.record.Outcome == localruntime.IssueChecksPending ||
-			(runCfg.GitHubIssue.Claim.Attempt > 1 && requestID != "issue-"+issueWork.record.ID)) {
+		if resumeRequestID != "" || (issueWork != nil && (issueWork.record.Outcome == localruntime.IssueChecksPending ||
+			(runCfg.GitHubIssue.Claim.Attempt > 1 && requestID != "issue-"+issueWork.record.ID))) {
 			daemonLogger("task status=queued request_id=%s action=resume_draft_verification", requestID)
 		}
 		if runConfigJSON, ok := marshalRunConfigJSON(runCfg); ok {
@@ -743,7 +759,7 @@ func runServer(args []string) int {
 						daemonLogger("task status=warn action=save_review_outcome request_id=%s err=%q", requestID, reviewArchiveErr)
 					}
 				}
-				if runCfg.Workflow != nil && workflowEngine != nil {
+				if runCfg.Workflow != nil && !runCfg.Workflow.IsDefaultExecution() && !runCfg.Workflow.DetachedReview && workflowEngine != nil {
 					if err := workflowEngine.Complete(runCfg.Workflow.EventID, reviewOutcome); err != nil && !(source == rerunSource && errors.Is(err, workflow.ErrActivationNotFound)) {
 						daemonLogger("workflow status=error action=complete err=%q", err)
 					}
@@ -936,6 +952,18 @@ func runServer(args []string) int {
 			}
 			recordLibraryUsage(runCfg)
 			task, _ := monitorBroker.Task(requestID)
+			if resumePublishedTask(task, &runCfg) {
+				reviewResumeMu.Lock()
+				defer reviewResumeMu.Unlock()
+				if _, err := localTaskController.handleFor(requestID); err == nil {
+					return "", fmt.Errorf("task already has an active worker")
+				}
+				current, ok := monitorBroker.Task(requestID)
+				if !ok || current.StatusRevision != task.StatusRevision {
+					return "", fmt.Errorf("task changed before retry; refresh its status")
+				}
+				reqCtx = context.WithValue(reqCtx, reviewResumeTaskKey{}, requestID)
+			}
 			return retryWorkflowTask(reqCtx, workflowEngine, task, runCfg, func(retryCfg config.Config) (string, error) {
 				return enqueueLocalRun(reqCtx, retryCfg, rerunSource, force)
 			})
@@ -1483,12 +1511,13 @@ func runLocalTask(
 			res.Err = stopErr
 		}
 		logf(
-			"task status=stopped request_id=%s exit_code=%d workspace=%s branch=%s pr_url=%s err=%q",
+			"task status=stopped request_id=%s exit_code=%d workspace=%s branch=%s pr_url=%s pr_urls=%s err=%q",
 			requestID,
 			res.ExitCode,
 			res.WorkspaceDir,
 			res.Branch,
 			res.PRURL,
+			joinAllPRURLs(res.RepoResults),
 			stopErr,
 		)
 		return localTaskOutcome{State: "stopped", Result: res}
@@ -1508,12 +1537,13 @@ func runLocalTask(
 	}
 	if res.Err != nil {
 		logf(
-			"task status=error request_id=%s exit_code=%d workspace=%s branch=%s pr_url=%s err=%q",
+			"task status=error request_id=%s exit_code=%d workspace=%s branch=%s pr_url=%s pr_urls=%s err=%q",
 			requestID,
 			res.ExitCode,
 			res.WorkspaceDir,
 			res.Branch,
 			res.PRURL,
+			joinAllPRURLs(res.RepoResults),
 			res.Err,
 		)
 		return localTaskOutcome{State: "error", Result: res}
