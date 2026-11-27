@@ -266,7 +266,12 @@ type Harness struct {
 	// AgentHeartbeatInterval controls running-status log cadence while an agent is executing.
 	// Zero or negative uses the default interval.
 	AgentHeartbeatInterval time.Duration
-	// PRChecksWatchTimeout bounds gh pr checks --watch and draft verification polling when positive.
+	// CheckTimings shares observed GitHub check durations across daemon tasks.
+	CheckTimings *CheckTimings
+	// Suspend scheduler admission while only GitHub evidence is needed.
+	ReleaseWorkspace func()
+	AcquireWorkspace func(context.Context) error
+	// PRChecksWatchTimeout bounds checks and draft verification polling when positive.
 	// Zero uses the default timeout. Negative disables the watch timeout and skips draft polling.
 	PRChecksWatchTimeout time.Duration
 	// FinalReviewPasses limits fixes during the post-task review cycle.
@@ -395,6 +400,17 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	}
 	h.logf("stage=auth status=ok")
 
+	if h.IssueChecksPRURL != "" && h.AcquireWorkspace != nil {
+		if err := h.waitForResumedChecks(ctx, h.IssueChecksPRURL); err != nil {
+			if errors.Is(err, githubutil.ErrReviewInterrupted) {
+				return Result{ExitCode: ExitSuccess, PRURL: h.IssueChecksPRURL, ReviewInterrupted: true}
+			}
+			return h.fail(ExitPR, "checks", err, "")
+		}
+		if err := h.requireWorkspace(ctx); err != nil {
+			return h.fail(ExitWorkspace, "workspace", err, "")
+		}
+	}
 	h.logf("stage=workspace status=start")
 	// Read-only sandboxes replace /dev, hiding RAM checkouts under /dev/shm.
 	// Allocate on disk before cloning, including implementation runs that
@@ -1084,6 +1100,9 @@ func (h Harness) finalizePullRequestReview(
 			evidence.commits, err = h.loadDraftPatchCommits(ctx, *repo)
 		}
 		if err == nil {
+			if err := h.requireWorkspace(ctx); err != nil {
+				return ExitWorkspace, "workspace", err
+			}
 			h.logf("stage=pr_verification status=start action=verify_handoff")
 			err = h.verifyDraftHandoff(ctx, *repo, runtime, codexOpts, evidence)
 		}
@@ -1368,6 +1387,13 @@ func (h Harness) checkPublishedPullRequest(
 ) (exitCode int, stage string, resultErr error) {
 	preserveIssueTitle := cfg.GitHubIssue != nil
 	var checkHead string
+	defer func() {
+		if resultErr == nil {
+			if err := h.requireWorkspace(ctx); err != nil {
+				exitCode, stage, resultErr = ExitWorkspace, "workspace", err
+			}
+		}
+	}()
 	// A watch follows a PR number, so bracket its result with reads of the
 	// published commit. Review only starts once checks are tied to that head.
 	if repo.IssueClaimBranch {
@@ -1397,6 +1423,7 @@ func (h Harness) checkPublishedPullRequest(
 			checkErr     error
 			checkSummary string
 		)
+		noReportBudget := maxPRChecksNoReportRetries * prChecksNoReportRetryDelay
 		for noReportRetry := 0; ; noReportRetry++ {
 			requiredChecksOnly := false
 			confirmedFailure := false
@@ -1598,6 +1625,7 @@ func (h Harness) checkPublishedPullRequest(
 				}
 				if recreated {
 					noReportRetry = -1
+					noReportBudget = maxPRChecksNoReportRetries * prChecksNoReportRetryDelay
 					continue
 				}
 			}
@@ -1631,7 +1659,7 @@ func (h Harness) checkPublishedPullRequest(
 					)
 				}
 			}
-			if noChecksReported && noReportRetry >= maxPRChecksNoReportRetries {
+			if noChecksReported && noReportBudget <= 0 {
 				if noRequired, noRequiredSummary, requiredErr := h.reconcileNoChecksWithRequiredStatusChecks(ctx, *repo); requiredErr == nil {
 					if noRequired {
 						if noRequiredSummary != "" {
@@ -1687,7 +1715,7 @@ func (h Harness) checkPublishedPullRequest(
 					)
 				}
 			}
-			if noReportRetry >= maxPRChecksNoReportRetries || !noChecksReported {
+			if noReportBudget <= 0 || !noChecksReported {
 				if repo.IssueClaimBranch && !confirmedFailure {
 					snapshot, _ := latestCheckSnapshotFromText(checkRes.Stdout)
 					if !snapshot.HasFailures {
@@ -1700,18 +1728,24 @@ func (h Harness) checkPublishedPullRequest(
 				break
 			}
 
+			poll := newCheckPoll("checks", repo.PRURL)
+			delay := min(noReportBudget, max(prChecksNoReportRetryDelay, poll.delay(h)))
 			h.logf(
-				"stage=checks status=waiting reason=no_checks_reported repo=%s repo_dir=%s pr_url=%s attempt=%d retry=%d/%d",
+				"stage=checks status=waiting action=wait_for_github_checks reason=no_checks_reported repo=%s repo_dir=%s pr_url=%s attempt=%d retry=%d/%d last_github_refresh=%q next_poll_s=%d",
 				repo.URL,
 				repo.RelDir,
 				repo.PRURL,
 				attempt+1,
 				noReportRetry+1,
 				maxPRChecksNoReportRetries,
+				time.Now().UTC().Format(time.RFC3339),
+				int(delay.Seconds()),
 			)
-			if err := h.Sleep(ctx, prChecksNoReportRetryDelay); err != nil {
+			h.suspendWorkspace()
+			if err := h.Sleep(ctx, delay); err != nil {
 				return ExitPR, "checks", err
 			}
+			noReportBudget -= delay
 		}
 
 		if repo.IssueClaimBranch {
@@ -1745,6 +1779,9 @@ func (h Harness) checkPublishedPullRequest(
 			)
 		}
 
+		if err := h.requireWorkspace(ctx); err != nil {
+			return ExitWorkspace, "workspace", err
+		}
 		repairPrompt := remediationPromptForRepo(
 			codexBasePrompt,
 			repo.RelDir,
@@ -1914,6 +1951,9 @@ func (h Harness) recreatePullRequestIfClosed(ctx context.Context, repo *repoWork
 		return false, nil
 	}
 
+	if err := h.requireWorkspace(ctx); err != nil {
+		return false, err
+	}
 	oldPRURL := repo.PRURL
 	oldBranch := repo.Branch
 	pushRemote := repoPushRemote(*repo)
@@ -6135,22 +6175,23 @@ func diskSpaceExhaustionError(cmd execx.Command, res execx.Result, err error) er
 }
 
 func (h Harness) runPRChecksWatch(ctx context.Context, repoDir, prURL string) (execx.Result, error) {
-	return h.runPRChecksWatchCommand(ctx, prChecksCommand(repoDir, prURL))
+	return h.runPRChecksWatchCommand(ctx, prChecksCommand(repoDir, prURL), prURL)
 }
 
 func (h Harness) runPRChecksAnyWatch(ctx context.Context, repoDir, prURL string) (execx.Result, error) {
-	return h.runPRChecksWatchCommand(ctx, prChecksAnyCommand(repoDir, prURL))
+	return h.runPRChecksWatchCommand(ctx, prChecksAnyCommand(repoDir, prURL), prURL)
 }
 
-func (h Harness) runPRChecksWatchCommand(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+func (h Harness) runPRChecksWatchCommand(ctx context.Context, cmd execx.Command, prURL string) (execx.Result, error) {
 	waitForReset := h.WaitForGitHub && !h.ResumeIssueWorkspace
 	h.WaitForGitHub = false
 	for {
-		res, err := h.watchPRChecks(ctx, cmd)
+		res, err := h.watchPRChecks(ctx, cmd, prURL)
 		var rate *githubutil.RateLimitError
 		if !waitForReset || !errors.As(err, &rate) {
 			return res, err
 		}
+		h.suspendWorkspace()
 		h.logf("stage=checks status=waiting action=github_rate_limit retry_at=%s", rate.RetryAt.UTC().Format(time.RFC3339))
 		if waitErr := h.GitHubCooldown.Wait(ctx, rate.RetryAt); waitErr != nil {
 			return res, errors.Join(err, waitErr)
@@ -6158,7 +6199,7 @@ func (h Harness) runPRChecksWatchCommand(ctx context.Context, cmd execx.Command)
 	}
 }
 
-func (h Harness) watchPRChecks(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+func (h Harness) watchPRChecks(ctx context.Context, cmd execx.Command, prURL string) (execx.Result, error) {
 	watchCtx := ctx
 	if timeout := h.prChecksWatchTimeout(); timeout > 0 {
 		var cancel context.CancelFunc
@@ -6167,12 +6208,13 @@ func (h Harness) watchPRChecks(ctx context.Context, cmd execx.Command) (execx.Re
 	}
 	var res execx.Result
 	var err error
-	if h.GitHubCooldown.TracksRequests() {
+	if h.CheckTimings != nil || h.GitHubCooldown.TracksRequests() {
 		// Give each check read its own permit so gh cannot keep polling
 		// internally after another client has observed a cooldown.
 		cmd.Args = cmd.Args[:3]
-		res, err = h.pollPRChecks(watchCtx, cmd)
+		res, err = h.pollPRChecks(watchCtx, cmd, prURL)
 	} else {
+		h.suspendWorkspace()
 		res, err = h.runCheckQuery(watchCtx, "checks", cmd, 0)
 	}
 	if errors.Is(context.Cause(watchCtx), errPRChecksWatchTimeout) {
@@ -6181,19 +6223,28 @@ func (h Harness) watchPRChecks(ctx context.Context, cmd execx.Command) (execx.Re
 	return res, err
 }
 
-func (h Harness) pollPRChecks(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+func (h Harness) pollPRChecks(ctx context.Context, cmd execx.Command, prURL string) (execx.Result, error) {
 	sleep := h.Sleep
 	if sleep == nil {
 		sleep = sleepWithContext
 	}
+	poll := newCheckPoll("checks", prURL)
+	waited := false
 	for {
 		res, err := h.runCheckQuery(ctx, "checks", cmd, checkQueryTimeout)
-		var exit interface{ ExitCode() int }
+		snapshot, _ := latestCheckSnapshotFromText(res.Stdout)
 		// gh pr checks exits 8 while checks are still pending.
-		if !errors.As(err, &exit) || exit.ExitCode() != 8 {
+		if !checkWatchPending(err) {
+			if waited && (err == nil || snapshot.HasFailures) {
+				poll.finish(h)
+			}
 			return res, err
 		}
-		if err := sleep(ctx, prChecksWatchIntervalSeconds*time.Second); err != nil {
+		waited = true
+		h.suspendWorkspace()
+		delay := poll.delay(h)
+		poll.report(h, "wait_for_github_checks", "", snapshot.Pending, time.Now(), delay)
+		if err := sleep(ctx, delay); err != nil {
 			return res, err
 		}
 	}
@@ -10115,6 +10166,7 @@ func (h Harness) latestChecks(ctx context.Context, repo repoWorkspace, requiredO
 type latestChecksSnapshot struct {
 	AllPassing  bool
 	HasFailures bool
+	Pending     []string
 	Summary     string
 }
 
@@ -10197,21 +10249,24 @@ func latestCheckSnapshotFromStates(latestByName map[string]latestCheckState) lat
 	lines := make([]string, 0, len(names))
 	allPassing := true
 	hasFailures := false
+	var pending []string
 	for _, name := range names {
 		state := latestByName[name]
 		lines = append(lines, fmt.Sprintf("%s\t%s", name, state.Bucket))
 		switch state.Bucket {
-		case "pass", "skipping":
+		case "pass", "skipping", "skipped":
 		case "fail", "cancel", "cancelled", "timed_out", "action_required":
 			allPassing = false
 			hasFailures = true
 		default:
 			allPassing = false
+			pending = append(pending, name)
 		}
 	}
 	return latestChecksSnapshot{
 		AllPassing:  allPassing,
 		HasFailures: hasFailures,
+		Pending:     pending,
 		Summary:     strings.Join(lines, "\n"),
 	}
 }

@@ -360,6 +360,7 @@ func runServer(args []string) int {
 	var wakeIssueRecovery func()
 	var verifyIssueOwnership func(context.Context, config.Config) error
 	githubCooldown := &githubutil.Cooldown{Logf: daemonLogger}
+	checkTimings := &app.CheckTimings{}
 	var workflowEngine *workflow.Engine
 	var enqueueLocalRun func(reqCtx context.Context, runCfg config.Config, source string, force bool) (string, error)
 	var reviewResumeMu sync.Mutex
@@ -566,6 +567,11 @@ func runServer(args []string) int {
 			if issueWork != nil {
 				logIssueWorkspaceStorage(diskRequest.ExistingDir, requestID, daemonLogger)
 			}
+			lease := &taskWorkspaceLease{
+				scheduler: scheduler, requestID: requestID, handle: taskHandle,
+				logf: daemonLogger, timings: checkTimings,
+			}
+			defer lease.suspend()
 			forceRetry := false
 			for {
 				if taskHandle != nil {
@@ -591,12 +597,17 @@ func runServer(args []string) int {
 				settings := signingSettings(activeCfg, runner)
 				forceAcquire := forceRetry
 				var workspaceRoot string
+				remoteResume := issueWork != nil && issueWork.record.Outcome == localruntime.IssueChecksPending && issueWork.record.PRURL != ""
 				admission := prepareLocalTaskAdmission(
 					runCtx,
 					taskHandle,
 					settings.ValidatedSnapshot,
 					settings.TryValidatedSnapshot,
 					func() (func(), error) {
+						if remoteResume {
+							workspaceRoot = diskRequest.Workspace.Root
+							return func() {}, nil
+						}
 						acquireCtx, cancelAcquire := context.WithCancel(runCtx)
 						if taskHandle != nil {
 							taskHandle.SetAcquireCancel(cancelAcquire)
@@ -713,7 +724,14 @@ func runServer(args []string) int {
 				taskWorkspace := diskRequest.Workspace
 				taskWorkspace.Root = workspaceRoot
 				canRetryWorkspace := diskRequest.RetryRoot == "" && canRetryTaskWorkspace(diskRequest.Workspace)
-				outcome := runLocalTask(context.WithValue(runCtx, githubCooldownContextKey{}, githubCooldown), taskRunner, daemonLogger, "local", requestID, runCfg, taskReviewPasses(runCfg), taskHandle, signingSnapshot, monitorBroker, taskWorkspace, func(runDir string) {
+				lease.disk = diskRequest
+				lease.disk.Workspace.Root = workspaceRoot
+				if !remoteResume {
+					lease.release = release
+				}
+				taskCtx := context.WithValue(runCtx, githubCooldownContextKey{}, githubCooldown)
+				taskCtx = context.WithValue(taskCtx, taskWorkspaceLeaseKey{}, lease)
+				outcome := runLocalTask(taskCtx, taskRunner, daemonLogger, "local", requestID, runCfg, taskReviewPasses(runCfg), taskHandle, signingSnapshot, monitorBroker, taskWorkspace, func(runDir string) {
 					recordLocalTaskDiskUsage(diskHistory, diskKey, requestID, runDir, daemonLogger)
 				}, canRetryWorkspace)
 				if taskHandle != nil {
@@ -721,7 +739,7 @@ func runServer(args []string) int {
 				}
 				if outcome.State == "retry_workspace" {
 					daemonLogger("task status=warn action=retry_workspace_allocation request_id=%s err=%q", requestID, outcome.Result.Err)
-					release()
+					lease.suspend()
 					diskRequest.RetryRoot = workspaceRoot
 					if errors.Is(outcome.Result.Err, os.ErrPermission) {
 						diskRequest.PermissionDeniedRoot = workspaceRoot
@@ -733,7 +751,6 @@ func runServer(args []string) int {
 					}
 					continue
 				}
-				defer release()
 
 				reviewOutcome := workflow.Outcome{
 					Status: "succeeded", PRURL: outcome.Result.PRURL, Reason: "Task completed",
@@ -1468,6 +1485,11 @@ func runLocalTask(
 
 	h := app.New(runner)
 	h.Workspace = taskWorkspace
+	if lease, ok := ctx.Value(taskWorkspaceLeaseKey{}).(*taskWorkspaceLease); ok {
+		h.CheckTimings = lease.timings
+		h.ReleaseWorkspace = lease.suspend
+		h.AcquireWorkspace = lease.acquire
+	}
 	if cooldown, ok := ctx.Value(githubCooldownContextKey{}).(*githubutil.Cooldown); ok {
 		h.GitHubCooldown = cooldown
 		h.WaitForGitHub = true

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/Molten-Bot/agent_00/internal/app"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
@@ -122,5 +123,60 @@ func recordLocalTaskDiskUsage(history *localruntime.TaskDiskHistory, key, reques
 	}
 	if err != nil {
 		logf("scheduler status=warn action=record_task_disk_usage request_id=%s err=%q", requestID, err)
+	}
+}
+
+type taskWorkspaceLeaseKey struct{}
+
+// The task goroutine owns this lease. A remote wait releases both its disk
+// reservation and scheduler slot while keeping the task and checkout intact.
+type taskWorkspaceLease struct {
+	scheduler *localruntime.AdaptiveScheduler
+	requestID string
+	disk      localruntime.TaskDiskRequest
+	handle    *localTaskHandle
+	logf      func(string, ...any)
+	timings   *app.CheckTimings
+	release   func()
+}
+
+func (l *taskWorkspaceLease) suspend() {
+	if l.release != nil {
+		l.release()
+		l.release = nil
+	}
+}
+
+func (l *taskWorkspaceLease) acquire(ctx context.Context) error {
+	if l.release != nil {
+		return nil
+	}
+	l.logf("task status=queued request_id=%s action=wait_for_workspace", l.requestID)
+	l.handle.SetRunning(false)
+	force := false
+	for {
+		if err := l.handle.WaitUntilRunnable(ctx); err != nil {
+			return err
+		}
+		acquireCtx, cancel := context.WithCancel(ctx)
+		l.handle.SetAcquireCancel(cancel)
+		force = l.handle.ConsumeForceAcquire() || force
+		_, release, err := l.scheduler.AcquireWorkspace(acquireCtx, l.requestID, l.disk, force)
+		l.handle.ClearAcquireCancel(cancel)
+		cancel()
+		if err != nil {
+			if ctx.Err() == nil && errors.Is(err, context.Canceled) && (force || l.handle.IsPaused() || l.handle.HasForceAcquire()) {
+				continue
+			}
+			return err
+		}
+		if l.handle.IsPaused() || l.handle.IsStopped() {
+			release()
+			continue
+		}
+		l.release = release
+		l.handle.SetRunning(true)
+		l.logf("task status=admitted request_id=%s action=resume_workspace", l.requestID)
+		return nil
 	}
 }

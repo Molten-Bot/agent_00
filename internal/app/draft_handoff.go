@@ -28,11 +28,10 @@ func stoppedDraftReview(repo repoWorkspace) (int, string, error) {
 }
 
 const (
-	draftVerificationPollInterval = 10 * time.Second
-	draftHandoffPrefix            = "Draft handoff:"
-	maxPRVerificationLength       = 4096
-	draftHandoffStandard          = "Verify the submitted clean review and configured PR checks on the published head."
-	draftHandoffInstructions      = "\n\nFor a claimed issue with changes, complete implementation and all applicable local checks before handing off. " +
+	draftHandoffPrefix       = "Draft handoff:"
+	maxPRVerificationLength  = 4096
+	draftHandoffStandard     = "Verify the submitted clean review and configured PR checks on the published head."
+	draftHandoffInstructions = "\n\nFor a claimed issue with changes, complete implementation and all applicable local checks before handing off. " +
 		"Report the implementation and local results, then end your final response with one plain-text line of the form `Draft handoff: <specific PR evidence to verify and what must pass>`. " +
 		"If local checks cover all implementation criteria, use this exact line: `Draft handoff: " + draftHandoffStandard + "`. " +
 		"The harness will publish the changes as a draft and verify them after GitHub review, before marking the PR ready. " +
@@ -113,6 +112,7 @@ type draftVerificationWait struct {
 	requiredChecks []string
 	policyLoaded   bool
 	pendingChecks  []string
+	checksPassed   bool
 	lastRefresh    time.Time
 }
 
@@ -125,6 +125,8 @@ func (h Harness) waitForDraftVerificationEvidence(ctx context.Context, repo repo
 		sleep = sleepWithContext
 	}
 	wait := draftVerificationWait{observedChecks: make(map[string]bool)}
+	poll := newCheckPoll("pr_verification", repo.PRURL)
+	waitedForChecks := false
 	confirmRestoredDraft := true
 	for remaining := h.prChecksWatchTimeout(); ; {
 		evidence, err := h.collectDraftVerificationEvidence(ctx, repo, &wait)
@@ -134,29 +136,30 @@ func (h Harness) waitForDraftVerificationEvidence(ctx context.Context, repo repo
 			confirmRestoredDraft = false
 			continue
 		}
+		if waitedForChecks && wait.checksPassed {
+			poll.finish(h)
+			waitedForChecks = false
+		}
 		if !errors.Is(err, ErrReviewPending) || remaining <= 0 {
 			return evidence, err
 		}
-		h.logDraftVerificationWait(repo, wait.pendingChecks, wait.lastRefresh)
-		delay := min(remaining, draftVerificationPollInterval)
+		h.suspendWorkspace()
+		delay := min(remaining, checkPollDelay(0, 0))
+		if errors.Is(err, errDraftChecksPending) {
+			waitedForChecks = true
+			delay = min(remaining, poll.delay(h))
+		}
+		var head string
+		if repo.ReviewReceipt != nil {
+			head = repo.ReviewReceipt.Head
+		}
+		h.step("pr_verification")
+		poll.report(h, "wait_for_reviewed_head_evidence", head, wait.pendingChecks, wait.lastRefresh, delay)
 		if err := sleep(ctx, delay); err != nil {
 			return nil, err
 		}
 		remaining -= delay
 	}
-}
-
-func (h Harness) logDraftVerificationWait(repo repoWorkspace, pendingChecks []string, refreshedAt time.Time) {
-	var head, refresh string
-	if repo.ReviewReceipt != nil {
-		head = repo.ReviewReceipt.Head
-	}
-	if !refreshedAt.IsZero() {
-		refresh = refreshedAt.UTC().Format(time.RFC3339)
-	}
-	h.step("pr_verification")
-	h.logf("stage=pr_verification status=waiting action=wait_for_reviewed_head_evidence reviewed_head=%q pending_checks=%q last_github_refresh=%q",
-		head, strings.Join(pendingChecks, ", "), refresh)
 }
 
 func (h Harness) collectDraftVerificationEvidence(ctx context.Context, repo repoWorkspace, wait *draftVerificationWait) (*draftVerificationEvidence, error) {
@@ -184,6 +187,7 @@ func (h Harness) collectDraftVerificationEvidence(ctx context.Context, repo repo
 	}
 	wait.lastRefresh = time.Now()
 	wait.pendingChecks = nil
+	wait.checksPassed = false
 	if state.State == "MERGED" {
 		return nil, errMergedBeforeDraftVerification
 	}
@@ -293,6 +297,7 @@ func (h Harness) collectDraftVerificationEvidence(ctx context.Context, repo repo
 		return nil, fmt.Errorf("%w: missing result for observed draft check %q", errDraftChecksPending, wait.pendingChecks[0])
 	}
 
+	wait.checksPassed = true
 	rawReview, err := readGH(ctx, "api", fmt.Sprintf("%s/%d", githubutil.ReviewEndpoint(receipt.PRURL), receipt.ReviewID))
 	if err != nil {
 		return nil, fmt.Errorf("load submitted review %d for draft verification: %w", receipt.ReviewID, err)

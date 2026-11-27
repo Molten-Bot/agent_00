@@ -201,6 +201,7 @@ func (h Harness) loadDraftPatchCommits(ctx context.Context, repo repoWorkspace) 
 		sleep = sleepWithContext
 	}
 	confirmRestoredDraft := true
+	poll := newCheckPoll("pr_verification", repo.PRURL)
 	for remaining := h.prChecksWatchTimeout(); ; {
 		res, err := h.runCheckQuery(ctx, "pr_verification", cmd, checkQueryTimeout)
 		if err != nil {
@@ -240,8 +241,9 @@ func (h Harness) loadDraftPatchCommits(ctx context.Context, repo repoWorkspace) 
 		if remaining <= 0 {
 			return draftPatchCommits{}, errDraftRestoring
 		}
-		h.logDraftVerificationWait(repo, nil, refreshedAt)
-		delay := min(remaining, draftVerificationPollInterval)
+		h.suspendWorkspace()
+		delay := min(remaining, checkPollDelay(0, 0))
+		poll.report(h, "wait_for_reviewed_head_evidence", repo.ReviewedPatch.commits.Head, nil, refreshedAt, delay)
 		if err := sleep(ctx, delay); err != nil {
 			return draftPatchCommits{}, err
 		}

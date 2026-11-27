@@ -11993,6 +11993,17 @@
       const taskStatus = normalizedTaskStatus(task?.status);
       progress.classList.toggle("is-running", taskStatus === "running" || taskStatus === "active");
 
+      const waitingForWorkspace = taskStatus === "pending" && task.stage_status === "waiting_workspace";
+      const waitingStage = ["checks", "review_checks", "pr_verification"].includes(task.stage);
+      const waitingForGitHub = waitingStage && task.stage_status === "waiting" &&
+        (taskStatus === "running" || taskStatus === "pending");
+      const wait = waitingForGitHub && task.logs?.findLast(log => {
+        if (log.stream !== "meta" || parseTaskProgressField(log.text, "stage") !== task.stage) return false;
+        return ["wait_for_github_checks", "wait_for_reviewed_head_evidence"].includes(parseTaskProgressField(log.text, "action"));
+      });
+      const pendingChecks = wait && parseTaskProgressField(wait.text, "pending_checks");
+      const showGitHubIcon = waitingForGitHub && (task.stage !== "pr_verification" || Boolean(pendingChecks));
+
       const track = document.createElement("div");
       track.className = "task-progress-track";
 
@@ -12040,7 +12051,11 @@
           stateText = "current";
         }
 
-        appendTaskStepIcon(marker, step, task);
+        if (i === index && showGitHubIcon) {
+          appendTaskStepIcon(marker, { ...step, icon: "github", label: "GitHub checks" }, task);
+        } else {
+          appendTaskStepIcon(marker, step, task);
+        }
 
         marker.title = `${step.label}: ${stateText}. ${step.detail}`;
         steps.appendChild(marker);
@@ -12048,22 +12063,29 @@
 
       track.append(line, steps);
       progress.append(track);
-      if (task.stage === "pr_verification" && task.stage_status === "waiting" && taskStatus === "running") {
-        const wait = task.logs?.findLast(log => log.stream === "meta" &&
-          parseTaskProgressField(log.text, "action") === "wait_for_reviewed_head_evidence");
-        if (wait) {
-          const checks = parseTaskProgressField(wait.text, "pending_checks");
-          const head = parseTaskProgressField(wait.text, "reviewed_head");
-          const refreshed = parseTaskProgressField(wait.text, "last_github_refresh");
-          const detail = document.createElement("div");
-          detail.className = "task-progress-wait";
+      if (waitingForWorkspace || waitingForGitHub) {
+        const detail = document.createElement("div");
+        detail.className = "task-progress-wait";
+        if (waitingForWorkspace) {
+          const queue = task.logs?.findLast(log => log.stream === "meta" &&
+            (parseTaskProgressField(log.text, "action") === "wait_for_workspace" ||
+              ["disk_space", "host_memory_pressure"].includes(parseTaskProgressField(log.text, "reason"))));
+          const reason = queue && parseTaskProgressField(queue.text, "reason");
+          detail.textContent = reason === "disk_space" ? "Waiting for workspace disk space" :
+            reason === "host_memory_pressure" ? "Waiting for available memory to resume workspace work" :
+            "Waiting to resume local workspace work";
+        } else {
+          const head = wait && parseTaskProgressField(wait.text, "reviewed_head");
+          const refreshed = wait && parseTaskProgressField(wait.text, "last_github_refresh");
           detail.textContent = [
-            checks ? `Waiting for GitHub checks: ${checks}` : "Waiting for draft verification evidence",
+            pendingChecks ? `Waiting for GitHub checks: ${pendingChecks}` :
+              task.stage === "pr_verification" ? "Waiting for draft verification evidence" :
+              "Waiting for GitHub checks",
             head && `Reviewed head: ${head}`,
             refreshed && `Last GitHub refresh: ${refreshed}`,
           ].filter(Boolean).join(" · ");
-          progress.append(detail);
         }
+        progress.append(detail);
       }
       return progress;
     }
