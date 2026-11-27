@@ -1846,7 +1846,7 @@
       snapshot: null,
       selectedTaskId: "",
       dismissedTaskIDs: new Set([...loadTaskIDMarkers(DISMISSED_TASKS_KEY), ...pendingTaskDeletes]),
-      hiddenRemovedTaskIDs: loadStoredTaskIDs(HIDDEN_REMOVED_TASKS_KEY),
+      hiddenRemovedTaskIDs: loadTaskIDMarkers(HIDDEN_REMOVED_TASKS_KEY),
       libraryTasks: [],
       libraryLoadError: "",
       repoHistory: loadRepoHistory(),
@@ -9763,14 +9763,6 @@
       return `Duplicate ignored; existing request ${requestID} (${rawState.replace(/_/g, " ")}).`;
     }
 
-    function persistTaskIDs(key, ids) {
-      try {
-        localStorage.setItem(key, JSON.stringify(Array.from(ids)));
-      } catch (_err) {
-        // Ignore localStorage failures.
-      }
-    }
-
     function persistTaskIDMarker(key, requestID, present = true) {
       try {
         const storageKey = `${key}.${requestID}`;
@@ -10628,7 +10620,7 @@
       if (!requestID) return;
       if (removedHistory) {
         state.hiddenRemovedTaskIDs.add(requestID);
-        persistTaskIDs(HIDDEN_REMOVED_TASKS_KEY, state.hiddenRemovedTaskIDs);
+        persistTaskIDMarker(HIDDEN_REMOVED_TASKS_KEY, requestID);
       } else if (state.dismissedTaskIDs.has(requestID)) {
         return;
       }

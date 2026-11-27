@@ -50,14 +50,15 @@ test('Close survives overlapping tab retries and a deferred Removed redraw', asy
     }
   });
 
-  await context.addInitScript(() => {
+  await page.addInitScript(() => {
     if (!localStorage.getItem('hubui.taskStatusFilter')) {
       localStorage.setItem('hubui.taskStatusFilter', 'completed');
     }
   });
   await page.goto(`${baseURL}/#current-work`);
   await otherTab.goto(`${baseURL}/#current-work`);
-  const card = page.locator('#task-list .task[data-request-id="finished"]');
+  const cardSelector = '#task-list .task[data-request-id="finished"]';
+  const card = page.locator(cardSelector);
   const close = card.getByRole('button', { name: 'Delete task' });
   const otherCardSelector = '#task-list .task[data-request-id="other"]';
   const otherCard = otherTab.locator(otherCardSelector);
@@ -107,6 +108,11 @@ test('Close survives overlapping tab retries and a deferred Removed redraw', asy
   const filter = page.locator('#task-history-toggle');
   await filter.click();
   await expect(card).toBeVisible();
+  const removedTab = await context.newPage();
+  await removedTab.goto(`${baseURL}/#current-work`);
+  await expect(removedTab.locator(cardSelector)).toBeVisible();
+  const otherRemovedCard = removedTab.locator(otherCardSelector);
+  await expect(otherRemovedCard).toBeVisible();
   await card.locator('.task-id').evaluate(label => window.getSelection().selectAllChildren(label));
   await filter.dispatchEvent('click');
   await expect(filter).toHaveAttribute('data-filter', 'running');
@@ -121,5 +127,12 @@ test('Close survives overlapping tab retries and a deferred Removed redraw', asy
   await page.reload();
   await expect(filter).toHaveAttribute('data-filter', 'removed');
   await expect(page.locator(otherCardSelector)).toBeVisible();
+  await expect(card).toHaveCount(0);
+
+  await otherRemovedCard.getByRole('button', { name: 'Delete task' }).click();
+  await expect(otherRemovedCard).toHaveCount(0);
+  await page.reload();
+  await expect(filter).toHaveAttribute('data-filter', 'removed');
+  await expect(page.locator(otherCardSelector)).toHaveCount(0);
   await expect(card).toHaveCount(0);
 });
