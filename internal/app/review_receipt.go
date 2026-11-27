@@ -197,7 +197,7 @@ func (h Harness) publishSubmittedReview(
 				if rate.Rejected {
 					if h.WaitForGitHub && !h.ResumeIssueWorkspace {
 						h.logf("stage=review status=waiting action=github_rate_limit retry_at=%s", rate.RetryAt.UTC().Format(time.RFC3339))
-						if waitErr := h.GitHubCooldown.Wait(ctx, rate.RetryAt); waitErr != nil {
+						if waitErr := waitForGitHubCooldown(ctx, h.GitHubCooldown, rate.RetryAt); waitErr != nil {
 							return receipt, errors.Join(err, waitErr, os.Remove(journal))
 						}
 						raw, readErr := gh(ctx, "pr", "view", prURL, "--json", "headRefOid,state")
@@ -370,7 +370,7 @@ func (h Harness) completeCleanReviewGate(ctx context.Context, cfg config.Config,
 	}
 	for h.WaitForGitHub && !h.ResumeIssueWorkspace && errors.As(err, &rate) {
 		h.logf("stage=review status=waiting action=github_rate_limit retry_at=%s", rate.RetryAt.UTC().Format(time.RFC3339))
-		if waitErr := h.GitHubCooldown.Wait(ctx, rate.RetryAt); waitErr != nil {
+		if waitErr := waitForGitHubCooldown(ctx, h.GitHubCooldown, rate.RetryAt); waitErr != nil {
 			return errors.Join(err, waitErr)
 		}
 		err = gateHarness.resumeReviewGate(ctx, *repo, receipt, &gate)

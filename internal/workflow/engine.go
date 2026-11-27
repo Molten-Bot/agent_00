@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/githubutil"
+	"github.com/Molten-Bot/agent_00/internal/tasktiming"
 )
 
 type Item struct {
@@ -183,7 +185,8 @@ type Run struct {
 	UpdatedAt     time.Time        `json:"updatedAt"`
 	GitHubRetryAt time.Time        `json:"githubRetryAt,omitzero"`
 
-	MergeRequested bool `json:"mergeRequested,omitempty"`
+	TimingWait     *tasktiming.Span `json:"timingWait,omitempty"`
+	MergeRequested bool             `json:"mergeRequested,omitempty"`
 }
 
 // Retain merge evidence until its issue claim receipt is written.
@@ -254,6 +257,8 @@ const OutcomeAlreadyMerged = "already_merged"
 const alreadyMergedReason = "GitHub confirmed the pull request was already merged"
 
 type Outcome struct {
+	TimingAcceptedAt  time.Time                 `json:"timingAcceptedAt,omitzero"`
+	TimingAttempt     string                    `json:"timingAttempt,omitempty"`
 	ReviewReceipt     *githubutil.ReviewReceipt `json:"reviewReceipt,omitempty"`
 	ReviewInterrupted bool                      `json:"reviewInterrupted,omitempty"`
 	Status            string                    `json:"status"`
@@ -281,6 +286,7 @@ type Engine struct {
 	InspectPR func(context.Context, string, string) (Item, error)
 	Merge     func(context.Context, Run) error
 	Logf      func(string, ...any)
+	TimingLog tasktiming.Logf
 
 	FinishReview        func(context.Context, githubutil.ReviewReceipt, *githubutil.PendingReviewGate) error
 	InspectPRState      func(context.Context, string, string) (Item, error)
@@ -380,7 +386,7 @@ func (e *Engine) save(s State) error {
 // logRun emits only bounded lifecycle reasons. Detailed errors can contain
 // repository URLs, paths, or task instructions and remain in the run journal.
 func (e *Engine) logRun(r Run, event string, mergedAt time.Time) {
-	if e.Logf == nil {
+	if e.Logf == nil && e.TimingLog == nil {
 		return
 	}
 	reason := r.Status
@@ -448,7 +454,24 @@ func (e *Engine) logRun(r Run, event string, mergedAt time.Time) {
 			durationMS = strconv.FormatInt(max(0, finishedAt.Sub(*r.StartedAt)).Milliseconds(), 10)
 		}
 	}
-	e.Logf("workflow event=%s workflow_id=%q run_id=%q request_id=%q started_at=%s%s status=%s reason=%s duration_ms=%s", event, r.Workflow.ID, r.ID, r.RequestID, startedAt, mergeField, r.Status, reason, durationMS)
+	if terminal(r.Status) {
+		if r.Status == "merged" && r.Reason != "Pull request merged" {
+			tasktiming.Start(r.timingAttempt(), "observed-merge-"+r.ID, tasktiming.Merge, time.Time{}).
+				End(mergedAt).Write(e.TimingLog, r.RequestID)
+		}
+		var start time.Time
+		if r.StartedAt != nil {
+			start = *r.StartedAt
+		}
+		total := tasktiming.Start(r.timingAttempt(), "total-"+r.ID, tasktiming.WorkflowTotal, start).End(finishedAt)
+		if ms, err := strconv.ParseInt(durationMS, 10, 64); err == nil {
+			total.WallMS = &ms
+		}
+		total.Write(e.TimingLog, r.RequestID)
+	}
+	if e.Logf != nil {
+		e.Logf("workflow event=%s workflow_id=%q run_id=%q request_id=%q started_at=%s%s status=%s reason=%s duration_ms=%s", event, r.Workflow.ID, r.ID, r.RequestID, startedAt, mergeField, r.Status, reason, durationMS)
+	}
 }
 func (e *Engine) Preview(ctx context.Context, w Definition) ([]Decision, error) {
 	if err := w.Validate(); err != nil {
@@ -772,6 +795,7 @@ func (e *Engine) submitReserved(ctx context.Context, r Run) error {
 
 func (e *Engine) finishSubmission(id, request string, submitErr error) error {
 	var result Run
+	var closedWait *tasktiming.Span
 	err := e.transaction(func(s *State) error {
 		r := s.run(id)
 		if r == nil {
@@ -791,12 +815,18 @@ func (e *Engine) finishSubmission(id, request string, submitErr error) error {
 		if submitErr == nil && request != "" && r.RetryOf != "" {
 			if prior := s.run(r.RetryOf); prior != nil && prior.RequestID == request && prior.Workflow.ID == r.Workflow.ID {
 				prior.Status, prior.Reason = "completed", "Superseded by same-task retry"
+				if prior.TimingWait != nil {
+					span := prior.TimingWait.End(r.UpdatedAt)
+					closedWait = &span
+					prior.TimingWait = nil
+				}
 			}
 		}
 		result = *r
 		return nil
 	})
 	if err == nil {
+		e.writeTimingWait(request, closedWait, nil)
 		e.logRun(result, "submission", time.Time{})
 	}
 	return err
@@ -856,7 +886,7 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 			return nil
 		})
 	}
-	var mergedAt time.Time
+	var mergedAt, actionStarted time.Time
 	finish := func() error {
 		r.UpdatedAt = e.now()
 		if r.Status == "merged" {
@@ -872,8 +902,12 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 				}
 			}
 		}
+		closedWait, openedWait := e.updateTimingWait(&r, actionStarted)
 		if err := commit(); err != nil {
 			return err
+		}
+		if !stale {
+			e.writeTimingWait(r.RequestID, closedWait, openedWait)
 		}
 		if !stale && r.Status == "merged" && e.RecordMerge != nil {
 			if err := e.RecordMerge(r, mergedAt); err != nil {
@@ -1200,7 +1234,11 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		}
 		gate := *r.Outcome.PendingReviewGate
 		gate.MarkReady = gate.MarkReady && i.Draft
-		err = e.FinishReview(ctx, *receipt, &gate)
+		actionStarted = e.now()
+		reviewCtx := tasktiming.WithRecorder(ctx, r.RequestID, r.timingAttempt(), e.now, e.TimingLog)
+		tasktiming.Set(reviewCtx, tasktiming.Review)
+		err = e.FinishReview(reviewCtx, *receipt, &gate)
+		tasktiming.Set(reviewCtx, "")
 		outcome := *r.Outcome
 		outcome.PendingReviewGate = &gate
 		r.Outcome = &outcome
@@ -1314,7 +1352,14 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 			r.Reason = "Head changed after merge eligibility; a new review is required"
 		} else if !e.Allowed(r.Item.Repository) || !e.StillEnabled(r.Workflow) {
 			r.Reason = "Workflow changed or was disabled before merge"
-		} else if mergeErr := e.Merge(ctx, r); errors.Is(mergeErr, githubutil.ErrReviewInterrupted) {
+		} else if mergeErr := func() error {
+			actionStarted = e.now()
+			span := tasktiming.Start(r.timingAttempt(), "merge-"+rand.Text(), tasktiming.Merge, actionStarted)
+			span.Write(e.TimingLog, r.RequestID)
+			err := e.Merge(ctx, r)
+			span.End(e.now()).Write(e.TimingLog, r.RequestID)
+			return err
+		}(); errors.Is(mergeErr, githubutil.ErrReviewInterrupted) {
 			if inspectState == nil {
 				return fmt.Errorf("cannot confirm interrupted merge without a pull request state lookup")
 			}
@@ -1497,9 +1542,17 @@ func (e *Engine) ObserveIssueMerge(id, requestID, prURL string, mergedAt time.Ti
 		r.Status, r.Reason, r.PRURL = "merged", reason, prURL
 		r.RequestID, r.UpdatedAt, r.GitHubRetryAt = requestID, e.now(), time.Time{}
 		merged = *r
+		r.TimingWait = nil
 		return nil
 	})
 	if err == nil && merged.ID != "" {
+		if merged.TimingWait != nil {
+			end := mergedAt
+			if end.IsZero() {
+				end = merged.UpdatedAt
+			}
+			merged.TimingWait.End(end).Write(e.TimingLog, merged.RequestID)
+		}
 		e.logRun(merged, "transition", mergedAt)
 	}
 	return err
@@ -1556,7 +1609,9 @@ func (e *Engine) PrepareIssueRecovery(workflowID, policy, eventID, retryOf strin
 
 // Complete durably records the task's semantic outcome independently of UI logs.
 func (e *Engine) Complete(id string, outcome Outcome) error {
-	return e.transaction(func(s *State) error {
+	var closedWait *tasktiming.Span
+	var requestID string
+	err := e.transaction(func(s *State) error {
 		r := s.run(id)
 		if r == nil {
 			return ErrActivationNotFound
@@ -1571,9 +1626,18 @@ func (e *Engine) Complete(id string, outcome Outcome) error {
 		if terminal(outcome.Status) && outcome.CompletedAt.IsZero() {
 			outcome.CompletedAt = e.now()
 		}
+		if r.TimingWait != nil && outcome.TimingAttempt != "" && outcome.TimingAttempt != r.TimingWait.Attempt && !outcome.TimingAcceptedAt.IsZero() {
+			span := r.TimingWait.End(outcome.TimingAcceptedAt)
+			closedWait, requestID = &span, r.RequestID
+			r.TimingWait = nil
+		}
 		r.Outcome = &outcome
 		return nil
 	})
+	if err == nil {
+		e.writeTimingWait(requestID, closedWait, nil)
+	}
+	return err
 }
 
 // StillEnabled rechecks switches after potentially slow GitHub reads.

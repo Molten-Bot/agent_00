@@ -11,6 +11,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/githubutil"
+	"github.com/Molten-Bot/agent_00/internal/tasktiming"
 )
 
 // ErrChecksUnavailable leaves verification pending when GitHub cannot supply
@@ -37,10 +38,15 @@ func (h Harness) runGitHubCommand(ctx context.Context, cooldown *githubutil.Cool
 			return res, err
 		}
 		h.logf("stage=%s status=waiting action=github_rate_limit retry_at=%s", phase, rate.RetryAt.UTC().Format(time.RFC3339))
-		if err := cooldown.Wait(ctx, rate.RetryAt); err != nil {
+		if err := waitForGitHubCooldown(ctx, cooldown, rate.RetryAt); err != nil {
 			return res, errors.Join(rate, err)
 		}
 	}
+}
+
+func waitForGitHubCooldown(ctx context.Context, cooldown *githubutil.Cooldown, retryAt time.Time) error {
+	defer tasktiming.Enter(ctx, tasktiming.GitHub)()
+	return cooldown.Wait(ctx, retryAt)
 }
 
 func isGitHubReadCommand(cmd execx.Command) bool {
@@ -112,7 +118,7 @@ func (h Harness) runCheckQuery(ctx context.Context, phase string, cmd execx.Comm
 		if errors.As(err, &rate) {
 			if h.WaitForGitHub && !h.ResumeIssueWorkspace {
 				h.logf("stage=%s status=waiting action=github_rate_limit retry_at=%s", phase, rate.RetryAt.UTC().Format(time.RFC3339))
-				if waitErr := h.GitHubCooldown.Wait(ctx, rate.RetryAt); waitErr == nil {
+				if waitErr := waitForGitHubCooldown(ctx, h.GitHubCooldown, rate.RetryAt); waitErr == nil {
 					attempt = -1
 					continue
 				} else {

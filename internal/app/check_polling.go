@@ -12,6 +12,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/githubutil"
 	"github.com/Molten-Bot/agent_00/internal/stringsx"
+	"github.com/Molten-Bot/agent_00/internal/tasktiming"
 )
 
 // CheckTimings learns how long CI waits take per repository.
@@ -125,6 +126,7 @@ func (h Harness) requireWorkspace(ctx context.Context) error {
 // defers work while CI is pending or has yet to report. The regular path verifies
 // branches, the checked-out head, and all required gates before proceeding.
 func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) (merged bool, err error) {
+	defer tasktiming.Enter(ctx, tasktiming.Checks)()
 	poll := newCheckPoll("checks", prURL)
 	timeout := h.prChecksWatchTimeout()
 	resumeDeadline := poll.started.Add(timeout)

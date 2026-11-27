@@ -104,6 +104,7 @@ type Task struct {
 	AutoMerge         bool                   `json:"auto_merge,omitempty"`
 	Status            string                 `json:"status"`
 	StatusRevision    uint64                 `json:"status_revision"`
+	TimingRevision    uint64                 `json:"timing_revision,omitempty"`
 	StatusTransitions []TaskStatusTransition `json:"status_transitions,omitempty"`
 	Stage             string                 `json:"stage,omitempty"`
 	StageStatus       string                 `json:"stage_status,omitempty"`
@@ -129,6 +130,7 @@ type Task struct {
 	Controls          TaskControls           `json:"controls,omitempty"`
 	Logs              []TaskLog              `json:"logs"`
 
+	TimingAttempt        string   `json:"-"`
 	PublishedPRURLs      []string `json:"-"`
 	ReviewFindingsRemain bool     `json:"-"`
 	ReviewStarted        bool     `json:"-"`
@@ -378,6 +380,8 @@ type taskState struct {
 	BaseBranch        string
 	AutoMerge         bool
 	Status            string
+	TimingAttempt     string
+	TimingRevision    uint64
 	StatusRevision    uint64
 	StatusTransitions []TaskStatusTransition
 	Stage             string
@@ -526,6 +530,18 @@ func (b *Broker) IngestLog(line string) {
 		RequestID: requestID,
 		Line:      line,
 	})
+
+	if strings.HasPrefix(line, "task_timing ") {
+		if t := b.tasks[requestID]; t != nil {
+			t.TimingRevision++
+			if fields["stage"] == "queue" && fields["ended_at"] == "unknown" {
+				t.TimingAttempt = fields["attempt"]
+			}
+			b.appendTaskLogLocked(t, TaskLog{Time: now.Format(time.RFC3339Nano), Stream: "meta", Text: line})
+			b.notifySubscribersLocked()
+		}
+		return
+	}
 
 	workflowEvent := strings.HasPrefix(line, "workflow event=")
 	if workflowEvent && requestID != "" && (fields["event"] == "submission" || fields["event"] == "transition") {
@@ -719,6 +735,8 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 			AutoMerge:         t.AutoMerge,
 			Status:            status,
 			StatusRevision:    t.StatusRevision,
+			TimingRevision:    t.TimingRevision,
+			TimingAttempt:     t.TimingAttempt,
 			StatusTransitions: slices.Clone(t.StatusTransitions),
 			Stage:             t.Stage,
 			StageStatus:       t.StageStatus,
@@ -842,6 +860,8 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 		AutoMerge:         t.AutoMerge,
 		Status:            status,
 		StatusRevision:    t.StatusRevision,
+		TimingRevision:    t.TimingRevision,
+		TimingAttempt:     t.TimingAttempt,
 		StatusTransitions: slices.Clone(t.StatusTransitions),
 		Stage:             t.Stage,
 		StageStatus:       t.StageStatus,
@@ -2571,7 +2591,7 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 
 	// Recovery reuses the task ID. Clear the previous terminal state before
 	// the new workflow activation starts polling the queued task.
-	if strings.HasPrefix(line, "task status=queued ") && fields["action"] == "resume_draft_verification" {
+	if strings.HasPrefix(line, "task status=queued ") && (fields["action"] == "resume_draft_verification" || fields["action"] == "retry_task") {
 		t.Status = "pending"
 		t.Stage, t.StageStatus = "task", "queued"
 		t.Error, t.Warning, t.ReviewURL, t.ReviewGate = "", "", "", ""

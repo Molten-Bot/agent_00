@@ -27,6 +27,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/library"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/stringsx"
+	"github.com/Molten-Bot/agent_00/internal/tasktiming"
 	"github.com/Molten-Bot/agent_00/internal/workflow"
 )
 
@@ -101,6 +102,7 @@ type Server struct {
 	StopTask                func(context.Context, string) error
 	CancelMergedTask        func(string)
 	ResolveTaskControls     func(string) TaskControls
+	LoadTaskTiming          func(context.Context, string) ([]tasktiming.Span, error)
 	CustomLibrarySources    *localruntime.CustomLibrarySources
 	LoadLibraryTasks        func() ([]library.TaskSummary, error)
 	AgentAuthStatus         func(context.Context) (AgentAuthState, error)
@@ -2853,6 +2855,8 @@ func (s Server) handleTaskAction(w http.ResponseWriter, r *http.Request) {
 	}
 	action := ""
 	switch {
+	case strings.HasSuffix(path, "/timing"):
+		action = "timing"
 	case strings.HasSuffix(path, "/asset-preview"):
 		action = "asset-preview"
 	case strings.HasSuffix(path, "/rerun"):
@@ -2892,6 +2896,8 @@ func (s Server) handleTaskAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch action {
+	case "timing":
+		s.handleTaskTiming(w, r, decoded)
 	case "asset-preview":
 		s.handleTaskAssetPreview(w, r, decoded)
 	case "rerun":
@@ -2928,6 +2934,28 @@ func (s Server) handleTaskAction(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func (s Server) handleTaskTiming(w http.ResponseWriter, r *http.Request, requestID string) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if s.LoadTaskTiming == nil {
+		http.NotFound(w, r)
+		return
+	}
+	spans, err := s.LoadTaskTiming(r.Context(), requestID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "task timing is unavailable"})
+		return
+	}
+	if spans == nil {
+		spans = []tasktiming.Span{}
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, spans)
 }
 
 func (s Server) handleTaskControl(
