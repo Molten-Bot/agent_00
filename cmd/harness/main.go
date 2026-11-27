@@ -754,7 +754,7 @@ func runServer(args []string) int {
 				}
 
 				reviewOutcome := workflow.Outcome{
-					Status: "succeeded", PRURL: outcome.Result.PRURL, Reason: "Task completed",
+					Status: "succeeded", PRURL: outcome.Result.PRURL, Reason: "Task completed", CompletedAt: time.Now().UTC(),
 					ReviewReceipt: outcome.Result.ReviewReceipt, ReviewInterrupted: outcome.Result.ReviewInterrupted,
 					PendingReviewGate: outcome.Result.PendingReviewGate,
 					ReviewRequired:    outcome.Result.ReviewRequired,
@@ -781,13 +781,9 @@ func runServer(args []string) int {
 					}
 				}
 
-				var reviewArchiveErr error
-				if reviewOutcome.ReviewReceipt != nil || reviewOutcome.ReviewInterrupted || reviewOutcome.ReviewRequired ||
-					reviewOutcome.Status == workflow.OutcomeReviewPending || reviewOutcome.Status == workflow.OutcomeAlreadyMerged {
-					reviewArchiveErr = workflow.SaveReviewOutcome(filepath.Dir(cfg.RuntimeConfigPath), requestID, reviewOutcome)
-					if reviewArchiveErr != nil {
-						daemonLogger("task status=warn action=save_review_outcome request_id=%s err=%q", requestID, reviewArchiveErr)
-					}
+				reviewArchiveErr := archiveTaskReviewOutcome(filepath.Dir(cfg.RuntimeConfigPath), requestID, runCfg.Review != nil, reviewOutcome)
+				if reviewArchiveErr != nil {
+					daemonLogger("task status=warn action=save_review_outcome request_id=%s err=%q", requestID, reviewArchiveErr)
 				}
 				if runCfg.Workflow != nil && !runCfg.Workflow.IsDefaultExecution() && !runCfg.Workflow.DetachedReview && workflowEngine != nil {
 					if err := workflowEngine.Complete(runCfg.Workflow.EventID, reviewOutcome); err != nil && !(source == rerunSource && errors.Is(err, workflow.ErrActivationNotFound)) {
@@ -929,13 +925,29 @@ func runServer(args []string) int {
 			usage := localruntime.ReadRuntimeConfigLibraryTaskUsage(cfg.RuntimeConfigPath)
 			return library.OrderSummariesByUsage(catalog.Summaries(), usage), nil
 		}
-		cleanupTaskLogs := func(_ context.Context, requestID string) error {
+		cleanupTaskLogs := func(ctx context.Context, requestID string, automatic bool) error {
+			if automatic {
+				// The monitor can see a merge before the worker archives its evidence.
+				if err := localTaskController.waitForCompletion(ctx, requestID); err != nil {
+					return err
+				}
+			}
 			records, err := issueClaims.List()
 			if err != nil {
 				return err
 			}
-			if record := latestClaimForTask(records, requestID); record.ID != "" && !record.Fulfilled() {
+			record := latestClaimForTask(records, requestID)
+			if record.ID != "" && !record.Fulfilled() {
 				return fmt.Errorf("unresolved issue evidence is retained; resolve or explicitly abandon the issue before deleting it")
+			}
+			if automatic {
+				if retainMergedIssueLogs(record) {
+					return nil
+				}
+				retain, err := retainMergedReviewLogs(filepath.Dir(cfg.RuntimeConfigPath), requestID)
+				if err != nil || retain {
+					return err
+				}
 			}
 			var errs []error
 
@@ -1037,7 +1049,9 @@ func runServer(args []string) int {
 				return enqueueLocalRun(reqCtx, retryCfg, rerunSource, force)
 			})
 		}
-		uiServer.CloseTask = cleanupTaskLogs
+		uiServer.CloseTask = func(ctx context.Context, requestID string) error {
+			return cleanupTaskLogs(ctx, requestID, false)
+		}
 		uiServer.ResolveTaskControls = localTaskController.Controls
 		uiServer.PauseTask = func(_ context.Context, requestID string) error {
 			if localTaskController.Controls(requestID).Pause {
@@ -1097,11 +1111,13 @@ func runServer(args []string) int {
 			return app.ExitSuccess
 		}
 		prMonitor := &web.PRMergeMonitor{
-			Cooldown:          githubCooldown,
-			Runner:            runner,
-			Broker:            monitorBroker,
-			Logf:              daemonLogger,
-			CleanupTask:       cleanupTaskLogs,
+			Cooldown: githubCooldown,
+			Runner:   runner,
+			Broker:   monitorBroker,
+			Logf:     daemonLogger,
+			CleanupTask: func(ctx context.Context, requestID string) error {
+				return cleanupTaskLogs(ctx, requestID, true)
+			},
 			MemoryPressure:    memoryPressure,
 			RepositoryAllowed: uiServer.RepositoryAllowed,
 			RecordIssueMerge:  uiServer.RecordMonitoredIssueMerge,

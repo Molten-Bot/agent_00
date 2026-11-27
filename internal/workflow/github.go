@@ -271,6 +271,40 @@ func (g GitHub) Inspect(ctx context.Context, repo, selector string) (Item, error
 	return g.inspect(githubutil.WithCaller(ctx, "workflow_inspect"), repo, selector, ScanNeeds{LinkedIssues: true, Reviews: true, Checks: true})
 }
 
+func (g GitHub) InspectState(ctx context.Context, repo, selector string) (Item, error) {
+	if !repoPattern.MatchString(repo) {
+		return Item{}, fmt.Errorf("invalid repository")
+	}
+	ctx = githubutil.WithCaller(ctx, "workflow_inspect")
+	owner, name, _ := strings.Cut(repo, "/")
+	const query = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){state mergedAt autoMergeRequest{enabledAt} mergeQueueEntry{id}}}}`
+	raw, err := g.command(ctx, "api", "graphql", "-f", "query="+query, "-f", "owner="+owner, "-f", "name="+name,
+		"-F", "number="+githubutil.PullRequestSelector(selector), "--jq", ".data.repository.pullRequest")
+	if err != nil {
+		return Item{}, err
+	}
+	var pr struct {
+		State            string
+		MergedAt         time.Time
+		AutoMergeRequest json.RawMessage
+		MergeQueueEntry  json.RawMessage
+	}
+	if err := json.Unmarshal([]byte(raw), &pr); err != nil {
+		return Item{}, fmt.Errorf("decode pull request state: %w", err)
+	}
+	switch pr.State {
+	case "OPEN":
+		if len(pr.AutoMergeRequest) == 0 || len(pr.MergeQueueEntry) == 0 {
+			return Item{}, fmt.Errorf("pull request state response is missing merge request fields")
+		}
+		return Item{Open: true, MergeRequestInactive: string(pr.AutoMergeRequest) == "null" && string(pr.MergeQueueEntry) == "null"}, nil
+	case "MERGED", "CLOSED":
+		return Item{Merged: pr.State == "MERGED", MergedAt: pr.MergedAt}, nil
+	default:
+		return Item{}, fmt.Errorf("unexpected pull request state %q", pr.State)
+	}
+}
+
 func (g GitHub) inspect(ctx context.Context, repo, selector string, needs ScanNeeds) (Item, error) {
 	if !repoPattern.MatchString(repo) {
 		return Item{}, fmt.Errorf("invalid repository")
@@ -350,6 +384,9 @@ func (g GitHub) inspect(ctx context.Context, repo, selector string, needs ScanNe
 	}
 	return i, nil
 }
+
+var errMergePending = errors.New("GitHub did not confirm the pull request merged")
+
 func (g GitHub) Merge(ctx context.Context, r Run) error {
 	ctx = githubutil.WithCaller(ctx, "workflow_merge")
 	if r.MergeHead == "" {
@@ -383,24 +420,21 @@ func (g GitHub) Merge(ctx context.Context, r Run) error {
 	if _, err = g.command(ctx, args...); err != nil {
 		return err
 	}
-	if r.Item.Kind != "issue" && !r.requiresReview() && appID == 0 {
-		return nil
-	}
 	raw, err := g.command(ctx, "pr", "view", r.PRURL, "--repo", r.Item.Repository, "--json", "state")
 	if err != nil {
-		return fmt.Errorf("%w: %w", errAppMergeVerificationPending, err)
+		return errors.Join(errMergePending, errAppMergeVerificationPending, err)
 	}
 	var pr struct{ State string }
 	if err := json.Unmarshal([]byte(raw), &pr); err != nil {
-		return fmt.Errorf("%w: %w", errAppMergeVerificationPending, err)
+		return errors.Join(errMergePending, errAppMergeVerificationPending, err)
 	}
 	switch pr.State {
 	case "MERGED":
 		return nil
 	case "OPEN", "CLOSED":
-		return errors.New("GitHub did not confirm the pull request merged")
+		return errMergePending
 	default:
-		return errAppMergeVerificationPending
+		return errors.Join(errMergePending, errAppMergeVerificationPending)
 	}
 }
 

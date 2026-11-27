@@ -512,7 +512,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		}
 	}
 	if stopped, err := localruntime.IssueProcessesStopped(record); err != nil || !stopped {
-		if staleOwner {
+		if staleOwner || record.Outcome == "merged" {
 			return err
 		}
 		record.State = "waiting_for_worker"
@@ -626,8 +626,9 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	if app.IsWorkflowPRMetadataFailure(record.FailureDetail()) ||
 		(record.PRVerification == "" && record.Outcome != "" && record.Outcome != "completed" && record.Outcome != workflow.OutcomeReviewPending &&
 			record.Run.Workflow != nil && record.Run.Workflow.ResumePRURL != "") {
+		failure := record.FailureDetail()
 		record.State = "blocked"
-		record.Error = record.FailureDetail()
+		record.Error = failure
 		record.NextAttemptAt = time.Time{}
 		return s.IssueClaims.Save(record)
 	}
@@ -663,6 +664,9 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 			}
 			return s.recordVerifiedIssuePR(&record, pr)
 		}
+	}
+	if record.State == localruntime.IssueStateMergedUnverified {
+		return nil
 	}
 	// A restored owner can finalize a stopped attempt. Dispatch still requires
 	// an explicit retry.
@@ -820,6 +824,19 @@ func (s Server) resumeIssueChecks(ctx context.Context, record localruntime.Issue
 	return nil
 }
 
+// RecordWorkflowMerge records the duration after the durable issue receipt is saved.
+func (s *Server) RecordWorkflowMerge(run workflow.Run, mergedAt time.Time) error {
+	if s.Broker == nil || run.Item.Kind != "issue" || run.RequestID == "" || mergedAt.IsZero() {
+		return nil
+	}
+	var startedAt time.Time
+	if run.StartedAt != nil {
+		startedAt = *run.StartedAt
+	}
+	s.Broker.recordRecoveredIssueMerge(run.RequestID, startedAt, mergedAt)
+	return nil
+}
+
 func (s Server) recordVerifiedIssuePR(record *localruntime.IssueClaimRecord, pr issuePullRequest) error {
 	record.PRURL = pr.URL
 	record.PRTitle = strings.TrimSpace(pr.Title)
@@ -842,7 +859,22 @@ func (s Server) recordMergedIssuePR(ctx context.Context, record localruntime.Iss
 	if err != nil {
 		return err
 	}
+	s.recordIssueMergeTiming(record)
 	return s.finishMergedIssue(ctx, record)
+}
+
+func (s Server) recordIssueMergeTiming(record localruntime.IssueClaimRecord) {
+	if s.Broker == nil || record.RequestID == "" || record.PRMergedAt.IsZero() {
+		return
+	}
+	var startedAt time.Time
+	if policy := record.Run.Workflow; policy != nil && !policy.IsDefaultExecution() && s.Workflows != nil {
+		startedAt, _ = s.Workflows.ActivationStartedAt(policy.EventID)
+	}
+	if startedAt.IsZero() {
+		startedAt = record.StartedAt
+	}
+	s.Broker.recordRecoveredIssueMerge(record.RequestID, startedAt, record.PRMergedAt)
 }
 
 func (s Server) knownIssuePR(record localruntime.IssueClaimRecord) string {
@@ -954,7 +986,10 @@ func (s Server) saveMergedIssuePR(record localruntime.IssueClaimRecord, pr issue
 func (s Server) finishMergedIssue(ctx context.Context, record localruntime.IssueClaimRecord) (err error) {
 	if s.Workflows != nil && record.Run.Workflow != nil && !record.Run.Workflow.IsDefaultExecution() {
 		defer func() {
-			err = errors.Join(err, s.Workflows.ObserveIssueMerge(record.Run.Workflow.EventID, record.RequestID, record.PRURL))
+			if latest, loadErr := s.IssueClaims.Load(record.ID); loadErr == nil {
+				record.PRMergedAt = latest.PRMergedAt
+			}
+			err = errors.Join(err, s.Workflows.ObserveIssueMerge(record.Run.Workflow.EventID, record.RequestID, record.PRURL, record.PRMergedAt))
 		}()
 	}
 	s.publishVerifiedIssuePR(record)
@@ -1029,6 +1064,7 @@ func (s Server) backfillIssueReleaseMergeTime(ctx context.Context, record localr
 		}
 	}
 	s.Broker.backfillReleaseMergeTime(record.RequestID, record.PRURL, record.PRMergedAt)
+	s.recordIssueMergeTiming(record)
 	return nil
 }
 

@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/app"
 	"github.com/Molten-Bot/agent_00/internal/config"
@@ -122,8 +125,12 @@ func configureWorkflows(ctx context.Context, cfg localruntime.InitConfig, runner
 	gh := workflow.GitHub{Runner: runner, Cooldown: server.GitHubCooldown, Logf: logf}
 	reviewer := app.New(runner)
 	reviewer.GitHubCooldown = server.GitHubCooldown
-	engine := &workflow.Engine{Store: store, StatePath: filepath.Join(root, "workflow-state.json"), Fetch: gh.Fetch, InspectPR: gh.Inspect, FinishReview: reviewer.ResumeReviewGate, Merge: gh.Merge, Logf: logf}
+	engine := &workflow.Engine{Store: store, StatePath: filepath.Join(root, "workflow-state.json"), Fetch: gh.Fetch, InspectPR: gh.Inspect, InspectPRState: gh.InspectState, FinishReview: reviewer.ResumeReviewGate, Merge: gh.Merge, Logf: logf}
+	engine.RecordMerge = server.RecordWorkflowMerge
 	engine.RecordIssueMerge = server.RecordIssueMerge
+	engine.RecordReviewOutcome = func(requestID string, outcome workflow.Outcome) error {
+		return workflow.SaveReviewOutcome(root, requestID, outcome)
+	}
 	engine.Enabled = func() bool {
 		s, err := localruntime.LoadRuntimeConfigUISettings(cfg.RuntimeConfigPath)
 		return err == nil && s.WorkflowEnabled
@@ -192,20 +199,28 @@ func configureWorkflows(ctx context.Context, cfg localruntime.InitConfig, runner
 			if t.RequestID != id {
 				continue
 			}
+			completedAt, _ := time.Parse(time.RFC3339Nano, t.UpdatedAt)
+			if archived.CompletedAt.IsZero() {
+				archived.CompletedAt = completedAt
+			}
 			switch t.Status {
 			case "completed", "no_changes", "merged":
 				if archiveErr == nil {
 					return archived
 				}
-				return workflow.Outcome{Status: "succeeded", PRURL: t.PRURL}
+				return workflow.Outcome{Status: "succeeded", PRURL: t.PRURL, CompletedAt: completedAt}
 			case "error", "invalid", "stopped", "duplicate":
 				if archiveErr == nil {
 					if archived.Status == workflow.OutcomeReviewPending {
 						return archived
 					}
-					return workflow.Outcome{Status: "failed", PRURL: archived.PRURL, Reason: t.Error, ReviewInterrupted: archived.ReviewInterrupted}
+					archived.Status, archived.Reason = "failed", t.Error
+					if archived.PRURL == "" {
+						archived.PRURL = t.PRURL
+					}
+					return archived
 				}
-				return workflow.Outcome{Status: "failed", Reason: t.Error}
+				return workflow.Outcome{Status: "failed", PRURL: t.PRURL, Reason: t.Error, CompletedAt: completedAt}
 			}
 			return workflow.Outcome{Status: "running"}
 		}
@@ -231,6 +246,28 @@ func configureWorkflows(ctx context.Context, cfg localruntime.InitConfig, runner
 	_ = ctx // The caller starts polling after server callbacks are configured.
 	return nil
 }
+
+func archiveTaskReviewOutcome(root, requestID string, reviewOnly bool, outcome workflow.Outcome) error {
+	if outcome.ReviewReceipt != nil || outcome.ReviewInterrupted || outcome.ReviewRequired ||
+		outcome.PendingReviewGate != nil || outcome.Status == workflow.OutcomeReviewPending ||
+		(reviewOnly && outcome.Status == "failed") {
+		return workflow.SaveReviewOutcome(root, requestID, outcome)
+	}
+	return nil
+}
+
+func retainMergedReviewLogs(root, requestID string) (bool, error) {
+	outcome, err := workflow.LoadReviewOutcome(root, requestID)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("load review evidence before task cleanup: %w", err)
+	}
+	return outcome.Status == "failed" || outcome.Status == workflow.OutcomeReviewPending ||
+		outcome.ReviewInterrupted || outcome.PendingReviewGate != nil, nil
+}
+
 func parseWorkflowOrSelection(body []byte) (config.Config, error) {
 	var header struct {
 		Workflow *config.WorkflowRunConfig `json:"workflow"`

@@ -45,7 +45,8 @@ type Item struct {
 	ChecksPassed   bool     `json:"checksPassed"`
 	Open           bool     `json:"open"`
 
-	MergedAt time.Time `json:"mergedAt,omitzero"`
+	MergedAt             time.Time `json:"mergedAt,omitzero"`
+	MergeRequestInactive bool      `json:"-"`
 
 	ActionRunID      int64 `json:"actionRunId,omitempty"`
 	ActionRunAttempt int   `json:"actionRunAttempt,omitempty"`
@@ -181,6 +182,8 @@ type Run struct {
 	StartedAt     *time.Time       `json:"startedAt,omitempty"`
 	UpdatedAt     time.Time        `json:"updatedAt"`
 	GitHubRetryAt time.Time        `json:"githubRetryAt,omitzero"`
+
+	MergeRequested bool `json:"mergeRequested,omitempty"`
 }
 
 // Retain merge evidence until its issue claim receipt is written.
@@ -219,10 +222,24 @@ type observation struct {
 }
 type State struct {
 	Schedules    map[string]ScheduleCursor `json:"schedules,omitempty"`
+	RetryStarts  map[string]time.Time      `json:"retryStarts,omitempty"`
 	Version      int                       `json:"version"`
 	Observations map[string]observation    `json:"observations"`
 	Baselines    map[string]bool           `json:"baselines"`
 	Runs         []Run                     `json:"runs"`
+}
+
+func (s *State) retryStart(event string, fallback time.Time) time.Time {
+	if event == "" {
+		return fallback
+	}
+	if prior := s.run(event); prior != nil && prior.StartedAt != nil && !prior.StartedAt.IsZero() {
+		return *prior.StartedAt
+	}
+	if start := s.RetryStarts[event]; !start.IsZero() {
+		return start
+	}
+	return fallback
 }
 
 // OutcomeReviewPending retains an activation while allowing fresh review work.
@@ -242,6 +259,7 @@ type Outcome struct {
 	Status            string                    `json:"status"`
 	PRURL             string                    `json:"prUrl,omitempty"`
 	Reason            string                    `json:"reason,omitempty"`
+	CompletedAt       time.Time                 `json:"completedAt,omitzero"`
 
 	PendingReviewGate *githubutil.PendingReviewGate `json:"pendingReviewGate,omitempty"`
 	ReviewRequired    bool                          `json:"reviewRequired,omitempty"`
@@ -264,7 +282,10 @@ type Engine struct {
 	Merge     func(context.Context, Run) error
 	Logf      func(string, ...any)
 
-	FinishReview func(context.Context, githubutil.ReviewReceipt, *githubutil.PendingReviewGate) error
+	FinishReview        func(context.Context, githubutil.ReviewReceipt, *githubutil.PendingReviewGate) error
+	InspectPRState      func(context.Context, string, string) (Item, error)
+	RecordReviewOutcome func(string, Outcome) error
+	RecordMerge         func(Run, time.Time) error
 	// IssueTaskStopped checks the issue claim for a stopped workflow event ID.
 	IssueTaskStopped func(string) bool
 	// RecordIssueMerge saves the merge before pruning an issue activation.
@@ -284,6 +305,7 @@ var ErrIssueAdmissionPending = errors.New("waiting for issue claim recovery")
 var ErrActivationNotFound = errors.New("workflow activation not found")
 
 const awaitingReview = "awaiting_review"
+const externalMergeReason = "Pull request was merged externally"
 const observedIssueMergeReason = "Issue pull request merge observed"
 
 func (e *Engine) load() (State, error) {
@@ -313,6 +335,17 @@ func (e *Engine) Runs() ([]Run, error) {
 	return s.Runs, err
 }
 
+// ActivationStartedAt includes the saved retry start of a retired activation.
+func (e *Engine) ActivationStartedAt(id string) (time.Time, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	s, err := e.load()
+	if err != nil {
+		return time.Time{}, err
+	}
+	return s.retryStart(id, time.Time{}), nil
+}
+
 // StopIssueTask serializes a durable issue stop with review writeback and merge.
 // The claim journal is authoritative so a stop survives a workflow journal error.
 func (e *Engine) StopIssueTask(persist func() error) error {
@@ -330,8 +363,14 @@ func (e *Engine) StopIssueTask(persist func() error) error {
 func (e *Engine) save(s State) error {
 	active := make([]Run, 0, len(s.Runs))
 	for _, run := range s.Runs {
-		if !terminal(run.Status) || run.hasFailedPendingReview() {
+		if run.needsReconciliation() {
 			active = append(active, run)
+		} else if run.Status != "merged" && run.RequestID != "" && run.StartedAt != nil && !run.StartedAt.IsZero() {
+			// Keep the start for explicit retries after the activation is retired.
+			if s.RetryStarts == nil {
+				s.RetryStarts = make(map[string]time.Time)
+			}
+			s.RetryStarts[run.ID] = *run.StartedAt
 		}
 	}
 	s.Runs = active
@@ -340,7 +379,7 @@ func (e *Engine) save(s State) error {
 
 // logRun emits only bounded lifecycle reasons. Detailed errors can contain
 // repository URLs, paths, or task instructions and remain in the run journal.
-func (e *Engine) logRun(r Run, event string) {
+func (e *Engine) logRun(r Run, event string, mergedAt time.Time) {
 	if e.Logf == nil {
 		return
 	}
@@ -368,6 +407,10 @@ func (e *Engine) logRun(r Run, event string) {
 		reason = "workflow_changed"
 	case "Waiting for a submitted clean review on the current pull request head":
 		reason = "review_not_clean"
+	case "Waiting for GitHub to confirm the pull request merged":
+		reason = "merge_pending"
+	case "GitHub merge request is no longer active":
+		reason = "merge_request_inactive"
 	case "Waiting for the trusted review policy check on the current pull request head":
 		reason = "review_check_pending"
 	case "Review writeback paused: workflow changed or was disabled":
@@ -376,6 +419,8 @@ func (e *Engine) logRun(r Run, event string) {
 		reason = "external_merge"
 	case observedIssueMergeReason:
 		reason = "external_merge"
+	case externalMergeReason:
+		reason = "merge_unconfirmed"
 	case "Pull request was already merged when the workflow checked":
 		reason = "merge_unconfirmed"
 	}
@@ -388,12 +433,22 @@ func (e *Engine) logRun(r Run, event string) {
 	if !r.GitHubRetryAt.IsZero() {
 		reason = "github_rate_limit"
 	}
-	durationMS := "unknown"
-	if terminal(r.Status) && r.StartedAt != nil && !r.StartedAt.IsZero() &&
-		!r.UpdatedAt.IsZero() && !r.UpdatedAt.Before(*r.StartedAt) {
-		durationMS = strconv.FormatInt(r.UpdatedAt.Sub(*r.StartedAt).Milliseconds(), 10)
+	startedAt, durationMS := "unknown", "unknown"
+	finishedAt := r.UpdatedAt
+	mergeField := ""
+	if !mergedAt.IsZero() {
+		finishedAt = mergedAt
+		mergeField = " merged_at=" + mergedAt.UTC().Format(time.RFC3339Nano)
+	} else if r.Status != "merged" && r.Outcome != nil && !r.Outcome.CompletedAt.IsZero() {
+		finishedAt = r.Outcome.CompletedAt
 	}
-	e.Logf("workflow event=%s workflow_id=%q run_id=%q request_id=%q status=%s reason=%s duration_ms=%s", event, r.Workflow.ID, r.ID, r.RequestID, r.Status, reason, durationMS)
+	if r.StartedAt != nil && !r.StartedAt.IsZero() {
+		startedAt = r.StartedAt.UTC().Format(time.RFC3339Nano)
+		if terminal(r.Status) && (!mergedAt.IsZero() || !finishedAt.Before(*r.StartedAt)) {
+			durationMS = strconv.FormatInt(max(0, finishedAt.Sub(*r.StartedAt)).Milliseconds(), 10)
+		}
+	}
+	e.Logf("workflow event=%s workflow_id=%q run_id=%q request_id=%q started_at=%s%s status=%s reason=%s duration_ms=%s", event, r.Workflow.ID, r.ID, r.RequestID, startedAt, mergeField, r.Status, reason, durationMS)
 }
 func (e *Engine) Preview(ctx context.Context, w Definition) ([]Decision, error) {
 	if err := w.Validate(); err != nil {
@@ -480,7 +535,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	s, err := e.load()
 	var runs []Run
 	for _, r := range s.Runs {
-		if !e.submitting[r.ID] && (!terminal(r.Status) || r.hasFailedPendingReview()) {
+		if !e.submitting[r.ID] && r.needsReconciliation() {
 			runs = append(runs, r)
 		}
 	}
@@ -698,7 +753,7 @@ func (e *Engine) transaction(change func(*State) error) error {
 }
 
 func (e *Engine) submitReserved(ctx context.Context, r Run) error {
-	e.logRun(r, "dispatch")
+	e.logRun(r, "dispatch", time.Time{})
 	var request string
 	var submitErr error
 	if !e.StillEnabled(r.Workflow) {
@@ -742,7 +797,7 @@ func (e *Engine) finishSubmission(id, request string, submitErr error) error {
 		return nil
 	})
 	if err == nil {
-		e.logRun(result, "submission")
+		e.logRun(result, "submission", time.Time{})
 	}
 	return err
 }
@@ -801,9 +856,13 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 			return nil
 		})
 	}
+	var mergedAt time.Time
 	finish := func() error {
 		r.UpdatedAt = e.now()
 		if r.Status == "merged" {
+			if mergedAt.IsZero() {
+				mergedAt = mergedPR.MergedAt
+			}
 			r.GitHubRetryAt = time.Time{}
 			if r.Item.Kind == "issue" && original.ObservedMerge == nil &&
 				(original.AppMerge == nil || original.AppMerge.PendingVerification) {
@@ -816,8 +875,13 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		if err := commit(); err != nil {
 			return err
 		}
+		if !stale && r.Status == "merged" && e.RecordMerge != nil {
+			if err := e.RecordMerge(r, mergedAt); err != nil {
+				return fmt.Errorf("record confirmed workflow merge: %w", err)
+			}
+		}
 		if !stale && (original.Status != r.Status || original.Reason != r.Reason) {
-			e.logRun(r, "transition")
+			e.logRun(r, "transition", mergedAt)
 		}
 		return nil
 	}
@@ -829,6 +893,10 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		r.GitHubRetryAt = rate.RetryAt
 		r.Reason = "Waiting for GitHub quota. " + rate.Error()
 		return true
+	}
+	inspectState := e.InspectPRState
+	if inspectState == nil {
+		inspectState = e.InspectPR
 	}
 	if r.AppMerge != nil && !r.AppMerge.PendingVerification {
 		mergedPR = Item{Title: r.AppMerge.Title, MergedAt: r.AppMerge.MergedAt}
@@ -876,6 +944,36 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		r.GitHubRetryAt = time.Time{}
 	} else if active {
 		return nil
+	}
+	if r.MergeRequested {
+		inspect := e.InspectPRState
+		if inspect == nil {
+			inspect = e.InspectPR
+		}
+		if inspect == nil || !e.Allowed(r.Item.Repository) {
+			return nil
+		}
+		state, err := inspect(ctx, r.Item.Repository, r.PRURL)
+		if err != nil {
+			waitForQuota(err)
+			return errors.Join(err, finish())
+		}
+		switch {
+		case state.Merged:
+			mergedPR, mergedByApp = state, true
+			if mergedPR.Title == "" && r.AppMerge != nil {
+				mergedPR.Title = r.AppMerge.Title
+			}
+			r.Status, r.Reason = "merged", "Pull request merged"
+		case !state.Open:
+			r.Status, r.Reason = "completed", "Pull request closed"
+		case state.MergeRequestInactive:
+			r.MergeRequested, r.AppMerge = false, nil
+			r.Reason = "GitHub merge request is no longer active"
+		default:
+			r.Reason = "Waiting for GitHub to confirm the pull request merged"
+		}
+		return finish()
 	}
 	if r.AppMerge != nil {
 		if !active {
@@ -936,9 +1034,6 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		}
 		r.Status = "running"
 	}
-	if r.Status == OutcomeChecksPending {
-		return nil
-	}
 	if r.Status == "running" || r.hasFailedPendingReview() {
 		var o Outcome
 		if r.Outcome != nil {
@@ -979,6 +1074,13 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		} else if o.Status == "failed" {
 			r.Status = "failed"
 			r.Reason = o.Reason
+			if r.Item.Kind != "issue" {
+				if o.PRURL != "" {
+					r.PRURL = o.PRURL
+				} else if r.Item.Kind == "pr" {
+					r.PRURL = r.Item.URL
+				}
+			}
 		} else if o.Status == "succeeded" {
 			r.PRURL = o.PRURL
 			if r.PRURL == "" {
@@ -996,7 +1098,48 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 			}
 		}
 	}
-	if r.Status == awaitingReview && r.hasPendingReview() {
+	if r.watchesFailedPR() && inspectState != nil && e.Allowed(r.Item.Repository) && !e.now().Before(r.GitHubRetryAt) {
+		i, err := inspectState(ctx, r.Item.Repository, r.PRURL)
+		if err != nil {
+			waitForQuota(err)
+			return errors.Join(err, finish())
+		}
+		if i.Merged {
+			mergedAt = i.MergedAt
+			r.Status, r.Reason = "merged", externalMergeReason
+			if r.Outcome != nil && r.Outcome.ReviewInterrupted {
+				r.Reason = "Pull request merged externally during review"
+			}
+		} else if !i.Open {
+			r.Status, r.Reason = "completed", "Pull request closed after task failure"
+		}
+		return finish()
+	}
+	pendingReview := r.Status == awaitingReview && r.hasPendingReview()
+	pendingWriteback := r.Status == awaitingReview && r.Outcome != nil && r.Outcome.PendingReviewGate != nil
+	writebackEnabled := pendingWriteback && active && e.StillEnabled(r.Workflow)
+	waiting := r.Status == "waiting" || r.Status == awaitingReview
+	// Observe operator merges even when workflow policy blocks further actions.
+	if r.Status == OutcomeChecksPending || pendingReview ||
+		(pendingWriteback && !writebackEnabled) || (waiting && !pendingWriteback && (!active || !w.Merge.Enabled)) {
+		if e.InspectPRState != nil && e.Allowed(r.Item.Repository) && !e.now().Before(r.GitHubRetryAt) &&
+			strings.Contains(r.PRURL, "/pull/") {
+			i, err := e.InspectPRState(ctx, r.Item.Repository, r.PRURL)
+			if err != nil {
+				waitForQuota(err)
+				return errors.Join(err, finish())
+			}
+			if i.Merged {
+				mergedAt = i.MergedAt
+				r.Status, r.Reason = "merged", externalMergeReason
+				return finish()
+			}
+		}
+	}
+	if r.Status == OutcomeChecksPending {
+		return nil
+	}
+	if pendingReview {
 		if !exists {
 			r.Status, r.Reason = "completed", "Originating workflow removed before review resumed"
 		} else if original.Status == awaitingReview {
@@ -1005,32 +1148,43 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		return finish()
 	}
 
-	if r.Status == awaitingReview && r.Outcome != nil && r.Outcome.PendingReviewGate != nil {
+	if pendingWriteback {
 		if !exists {
 			r.Status, r.Reason = "completed", "Originating workflow removed before review writeback"
 			return finish()
 		}
-		if !active || !e.StillEnabled(r.Workflow) {
+		if !writebackEnabled {
 			r.Reason = "Review writeback paused: workflow changed or was disabled"
 			return finish()
 		}
 		receipt := r.cleanReviewReceipt(r.Outcome)
+		inspect := e.InspectPR
 		if receipt == nil || e.FinishReview == nil {
+			inspect = inspectState
+		}
+		if inspect == nil || !strings.Contains(r.PRURL, "/pull/") {
 			r.Reason = "Waiting for a submitted clean review on the current pull request head"
 			return finish()
 		}
-		i, err := e.InspectPR(ctx, r.Item.Repository, r.PRURL)
+		i, err := inspect(ctx, r.Item.Repository, r.PRURL)
 		if err != nil {
 			waitForQuota(err)
 			return errors.Join(err, finish())
 		}
-		if i.Merged && r.Item.Kind == "issue" {
+		if i.Merged {
 			mergedPR = i
-			r.Status, r.Reason = "merged", observedIssueMergeReason
+			r.Status, r.Reason = "merged", externalMergeReason
+			if r.Item.Kind == "issue" {
+				r.Reason = observedIssueMergeReason
+			}
 			return finish()
 		}
 		if !i.Open {
 			r.Status, r.Reason = "completed", "Pull request closed before review writeback"
+			return finish()
+		}
+		if receipt == nil || e.FinishReview == nil {
+			r.Reason = "Waiting for a submitted clean review on the current pull request head"
 			return finish()
 		}
 		if i.HeadSHA != receipt.Head {
@@ -1054,7 +1208,16 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		case errors.Is(err, githubutil.ErrReviewInterrupted) && r.Item.Kind == "issue":
 			r.Status, r.Reason = "merged", observedIssueMergeReason
 		case errors.Is(err, githubutil.ErrReviewInterrupted):
-			r.Status, r.Reason = "completed", "Pull request was already merged when the workflow checked"
+			state, inspectErr := inspectState(ctx, r.Item.Repository, r.PRURL)
+			if inspectErr != nil {
+				waitForQuota(inspectErr)
+				return errors.Join(inspectErr, finish())
+			}
+			if !state.Merged {
+				return fmt.Errorf("GitHub did not confirm the interrupted review's pull request merged")
+			}
+			mergedAt = state.MergedAt
+			r.Status, r.Reason = "merged", externalMergeReason
 		case errors.Is(err, githubutil.ErrReviewThreadsPending):
 			r.Reason = "Waiting for unresolved review threads"
 		case errors.Is(err, githubutil.ErrReviewChangesRequested):
@@ -1063,7 +1226,15 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		case err != nil:
 			r.Reason = "Review writeback pending: " + err.Error()
 		default:
-			outcome.PendingReviewGate = nil
+			completed := outcome
+			completed.PendingReviewGate = nil
+			completed.CompletedAt = e.now()
+			if e.RecordReviewOutcome != nil && r.RequestID != "" {
+				if err := e.RecordReviewOutcome(r.RequestID, completed); err != nil {
+					return errors.Join(fmt.Errorf("archive completed review writeback: %w", err), finish())
+				}
+			}
+			r.Outcome = &completed
 			if r.Workflow.Merge.Enabled && w.Merge.Enabled {
 				r.Status, r.Reason = "waiting", "Waiting for checks and merge requirements"
 			} else {
@@ -1072,7 +1243,6 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		}
 		return finish()
 	}
-	waiting := r.Status == "waiting" || r.Status == awaitingReview
 	if waiting && (!exists || !w.Merge.Enabled) {
 		r.Status = "succeeded"
 		r.Reason = "Automatic merge disabled in current definition"
@@ -1119,12 +1289,10 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		if stale {
 			return nil
 		}
-		if i.Merged && reviewRequired {
-			r.Status = "completed"
-			r.Reason = "Pull request was already merged when the workflow checked"
-		} else if i.Merged {
+		if i.Merged {
+			mergedAt = i.MergedAt
 			r.Status = "merged"
-			r.Reason = "Pull request merged"
+			r.Reason = externalMergeReason
 		} else if !i.Open {
 			r.Status = "completed"
 			r.Reason = "Pull request closed"
@@ -1147,10 +1315,22 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 		} else if !e.Allowed(r.Item.Repository) || !e.StillEnabled(r.Workflow) {
 			r.Reason = "Workflow changed or was disabled before merge"
 		} else if mergeErr := e.Merge(ctx, r); errors.Is(mergeErr, githubutil.ErrReviewInterrupted) {
+			if inspectState == nil {
+				return fmt.Errorf("cannot confirm interrupted merge without a pull request state lookup")
+			}
+			observed, err := inspectState(ctx, r.Item.Repository, r.PRURL)
+			if err != nil {
+				return err
+			}
+			if !observed.Merged {
+				return fmt.Errorf("GitHub did not confirm the interrupted pull request merged")
+			}
+			mergedPR = observed
+			r.Status = "merged"
 			if r.Item.Kind == "issue" {
-				r.Status, r.Reason = "merged", observedIssueMergeReason
+				r.Reason = observedIssueMergeReason
 			} else {
-				r.Status, r.Reason = "completed", "Pull request was already merged when the workflow checked"
+				r.Reason = externalMergeReason
 			}
 		} else if errors.Is(mergeErr, githubutil.ErrReviewCheckPending) {
 			r.Reason = "Waiting for the trusted review policy check on the current pull request head"
@@ -1160,6 +1340,17 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 			r.Reason = "Waiting for requested changes"
 		} else if errors.Is(mergeErr, githubutil.ErrReviewApprovalPending) {
 			r.Reason = "Waiting for human approval"
+		} else if errors.Is(mergeErr, errMergePending) {
+			r.MergeRequested = true
+			if r.Item.Kind == "issue" {
+				r.AppMerge = &mergeReceipt{Title: i.Title, PendingVerification: true}
+				if err := checkpointMerge(r.AppMerge, true); err != nil || stale {
+					return err
+				}
+			}
+			if !waitForQuota(mergeErr) {
+				r.Reason = "Waiting for GitHub to confirm the pull request merged"
+			}
 		} else if errors.Is(mergeErr, errAppMergeVerificationPending) && r.Item.Kind == "issue" {
 			r.AppMerge = &mergeReceipt{Title: i.Title, PendingVerification: true}
 			if err := checkpointMerge(r.AppMerge, true); err != nil || stale {
@@ -1173,28 +1364,37 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 				r.Reason = "Merge blocked: " + mergeErr.Error()
 			}
 		} else {
-			mergedPR = Item{Title: i.Title}
-			if r.Item.Kind == "issue" {
-				// Persist the confirmed merge before requesting optional metadata.
+			// A merge request can be accepted into GitHub's queue without
+			// completing. Keep the run until the pull request is observed merged.
+			var observed Item
+			if r.Item.Kind == "issue" && e.InspectPRState == nil {
+				// GitHub.Merge confirms issue merges before returning nil. Save
+				// that receipt before the optional timestamp lookup.
 				if err := checkpointMerge(&mergeReceipt{Title: i.Title}, true); err != nil || stale {
 					return err
 				}
-				// The pre-merge inspection cannot supply GitHub's merge timestamp.
-				if observed, err := e.InspectPR(ctx, r.Item.Repository, r.PRURL); err == nil && observed.Merged {
-					mergedPR.MergedAt = observed.MergedAt
-					if observed.Title != "" {
-						mergedPR.Title = observed.Title
-					}
-					if !mergedPR.MergedAt.IsZero() {
-						if err := checkpointMerge(&mergeReceipt{Title: mergedPR.Title, MergedAt: mergedPR.MergedAt}, true); err != nil || stale {
-							return err
-						}
+			}
+			if e.InspectPRState != nil {
+				observed, _ = inspectState(ctx, r.Item.Repository, r.PRURL)
+			} else if r.Item.Kind == "issue" && inspectState != nil {
+				observed, _ = inspectState(ctx, r.Item.Repository, r.PRURL)
+			}
+			if observed.Merged || e.InspectPRState == nil {
+				mergedPR, mergedByApp = observed, true
+				if mergedPR.Title == "" {
+					mergedPR.Title = i.Title
+				}
+				r.Status, r.Reason = "merged", "Pull request merged"
+			} else {
+				r.MergeRequested = true
+				if r.Item.Kind == "issue" {
+					r.AppMerge = &mergeReceipt{Title: i.Title, PendingVerification: true}
+					if err := checkpointMerge(r.AppMerge, true); err != nil || stale {
+						return err
 					}
 				}
+				r.Reason = "Waiting for GitHub to confirm the pull request merged"
 			}
-			mergedByApp = true
-			r.Status = "merged"
-			r.Reason = "Pull request merged"
 		}
 	}
 
@@ -1231,6 +1431,15 @@ func terminal(status string) bool {
 	return contains([]string{"failed", "succeeded", "merged", "completed"}, status)
 }
 
+func (r Run) needsReconciliation() bool {
+	return !terminal(r.Status) || r.hasFailedPendingReview() || r.watchesFailedPR()
+}
+
+func (r Run) watchesFailedPR() bool {
+	return r.Status == "failed" && r.Item.Kind != "issue" &&
+		strings.EqualFold(githubutil.PullRequestRepository(r.PRURL), r.Item.Repository) && r.Item.Repository != ""
+}
+
 // A recorded pending review can supersede a failed activation status.
 func (r Run) hasFailedPendingReview() bool {
 	return r.Status == "failed" && r.hasPendingReview()
@@ -1256,7 +1465,7 @@ func (e *Engine) recordIssueMerge(r Run, prURL string, pr Item, mergedByApp bool
 }
 
 // ObserveIssueMerge releases the activation after the issue claim records the merge.
-func (e *Engine) ObserveIssueMerge(id, requestID, prURL string) error {
+func (e *Engine) ObserveIssueMerge(id, requestID, prURL string, mergedAt time.Time) error {
 	if id == "" || prURL == "" {
 		return nil
 	}
@@ -1291,7 +1500,7 @@ func (e *Engine) ObserveIssueMerge(id, requestID, prURL string) error {
 		return nil
 	})
 	if err == nil && merged.ID != "" {
-		e.logRun(merged, "transition")
+		e.logRun(merged, "transition", mergedAt)
 	}
 	return err
 }
@@ -1323,6 +1532,11 @@ func (e *Engine) PrepareIssueRecovery(workflowID, policy, eventID, retryOf strin
 				return errJournalUnchanged
 			}
 			now := e.now()
+			priorEvent := retryOf
+			if priorEvent == "" {
+				priorEvent = eventID
+			}
+			startedAt := s.retryStart(priorEvent, now)
 			// Recovery can arrive before a tick consumes the recorded outcome.
 			if previous := s.run(retryOf); previous != nil && previous.hasPendingReview() && !e.submitting[previous.ID] &&
 				(previous.Status == awaitingReview || previous.Status == "running" || previous.Status == "failed") &&
@@ -1333,7 +1547,7 @@ func (e *Engine) PrepareIssueRecovery(workflowID, policy, eventID, retryOf strin
 			if s.busy(item) {
 				return fmt.Errorf("issue already has an active workflow run")
 			}
-			s.Runs = append(s.Runs, Run{ID: eventID, RetryOf: retryOf, Workflow: w, Execution: execution, Item: item, Status: "pending_issue", Reason: "Waiting for issue claim recovery", StartedAt: &now, UpdatedAt: now})
+			s.Runs = append(s.Runs, Run{ID: eventID, RetryOf: retryOf, Workflow: w, Execution: execution, Item: item, Status: "pending_issue", Reason: "Waiting for issue claim recovery", StartedAt: &startedAt, UpdatedAt: now})
 			return nil
 		})
 	}
@@ -1353,6 +1567,9 @@ func (e *Engine) Complete(id string, outcome Outcome) error {
 			r.Status = "running"
 		} else if r.Status == OutcomeChecksPending || ((r.Status == awaitingReview || r.Status == "failed") && r.hasPendingReview()) {
 			r.Status = "running"
+		}
+		if terminal(outcome.Status) && outcome.CompletedAt.IsZero() {
+			outcome.CompletedAt = e.now()
 		}
 		r.Outcome = &outcome
 		return nil

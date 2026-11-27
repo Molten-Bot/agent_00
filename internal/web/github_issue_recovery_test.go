@@ -26,6 +26,7 @@ import (
 type recoveryGitHub struct {
 	*automationGitHub
 	prs             string
+	pendingPR       string
 	deleteError     bool
 	deletes         int
 	loseTagResponse bool
@@ -38,6 +39,9 @@ func (f *recoveryGitHub) Run(ctx context.Context, cmd execx.Command) (execx.Resu
 		return execx.Result{Stdout: f.prs}, nil
 	}
 	if _, number, ok := strings.Cut(args, "/pulls/"); ok {
+		if f.pendingPR != "" && number == "42" {
+			return execx.Result{Stdout: f.pendingPR}, nil
+		}
 		var prs []json.RawMessage
 		if err := json.Unmarshal([]byte(f.prs), &prs); err != nil {
 			return execx.Result{}, err
@@ -864,6 +868,7 @@ func TestIssueCheckRecoveryWaitsForRateResetThenResubmitsSameClaim(t *testing.T)
 	if err := s.IssueClaims.Save(record); err != nil {
 		t.Fatal(err)
 	}
+	f.prs = recoveryPR("open", "null", record.Run.GitHubIssue.Claim.Branch, "main")
 	now := time.Now().UTC().Truncate(time.Second)
 	s.GitHubCooldown = &githubutil.Cooldown{Now: func() time.Time { return now }}
 	rate := s.GitHubCooldown.ClassifyFailure(http.StatusTooManyRequests, http.Header{"Retry-After": {"600"}}, "", errors.New("rate limited"))
@@ -942,6 +947,8 @@ func TestIssueRecoveryRecordsExternalMergeAsTerminalSuccess(t *testing.T) {
 			const failure = "pr_verification: reviewed patch evidence is truncated"
 			const prURL = "https://github.com/acme/repo/pull/42"
 			engine := s.Workflows
+			startedAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+			engine.Now = func() time.Time { return startedAt }
 			policy := record.Run.Workflow
 			item := workflow.Item{Kind: "issue", Repository: record.Run.GitHubIssue.Repository, Number: record.Run.GitHubIssue.Number}
 			if err := engine.PrepareIssueRecovery(policy.ID, policy.PolicyHash, policy.EventID, "", item, nil); err != nil {
@@ -972,9 +979,14 @@ func TestIssueRecoveryRecordsExternalMergeAsTerminalSuccess(t *testing.T) {
 				t.Fatalf("open draft lost its retry state: %+v", pending)
 			}
 			expireIssueRetry(t, s, record.ID)
-			if mode == "legacy fulfilled record" {
+			if mode == "legacy fulfilled record" || mode == "legacy merged-unverified record" {
 				if err := s.IssueClaims.Update(record.ID, func(r *localruntime.IssueClaimRecord) error {
-					r.State, r.PRURL, r.VerifiedAt = "fulfilled", prURL, time.Now()
+					r.PRURL = prURL
+					if mode == "legacy fulfilled record" {
+						r.State, r.VerifiedAt = "fulfilled", time.Now()
+					} else {
+						r.State = localruntime.IssueStateMergedUnverified
+					}
 					return nil
 				}); err != nil {
 					t.Fatal(err)
@@ -988,10 +1000,14 @@ func TestIssueRecoveryRecordsExternalMergeAsTerminalSuccess(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			f.prs = recoveryPR("closed", `"2026-01-01T00:00:00Z"`, record.Run.GitHubIssue.Claim.Branch, "main")
+			f.prs = recoveryPR("closed", `"2026-01-01T00:02:00Z"`, record.Run.GitHubIssue.Claim.Branch, "main")
 			restarted := automationServer(t, f.automationGitHub)
 			restarted.IssueClaims = &localruntime.IssueClaimStore{Root: s.IssueClaims.Root}
 			restarted.GitHubIssueRunner, restarted.IssueRecovery, restarted.Workflows = f, s.IssueRecovery, s.Workflows
+			if mode == "live failed task" {
+				restarted.Broker.IngestLog("task status=start request_id=" + record.RequestID)
+				restarted.Broker.IngestLog("task status=error request_id=" + record.RequestID + " pr_url=" + prURL)
+			}
 			if mode == "explicit retry" {
 				if err := restarted.IssueClaims.BeginExecution(latestRecoveryRecord(t, restarted)); err != nil {
 					t.Fatal(err)
@@ -1033,6 +1049,16 @@ func TestIssueRecoveryRecordsExternalMergeAsTerminalSuccess(t *testing.T) {
 			if len(snapshot.Tasks) != 1 || snapshot.Tasks[0].Status != "merged" || snapshot.Tasks[0].StageStatus != "merged" || snapshot.Tasks[0].Error != "" ||
 				len(snapshot.Tasks[0].IssueAttempts) != 1 || snapshot.Tasks[0].IssueAttempts[0].Error != failure {
 				t.Fatalf("merged task projection = %+v", snapshot.Tasks)
+			}
+			response = httptest.NewRecorder()
+			restarted.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/status", nil))
+			var dashboard Snapshot
+			if err := json.Unmarshal(response.Body.Bytes(), &dashboard); err != nil {
+				t.Fatal(err)
+			}
+			if response.Code != http.StatusOK || dashboard.Stats.TotalSavedSeconds != 120 ||
+				len(dashboard.Tasks) != 1 || dashboard.Tasks[0].Status != "merged" || dashboard.Tasks[0].RetryAt != "" {
+				t.Fatalf("dashboard did not count the recovered workflow once: %s", response.Body.String())
 			}
 		})
 	}
@@ -2687,6 +2713,52 @@ func TestIssuePRMetadataFailureBlocksFulfillmentAndRetriesOriginalPR(t *testing.
 	}
 }
 
+func TestIssuePRMetadataFailureSettlesOperatorMerge(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	reconcileOrAdmitTestIssue(t.Context(), s)
+	record := completeRecoveryRecord(t, s, "error", 1)
+	const prURL = "https://github.com/acme/repo/pull/42"
+	const failure = "pr: workflow PR metadata update failed: GitHub did not apply assignee"
+	record.PRURL, record.RunError = prURL, failure
+	doc, err := s.Workflows.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := doc.Workflows[0]
+	const eventID = "metadata-failure-activation"
+	record.Run.Workflow = &config.WorkflowRunConfig{ID: w.ID, EventID: eventID, PolicyHash: w.ExecutionPolicyHash()}
+	s.Workflows.Now = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+	item := workflow.Item{Kind: "issue", Repository: w.Repository, Number: record.Run.GitHubIssue.Number}
+	if err := s.Workflows.PrepareIssueRecovery(w.ID, w.ExecutionPolicyHash(), eventID, "", item, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	f.pendingPR = strings.Replace(strings.TrimSuffix(strings.TrimPrefix(recoveryPR("closed", `"2026-01-01T00:02:00Z"`, record.Run.GitHubIssue.Claim.Branch, "main"), "["), "]"), recoveryPRTitle, "Published PR", 1)
+	for range 2 {
+		if err := s.ReconcileIssueWork(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := latestRecoveryRecord(t, s)
+	if !got.Fulfilled() || got.Outcome != "completed" || got.Error != "" || got.FailureDetail() != failure ||
+		got.UnlockPending || !got.NextAttemptAt.IsZero() || len(f.submissions) != 1 {
+		t.Fatalf("merge did not settle metadata failure: %+v, submissions=%d", got, len(f.submissions))
+	}
+	response := httptest.NewRecorder()
+	s.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/status", nil))
+	var dashboard Snapshot
+	if err := json.Unmarshal(response.Body.Bytes(), &dashboard); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusOK || dashboard.Stats.TotalSavedSeconds != 120 ||
+		len(dashboard.Tasks) != 1 || dashboard.Tasks[0].Status != "merged" {
+		t.Fatalf("dashboard missed recovered workflow time: %s", response.Body.String())
+	}
+}
+
 func TestIssuePRMetadataTaskRerunWithRoutingCorrection(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)
@@ -2808,6 +2880,7 @@ func TestDisabledRepositoryPausesMonitorAndRetainedClaimAcrossRestart(t *testing
 	if err := s.IssueClaims.Save(record); err != nil {
 		t.Fatal(err)
 	}
+	f.prs = recoveryPR("open", "null", record.Run.GitHubIssue.Claim.Branch, "main")
 
 	settings, err := s.ReviewSettingsStatus(ctx)
 	if err != nil {

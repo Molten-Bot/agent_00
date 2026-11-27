@@ -887,7 +887,7 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 			observed = record
 		}
 	}
-	if previous.PRAlreadyMerged {
+	if previous.PRAlreadyMerged || previous.PRMerged() {
 		return issueRetryResult{}, http.StatusConflict, errors.New(issueAlreadyMergedError)
 	}
 	workflowRecovery := !automatic && remote.Claim.ID != "" &&

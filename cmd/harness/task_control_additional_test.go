@@ -4,10 +4,40 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/web"
 )
+
+func TestLocalTaskControllerWaitsForWorkerBeforeCleanup(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		controller := newLocalTaskController()
+		const requestID = "local-merge"
+		controller.Register(requestID, nil)
+		cleaned := make(chan error, 1)
+		go func() {
+			cleaned <- controller.waitForCompletion(t.Context(), requestID)
+		}()
+		synctest.Wait()
+		select {
+		case err := <-cleaned:
+			t.Fatalf("cleanup proceeded while worker was active: %v", err)
+		default:
+		}
+		controller.Complete(requestID)
+		synctest.Wait()
+		select {
+		case err := <-cleaned:
+			if err != nil {
+				t.Fatal(err)
+			}
+		default:
+			t.Fatal("cleanup did not resume after worker completed")
+		}
+	})
+}
 
 func TestLocalTaskControllerCompleteRemovesTask(t *testing.T) {
 	t.Parallel()

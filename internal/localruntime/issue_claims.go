@@ -90,7 +90,7 @@ func (r IssueClaimRecord) FailureDetail() string {
 	return r.Error
 }
 
-// Fulfilled excludes older records that reconciled a merge with pending verification.
+// Fulfilled includes a confirmed merge even if draft verification remains in history.
 func (r IssueClaimRecord) Fulfilled() bool {
 	return (r.State == "fulfilled" && (r.PRVerification == "" || r.PRAlreadyMerged)) ||
 		(r.State == IssueStateMerged && r.PRVerification == "")

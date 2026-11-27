@@ -105,7 +105,7 @@ func shouldMonitorTaskPR(task Task) bool {
 		return false
 	}
 	switch strings.TrimSpace(task.Status) {
-	case "completed", "no_changes", "stopped":
+	case "completed", "no_changes", "stopped", "merged":
 		return true
 	default:
 		return false
