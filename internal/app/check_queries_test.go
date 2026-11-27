@@ -47,6 +47,33 @@ func TestCheckQueryHonorsSharedRateLimitDeadline(t *testing.T) {
 	}
 }
 
+func TestDraftRestorationConfirmsAmbiguousWrite(t *testing.T) {
+	t.Parallel()
+	commands := 0
+	h := New(issueBranchRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		commands++
+		if len(cmd.Args) >= 4 && cmd.Args[0] == "pr" && cmd.Args[1] == "ready" && cmd.Args[3] == "--undo" {
+			return execx.Result{}, errors.New("connection lost after write")
+		}
+		if len(cmd.Args) >= 2 && cmd.Args[0] == "pr" && cmd.Args[1] == "view" {
+			return execx.Result{Stdout: `{"isDraft":true,"state":"OPEN"}`}, nil
+		}
+		return execx.Result{}, fmt.Errorf("unexpected command: %v", cmd.Args)
+	}))
+	repo := repoWorkspace{Dir: t.TempDir(), PRURL: "https://github.com/acme/repo/pull/42"}
+	if err := h.ensurePullRequestDraft(t.Context(), repo, "pr_verification"); err != nil || commands != 2 {
+		t.Fatalf("ambiguous draft restoration = %v after %d calls", err, commands)
+	}
+}
+
+func TestDraftRestorationIsRetryableAfterDefiniteRateLimitRejection(t *testing.T) {
+	t.Parallel()
+	cmd := prDraftCommand("/repo", "https://github.com/acme/repo/pull/42")
+	if !isIndependentGitHubWrite(cmd) {
+		t.Fatalf("draft restoration is not classified as a retryable write: %v", cmd.Args)
+	}
+}
+
 func TestCheckQueryKeepsConfirmedFailureDistinctFromUnavailable(t *testing.T) {
 	t.Parallel()
 	failure := errors.New("exit status 1")

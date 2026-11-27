@@ -981,6 +981,7 @@
       review: { id: "review", label: "Review", detail: "Independent post-task pull request review.", icon: "review" },
       review_fix: { id: "review_fix", label: "Fix Findings", detail: "Apply the current review pass findings.", icon: "agent" },
       review_checks: { id: "review_checks", label: "Review Checks", detail: "Push review fixes and verify pull request checks.", icon: "review_checks" },
+      pr_verification: { id: "pr_verification", label: "Draft Verification", detail: "Verify the reviewed draft and its checks before release.", icon: "review_checks" },
       review_remediation: { id: "review_remediation", label: "Fix Failed Checks", detail: "Agent fixes failing pull request checks.", icon: "agent" },
       merge_conflict: { id: "merge_conflict", label: "Resolve Merge Conflicts", detail: "Agent resolves conflicts found during pull request mergeability verification.", icon: "agent" },
       finalize: { id: "finalize", label: "GitHub", detail: "Repository link before PR creation; pull request link once available.", icon: "github" },
@@ -11806,6 +11807,9 @@
           }
         }
       }
+      if (currentStepID === "pr_verification" || signals.stages.has("pr_verification")) {
+        steps.push(TASK_PROGRESS_STEP_DEFS.pr_verification);
+      }
       steps.push(TASK_PROGRESS_STEP_DEFS.finalize);
       if (taskAutoMergeStepEnabled(task) && status !== "no_changes") {
         steps.push(TASK_PROGRESS_STEP_DEFS.auto_merge);
@@ -11852,6 +11856,10 @@
       }
       if (taskAutoMergeStepEnabled(task) && signals.hasAutoMergeSeen) {
         return "auto_merge";
+      }
+      if (stage === "pr_verification" ||
+          (TASK_PROGRESS_AGENT_STAGES.has(stage) && signals.currentAgentMode === "pr_verification")) {
+        return "pr_verification";
       }
       // GitHub and agent status logs can arrive within a pass or conflict repair without starting a new step.
       if (signals.activeReviewStepID) {
@@ -12040,6 +12048,23 @@
 
       track.append(line, steps);
       progress.append(track);
+      if (task.stage === "pr_verification" && task.stage_status === "waiting" && taskStatus === "running") {
+        const wait = task.logs?.findLast(log => log.stream === "meta" &&
+          parseTaskProgressField(log.text, "action") === "wait_for_reviewed_head_evidence");
+        if (wait) {
+          const checks = parseTaskProgressField(wait.text, "pending_checks");
+          const head = parseTaskProgressField(wait.text, "reviewed_head");
+          const refreshed = parseTaskProgressField(wait.text, "last_github_refresh");
+          const detail = document.createElement("div");
+          detail.className = "task-progress-wait";
+          detail.textContent = [
+            checks ? `Waiting for GitHub checks: ${checks}` : "Waiting for draft verification evidence",
+            head && `Reviewed head: ${head}`,
+            refreshed && `Last GitHub refresh: ${refreshed}`,
+          ].filter(Boolean).join(" · ");
+          progress.append(detail);
+        }
+      }
       return progress;
     }
 

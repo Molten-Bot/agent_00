@@ -4755,6 +4755,12 @@ html.pink .task-site-url-action[data-state="current"] {
   height: 42px;
 }
 
+.task-progress-wait {
+  color: var(--meta);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
 .task-progress-line {
   position: absolute;
   left: 26px;

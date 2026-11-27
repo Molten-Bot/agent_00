@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/githubutil"
 )
@@ -195,26 +196,55 @@ func (h Harness) loadDraftPatchCommits(ctx context.Context, repo repoWorkspace) 
 	if repo.ReviewSanitize {
 		cmd = commandWithoutGitHubTokenEnv(cmd)
 	}
-	res, err := h.runCommand(ctx, "pr_verification", cmd)
-	if err != nil {
-		return draftPatchCommits{}, fmt.Errorf("%w: load current draft base and head commits: %w", ErrReviewPending, err)
+	sleep := h.Sleep
+	if sleep == nil {
+		sleep = sleepWithContext
 	}
-	var state struct {
-		draftPatchCommits
-		BaseRef string `json:"baseRef"`
-		HeadRef string `json:"headRef"`
-		State   string `json:"state"`
-		Merged  bool   `json:"merged"`
-		Draft   bool   `json:"draft"`
+	confirmRestoredDraft := true
+	for remaining := h.prChecksWatchTimeout(); ; {
+		res, err := h.runCheckQuery(ctx, "pr_verification", cmd, checkQueryTimeout)
+		if err != nil {
+			return draftPatchCommits{}, fmt.Errorf("%w: load current draft base and head commits: %w", ErrReviewPending, err)
+		}
+		var state struct {
+			draftPatchCommits
+			BaseRef string `json:"baseRef"`
+			HeadRef string `json:"headRef"`
+			State   string `json:"state"`
+			Merged  bool   `json:"merged"`
+			Draft   *bool  `json:"draft"`
+		}
+		if json.Unmarshal([]byte(res.Stdout), &state) != nil || state.Base == "" || state.Head == "" || state.Draft == nil {
+			return draftPatchCommits{}, fmt.Errorf("%w: missing or invalid draft base and head commits for the reviewed patch", ErrReviewPending)
+		}
+		if state.Merged {
+			return draftPatchCommits{}, errMergedBeforeDraftVerification
+		}
+		if state.State != "open" || state.BaseRef != repo.BaseBranch || state.HeadRef != repo.Branch {
+			return draftPatchCommits{}, fmt.Errorf("%w: expected the same open pull request and branches when checking reviewed patch evidence", ErrReviewPending)
+		}
+		if *state.Draft {
+			return state.draftPatchCommits, nil
+		}
+		if err := repo.ReviewedPatch.checkCommits(state.draftPatchCommits); err != nil {
+			return draftPatchCommits{}, err
+		}
+		refreshedAt := time.Now()
+		if err := h.ensurePullRequestDraft(ctx, repo, "pr_verification"); err != nil {
+			return draftPatchCommits{}, err
+		}
+		if confirmRestoredDraft {
+			confirmRestoredDraft = false
+			continue
+		}
+		if remaining <= 0 {
+			return draftPatchCommits{}, errDraftRestoring
+		}
+		h.logDraftVerificationWait(repo, nil, refreshedAt)
+		delay := min(remaining, draftVerificationPollInterval)
+		if err := sleep(ctx, delay); err != nil {
+			return draftPatchCommits{}, err
+		}
+		remaining -= delay
 	}
-	if json.Unmarshal([]byte(res.Stdout), &state) != nil || state.Base == "" || state.Head == "" {
-		return draftPatchCommits{}, fmt.Errorf("%w: missing or invalid draft base and head commits for the reviewed patch", ErrReviewPending)
-	}
-	if state.Merged {
-		return draftPatchCommits{}, errMergedBeforeDraftVerification
-	}
-	if state.State != "open" || !state.Draft || state.BaseRef != repo.BaseBranch || state.HeadRef != repo.Branch {
-		return draftPatchCommits{}, fmt.Errorf("%w: expected the same open draft and branches when checking reviewed patch evidence", ErrReviewPending)
-	}
-	return state.draftPatchCommits, nil
 }

@@ -271,6 +271,38 @@ func (h Harness) publishSubmittedReview(
 	return receipt, nil
 }
 
+// A resumed verification can reuse a clean review on the same published head.
+// The review write journal is already tied to the retained issue workspace.
+func savedCleanReviewReceipt(runDir, prURL, head string, policy githubutil.ReviewPolicy, maxPass int) (*githubutil.ReviewReceipt, error) {
+	entries, err := os.ReadDir(runDir)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasPrefix(name, "review-") || !strings.HasSuffix(name, ".receipt.json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(runDir, name))
+		if err != nil {
+			return nil, err
+		}
+		var receipt githubutil.ReviewReceipt
+		if json.Unmarshal(data, &receipt) != nil {
+			continue
+		}
+		key := strings.TrimSuffix(strings.TrimPrefix(name, "review-"), ".receipt.json")
+		if receipt.Marker != "<!-- agent00-review "+key+" -->" || !receipt.Clean() ||
+			receipt.PRURL != prURL || receipt.Head != head || receipt.Run != filepath.Base(runDir) ||
+			receipt.Policy.Hash != policy.Hash || receipt.Policy.Complexity != policy.Complexity ||
+			receipt.Policy.FixPasses != policy.FixPasses || receipt.Pass < 1 || receipt.Pass > maxPass {
+			continue
+		}
+		return &receipt, nil
+	}
+	return nil, nil
+}
+
 func saveReviewReceipt(path string, receipt githubutil.ReviewReceipt) error {
 	f, err := os.CreateTemp(filepath.Dir(path), ".review-receipt-*")
 	if err != nil {

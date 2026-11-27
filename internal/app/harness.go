@@ -1033,7 +1033,7 @@ func (h Harness) finalizePullRequestReview(
 	}
 	findingsRemain := errors.Is(err, errFinalReviewFindingsRemain)
 	if findingsRemain {
-		if draftErr := h.ensurePullRequestDraft(ctx, *repo); draftErr != nil {
+		if draftErr := h.ensurePullRequestDraft(ctx, *repo, "review"); draftErr != nil {
 			return ExitPR, "review", draftErr
 		}
 	} else if err != nil {
@@ -1084,13 +1084,22 @@ func (h Harness) finalizePullRequestReview(
 			evidence.commits, err = h.loadDraftPatchCommits(ctx, *repo)
 		}
 		if err == nil {
+			h.logf("stage=pr_verification status=start action=verify_handoff")
 			err = h.verifyDraftHandoff(ctx, *repo, runtime, codexOpts, evidence)
 		}
 		if err == nil {
 			err = h.confirmDraftPatchCommits(ctx, *repo)
 		}
+		if err == nil {
+			// Read the live rollup again after verification. Becoming ready can
+			// start new required checks without changing the reviewed head.
+			_, err = h.waitForDraftVerificationEvidence(ctx, *repo)
+		}
 		if err != nil {
-			repo.ReviewReceipt = nil
+			var rate *githubutil.RateLimitError
+			if !errors.Is(err, errDraftChecksPending) && !errors.Is(err, errDraftRestoring) && !errors.As(err, &rate) {
+				repo.ReviewReceipt = nil
+			}
 			repo.ReviewInterrupted = errors.Is(err, githubutil.ErrReviewInterrupted)
 			return ExitPR, "pr_verification", err
 		}
@@ -1234,7 +1243,7 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 		repo.PRURL = pr.URL
 		if pr.URL != "" {
 			applyPRMetadata = true
-			if err := h.ensurePullRequestDraft(ctx, *repo); err != nil {
+			if err := h.ensurePullRequestDraft(ctx, *repo, "review"); err != nil {
 				return ExitPR, "pr", err
 			}
 			if h.OnPRTitle != nil {
@@ -1313,7 +1322,7 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 		applyPRMetadata = true
 		if repo.PRVerification != "" {
 			// Creation can also recover an already-open pull request.
-			if err := h.ensurePullRequestDraft(ctx, *repo); err != nil {
+			if err := h.ensurePullRequestDraft(ctx, *repo, "review"); err != nil {
 				return ExitPR, "pr", err
 			}
 		}
@@ -4749,6 +4758,20 @@ func (h Harness) runFinalReviewCycle(
 			return ExitPR, "review", err
 		}
 		patch = reviewContext.DraftPatch
+		if h.ResumeIssueWorkspace && repo.PRVerification != "" && patch != nil {
+			policy := capturedReviewPolicy(cfg, h.FinalReviewPasses)
+			saved, err := savedCleanReviewReceipt(filepath.Dir(repo.Dir), repo.PRURL, metadata.HeadRefOID, policy, h.FinalReviewPasses+1)
+			if err != nil {
+				return ExitPR, "review", fmt.Errorf("load retained clean review: %w", err)
+			}
+			if saved != nil {
+				repo.ReviewReceipt = saved
+				repo.ReviewSanitize = reviewContext.GitHubTokenEnvSanitized
+				repo.ReviewedPatch = patch
+				h.logf("stage=review status=ok action=reuse_clean_review head=%s review_id=%d", saved.Head, saved.ReviewID)
+				return ExitSuccess, "", nil
+			}
+		}
 		if err := h.priorReviewFindings(ctx, *repo, reviewContext); err != nil {
 			return ExitPR, "review", h.reviewPublicationError(ctx, repo, pass, passLabelTotal, err)
 		}
@@ -5575,26 +5598,52 @@ func (h Harness) markPullRequestReadyForReview(ctx context.Context, repo repoWor
 	return nil
 }
 
-// ensurePullRequestDraft prevents unresolved post-task review findings from
-// remaining mergeable when the review cycle started against an existing PR.
-func (h Harness) ensurePullRequestDraft(ctx context.Context, repo repoWorkspace) error {
+// ensurePullRequestDraft holds an existing PR in draft until its gates pass.
+func (h Harness) ensurePullRequestDraft(ctx context.Context, repo repoWorkspace, stage string) error {
 	prURL := strings.TrimSpace(repo.PRURL)
 	if prURL == "" {
 		return nil
 	}
-	h.logf("stage=review status=start action=mark_draft pr_url=%s", prURL)
-	if _, err := h.runCommand(ctx, "review", prDraftCommand(repo.Dir, prURL)); err != nil {
+	h.logf("stage=%s status=start action=mark_draft pr_url=%s", stage, prURL)
+	cmd := prDraftCommand(repo.Dir, prURL)
+	if repo.ReviewSanitize {
+		cmd = commandWithoutGitHubTokenEnv(cmd)
+	}
+	var err error
+	if stage == "pr_verification" {
+		_, err = h.runGitHubCommand(githubutil.WithDefaultCaller(ctx, "worker_pr_verification"), h.GitHubCooldown, stage, cmd)
+	} else {
+		_, err = h.runCommand(ctx, stage, cmd)
+	}
+	if err != nil {
+		if stage == "pr_verification" {
+			// A write may have succeeded even when gh lost its response.
+			view := ghCommand(repo.Dir, "pr", "view", prURL, "--json", "isDraft,state")
+			if repo.ReviewSanitize {
+				view = commandWithoutGitHubTokenEnv(view)
+			}
+			if res, viewErr := h.runCheckQuery(ctx, stage, view, checkQueryTimeout); viewErr == nil {
+				var state struct {
+					IsDraft bool   `json:"isDraft"`
+					State   string `json:"state"`
+				}
+				if json.Unmarshal([]byte(res.Stdout), &state) == nil && state.State == "OPEN" && state.IsDraft {
+					h.logf("stage=%s status=ok action=mark_draft reason=confirmed_after_error pr_url=%s", stage, prURL)
+					return nil
+				}
+			}
+		}
 		if isPRAlreadyDraftError(err) {
-			h.logf("stage=review status=skip action=mark_draft reason=already_draft pr_url=%s", prURL)
+			h.logf("stage=%s status=skip action=mark_draft reason=already_draft pr_url=%s", stage, prURL)
 			return nil
 		}
 		if isPRClosedOrMergedError(err) {
-			h.logf("stage=review status=skip action=mark_draft reason=pr_not_open pr_url=%s", prURL)
+			h.logf("stage=%s status=skip action=mark_draft reason=pr_not_open pr_url=%s", stage, prURL)
 			return nil
 		}
 		return fmt.Errorf("mark pull request as draft: %w", err)
 	}
-	h.logf("stage=review status=ok action=mark_draft pr_url=%s", prURL)
+	h.logf("stage=%s status=ok action=mark_draft pr_url=%s", stage, prURL)
 	return nil
 }
 

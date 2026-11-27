@@ -82,6 +82,8 @@ func isIndependentGitHubWrite(cmd execx.Command) bool {
 		switch cmd.Args[0] + " " + cmd.Args[1] {
 		case "issue edit", "pr draft", "pr edit", "pr comment", "repo fork", "workflow run":
 			return true
+		case "pr ready":
+			return slices.Contains(cmd.Args[2:], "--undo")
 		}
 	}
 	return false
