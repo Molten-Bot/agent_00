@@ -1456,7 +1456,6 @@ func (h Harness) checkPublishedPullRequest(
 		// Check propagation and execution share one timing sample for this head.
 		poll := newCheckPoll("checks", repo.PRURL)
 		for noReportRetry := 0; ; noReportRetry++ {
-			requiredChecksOnly := false
 			confirmedFailure := false
 			h.logf("stage=checks status=start repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
 			checkRes, checkErr = h.runPRChecksWatch(ctx, prChecksCommand(repo.Dir, repo.PRURL), poll)
@@ -1477,42 +1476,7 @@ func (h Harness) checkPublishedPullRequest(
 				)
 				return ExitSuccess, "", nil
 			}
-			if errors.Is(checkErr, errPRChecksWatchTimeout) {
-				h.logf(
-					"stage=checks status=warn action=watch_timeout repo=%s repo_dir=%s pr_url=%s attempt=%d err=%q",
-					repo.URL,
-					repo.RelDir,
-					repo.PRURL,
-					attempt+1,
-					checkErr,
-				)
-				timedOutChecksPassing, timedOutChecksSummary, timedOutChecksErr := h.latestChecksAreAllPassing(ctx, *repo, true)
-				if timedOutChecksErr != nil {
-					h.logf(
-						"stage=checks status=warn action=watch_timeout_snapshot reason=query_failed repo=%s repo_dir=%s pr_url=%s attempt=%d err=%q",
-						repo.URL,
-						repo.RelDir,
-						repo.PRURL,
-						attempt+1,
-						timedOutChecksErr,
-					)
-					checkErr = fmt.Errorf("checks snapshot failed after watch timeout: %w", timedOutChecksErr)
-				} else {
-					if timedOutChecksSummary != "" {
-						checkSummary = timedOutChecksSummary
-					}
-					if timedOutChecksPassing {
-						h.logf("stage=checks status=ok reason=watch_timeout repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
-						return ExitSuccess, "", nil
-					}
-					checkErr = errors.New("checks failed after watch timeout")
-					confirmedFailure = true
-				}
-			}
-			if errors.Is(checkErr, ErrChecksUnavailable) {
-				return ExitPR, "checks", checkErr
-			}
-			if checkErr != nil && isNoRequiredChecksReported(checkRes, checkErr) {
+			if !errors.Is(checkErr, errPRChecksWatchTimeout) && isNoRequiredChecksReported(checkRes, checkErr) {
 				h.logf(
 					"stage=checks status=fallback reason=no_required_checks repo=%s repo_dir=%s pr_url=%s attempt=%d",
 					repo.URL,
@@ -1547,7 +1511,6 @@ func (h Harness) checkPublishedPullRequest(
 						requiredErr,
 					)
 				}
-				requiredChecksOnly = false
 				checkRes, checkErr = h.runPRChecksWatch(ctx, prChecksAnyCommand(repo.Dir, repo.PRURL), poll)
 				if errors.Is(checkErr, ErrChecksUnavailable) || ctx.Err() != nil {
 					return ExitPR, "checks", checkErr
@@ -1566,37 +1529,39 @@ func (h Harness) checkPublishedPullRequest(
 					)
 					return ExitSuccess, "", nil
 				}
-				if errors.Is(checkErr, errPRChecksWatchTimeout) {
+			}
+			if errors.Is(checkErr, errPRChecksWatchTimeout) {
+				h.logf(
+					"stage=checks status=warn action=watch_timeout repo=%s repo_dir=%s pr_url=%s attempt=%d err=%q",
+					repo.URL,
+					repo.RelDir,
+					repo.PRURL,
+					attempt+1,
+					checkErr,
+				)
+				// Both watches query all checks. Required policy is verified separately on the current head.
+				watched, _ := latestCheckSnapshotFromText(checkRes.Stdout)
+				timedOutChecksPassing, timedOutChecksSummary, timedOutChecksErr := h.latestChecksAreAllPassing(ctx, *repo, false, watched.Pending...)
+				if timedOutChecksErr != nil {
 					h.logf(
-						"stage=checks status=warn action=watch_timeout repo=%s repo_dir=%s pr_url=%s attempt=%d err=%q",
+						"stage=checks status=warn action=watch_timeout_snapshot reason=query_failed repo=%s repo_dir=%s pr_url=%s attempt=%d err=%q",
 						repo.URL,
 						repo.RelDir,
 						repo.PRURL,
 						attempt+1,
-						checkErr,
+						timedOutChecksErr,
 					)
-					timedOutChecksPassing, timedOutChecksSummary, timedOutChecksErr := h.latestChecksAreAllPassing(ctx, *repo, false)
-					if timedOutChecksErr != nil {
-						h.logf(
-							"stage=checks status=warn action=watch_timeout_snapshot reason=query_failed repo=%s repo_dir=%s pr_url=%s attempt=%d err=%q",
-							repo.URL,
-							repo.RelDir,
-							repo.PRURL,
-							attempt+1,
-							timedOutChecksErr,
-						)
-						checkErr = fmt.Errorf("checks snapshot failed after watch timeout: %w", timedOutChecksErr)
-					} else {
-						if timedOutChecksSummary != "" {
-							checkSummary = timedOutChecksSummary
-						}
-						if timedOutChecksPassing {
-							h.logf("stage=checks status=ok reason=watch_timeout repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
-							return ExitSuccess, "", nil
-						}
-						checkErr = errors.New("checks failed after watch timeout")
-						confirmedFailure = true
+					checkErr = fmt.Errorf("checks snapshot failed after watch timeout: %w", timedOutChecksErr)
+				} else {
+					if timedOutChecksSummary != "" {
+						checkSummary = timedOutChecksSummary
 					}
+					if timedOutChecksPassing {
+						h.logf("stage=checks status=ok reason=watch_timeout repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
+						return ExitSuccess, "", nil
+					}
+					checkErr = errors.New("checks failed after watch timeout")
+					confirmedFailure = true
 				}
 			}
 			if errors.Is(checkErr, ErrChecksUnavailable) {
@@ -1607,11 +1572,11 @@ func (h Harness) checkPublishedPullRequest(
 				return ExitSuccess, "", nil
 			}
 
-			if summary := summarizeCheckOutput(checkRes); summary != "" {
+			if summary := summarizeCheckOutput(checkRes); !confirmedFailure && summary != "" {
 				checkSummary = summary
 			}
-			if shouldReconcileChecksAfterFailure(checkRes, checkErr) {
-				if reconciled, latestSummary, reconcileErr := h.reconcileChecksAfterFailure(ctx, *repo, requiredChecksOnly); reconcileErr == nil {
+			if !confirmedFailure && shouldReconcileChecksAfterFailure(checkRes, checkErr) {
+				if reconciled, latestSummary, reconcileErr := h.reconcileChecksAfterFailure(ctx, *repo, false); reconcileErr == nil {
 					if latestSummary != "" {
 						checkSummary = latestSummary
 					}
@@ -1639,7 +1604,7 @@ func (h Harness) checkPublishedPullRequest(
 					)
 				}
 			}
-			noChecksReported := isNoChecksReported(checkRes, checkErr)
+			noChecksReported := !confirmedFailure && isNoChecksReported(checkRes, checkErr)
 			if noChecksReported && h.IssueChecksPRURL == repo.PRURL && repo.IssueClaimBranch {
 				bucket, summary, err := h.readWorkflowDispatchResult(ctx, *repo, checkHead)
 				if err != nil {
@@ -6285,8 +6250,12 @@ func (h Harness) pollPRChecks(ctx context.Context, cmd execx.Command, poll check
 	if sleep == nil {
 		sleep = sleepWithContext
 	}
+	var lastPending execx.Result
 	for {
 		res, err := h.runCheckQuery(ctx, "checks", cmd, checkQueryTimeout)
+		if errors.Is(context.Cause(ctx), errPRChecksWatchTimeout) && lastPending.Stdout != "" {
+			return lastPending, err
+		}
 		snapshot, _ := latestCheckSnapshotFromText(res.Stdout)
 		// gh pr checks exits 8 while checks are still pending.
 		if !checkWatchPending(err) {
@@ -6295,6 +6264,7 @@ func (h Harness) pollPRChecks(ctx context.Context, cmd execx.Command, poll check
 			}
 			return res, err
 		}
+		lastPending = res
 		poll.waited = true
 		h.suspendWorkspace()
 		delay := poll.delay(h)
@@ -10181,13 +10151,20 @@ func (h Harness) reconcileChecksAfterFailure(ctx context.Context, repo repoWorks
 	return !snapshot.HasFailures && snapshot.AllPassing, snapshot.Summary, nil
 }
 
-func (h Harness) latestChecksAreAllPassing(ctx context.Context, repo repoWorkspace, requiredOnly bool) (bool, string, error) {
+func (h Harness) latestChecksAreAllPassing(ctx context.Context, repo repoWorkspace, requiredOnly bool, observedPending ...string) (bool, string, error) {
 	snapshot, err := h.latestChecks(ctx, repo, requiredOnly)
 	if err != nil && !errors.Is(err, ErrChecksUnavailable) {
 		err = fmt.Errorf("%w: %w", ErrChecksUnavailable, err)
 	}
 	if err == nil && repo.IssueClaimBranch && !snapshot.AllPassing && !snapshot.HasFailures {
 		err = fmt.Errorf("%w: current check results are pending or missing", ErrChecksUnavailable)
+	}
+	if snapshot.AllPassing {
+		for _, name := range observedPending {
+			if !slices.Contains(snapshot.names, name) {
+				return false, snapshot.Summary, fmt.Errorf("%w: previously pending check %q is missing", ErrChecksUnavailable, name)
+			}
+		}
 	}
 	return snapshot.AllPassing, snapshot.Summary, err
 }
@@ -10223,6 +10200,7 @@ type latestChecksSnapshot struct {
 	HasFailures bool
 	Pending     []string
 	Summary     string
+	names       []string
 }
 
 func latestCheckSnapshot(raw string) (latestChecksSnapshot, error) {
@@ -10323,6 +10301,7 @@ func latestCheckSnapshotFromStates(latestByName map[string]latestCheckState) lat
 		HasFailures: hasFailures,
 		Pending:     pending,
 		Summary:     strings.Join(lines, "\n"),
+		names:       names,
 	}
 }
 

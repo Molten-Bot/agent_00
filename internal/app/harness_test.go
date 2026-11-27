@@ -3757,7 +3757,7 @@ func TestRunTreatsChecksWatchTimeoutWithAllChecksPassingAsSuccess(t *testing.T) 
 		{cmd: pushCommand(repoDir, branch)},
 		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stdout: prURL + "\n"}},
 		{cmd: prChecksCommand(repoDir, prURL), err: errPRChecksWatchTimeout},
-		{cmd: prChecksJSONCommand(repoDir, prURL, true), res: execx.Result{Stdout: checkSnapshot + "\n"}},
+		{cmd: prChecksJSONCommand(repoDir, prURL, false), res: execx.Result{Stdout: checkSnapshot + "\n"}},
 	}}
 
 	var logs []string
@@ -3883,7 +3883,7 @@ func TestRunTreatsChecksWatchTimeoutWithPendingChecksAsFailure(t *testing.T) {
 		{cmd: pushCommand(repoDir, branch)},
 		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stdout: prURL + "\n"}},
 		{cmd: prChecksCommand(repoDir, prURL), err: errPRChecksWatchTimeout},
-		{cmd: prChecksJSONCommand(repoDir, prURL, true), res: execx.Result{Stdout: checkSnapshot + "\n"}},
+		{cmd: prChecksJSONCommand(repoDir, prURL, false), res: execx.Result{Stdout: checkSnapshot + "\n"}},
 		{cmd: codexCommand(targetDir, remediationPrompt(withAgentsPrompt(cfg.Prompt, agentsPath), prURL, checkSummary, 1, false))},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "\n"}},
 	}}
@@ -3951,7 +3951,7 @@ func TestRunTreatsChecksWatchTimeoutSnapshotQueryFailureAsUnavailable(t *testing
 		{cmd: pushCommand(repoDir, branch)},
 		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stdout: prURL + "\n"}},
 		{cmd: prChecksCommand(repoDir, prURL), err: errPRChecksWatchTimeout},
-		{cmd: prChecksJSONCommand(repoDir, prURL, true), err: snapshotErr},
+		{cmd: prChecksJSONCommand(repoDir, prURL, false), err: snapshotErr},
 	}}
 
 	var logs []string
