@@ -705,6 +705,9 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			if checksPending && !errors.Is(result.Err, errDraftChecksPending) {
 				t.Fatalf("expected pending verification after retry budget, got %v", result.Err)
 			}
+			if checksPending && !errors.Is(result.Err, ErrChecksUnavailable) {
+				t.Fatalf("pending verification must retain the same issue task: %v", result.Err)
+			}
 			if checksPending && !tc.headMoved && (result.ReviewReceipt == nil || result.ReviewReceipt.Head != api.head) {
 				t.Fatalf("pending verification lost the clean review receipt: %+v", result)
 			}
