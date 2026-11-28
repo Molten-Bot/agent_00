@@ -202,7 +202,8 @@ func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) (merged
 		switch pr.Mergeable {
 		case "CONFLICTING":
 			h.logf("stage=merge_conflict status=start action=detect pr_url=%s head=%s base_branch=%s", prURL, pr.HeadRefOID, pr.BaseRefName)
-			h.step("merge_conflict")
+			// Yield to workspace admission. The repair path reports progress
+			// after admission, when it can persist the step and start repair.
 			return false, nil
 		case "UNKNOWN":
 			incompleteRollupHead = prStateView{}

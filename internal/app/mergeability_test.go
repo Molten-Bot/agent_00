@@ -196,7 +196,7 @@ func TestPublishedChecksRepairConflictWhilePending(t *testing.T) {
 	const url = "https://github.com/example/repo/pull/42"
 	repo := repoWorkspace{Dir: checkout, RelDir: "repo", Branch: "feature", BaseBranch: "main", PRURL: url, RequireExistingPR: true}
 	admitted := true
-	var checks, repairs, sleeps int
+	var checks, repairs, sleeps, repairSteps int
 	var logs []string
 	h := New(sessionRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
 		switch {
@@ -240,6 +240,14 @@ func TestPublishedChecksRepairConflictWhilePending(t *testing.T) {
 		}
 	}))
 	h.Logf = func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }
+	h.OnStep = func(step string) {
+		if step == "merge_conflict" {
+			if !admitted || repairs != 0 {
+				t.Fatalf("reported conflict repair outside admission or after agent start: admitted=%t repairs=%d", admitted, repairs)
+			}
+			repairSteps++
+		}
+	}
 	h.AcquireWorkspace = func(context.Context) error { admitted = true; return nil }
 	h.ReleaseWorkspace = func() { admitted = false }
 	h.Sleep = func(context.Context, time.Duration) error {
@@ -259,8 +267,8 @@ func TestPublishedChecksRepairConflictWhilePending(t *testing.T) {
 	if code, stage, err := h.finishPublishedPullRequest(ctx, cfg, &repo, runtime, checkout, codexRunOptions{}, "", "", "repo", "codex", false); err != nil || code != ExitSuccess {
 		t.Fatalf("final mergeability gate failed at %s with code %d: %v", stage, code, err)
 	}
-	if repo.PRURL != url || repo.MergeConflictRepairs != 1 || checks != 2 || repairs != 1 {
-		t.Fatalf("PR=%s conflict repairs=%d checks=%d agents=%d", repo.PRURL, repo.MergeConflictRepairs, checks, repairs)
+	if repo.PRURL != url || repo.MergeConflictRepairs != 1 || checks != 2 || repairs != 1 || repairSteps != 1 {
+		t.Fatalf("PR=%s conflict repairs=%d checks=%d agents=%d repair steps=%d", repo.PRURL, repo.MergeConflictRepairs, checks, repairs, repairSteps)
 	}
 	published := git(remote, "rev-parse", "feature")
 	var events []string

@@ -120,7 +120,6 @@ func (h Harness) ensurePullRequestMergeable(
 		repairStarted := time.Now()
 		h.logf("stage=merge_conflict status=start action=detect pr_url=%s repo_dir=%s head=%s base_branch=%s",
 			repo.PRURL, repo.RelDir, state.HeadRefOID, state.BaseRefName)
-		h.step("merge_conflict")
 		base := normalizeBranchRef(state.BaseRefName)
 		if base == "" || normalizeBranchRef(state.HeadRefName) != normalizeBranchRef(repo.Branch) || base == normalizeBranchRef(repo.Branch) {
 			return ExitGit, "git", fmt.Errorf("cannot repair pull request conflicts: invalid base or mismatched head branch")
@@ -131,6 +130,7 @@ func (h Harness) ensurePullRequestMergeable(
 		if err := h.requireWorkspace(ctx); err != nil {
 			return ExitWorkspace, "workspace", err
 		}
+		h.step("merge_conflict")
 		if state.HeadRefOID != "" {
 			if err := h.syncChecksResumeHead(ctx, *repo, state.HeadRefOID); err != nil {
 				return ExitGit, "git", err

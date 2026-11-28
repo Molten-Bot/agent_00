@@ -448,8 +448,18 @@ func TestResumedCheckWaitClassifiesGitHubQueryErrors(t *testing.T) {
 func TestRunReturnsSuccessWhenResumedChecksFindPRMerged(t *testing.T) {
 	t.Parallel()
 	const url = "https://github.com/acme/repo/pull/42"
-	for _, duringAdmission := range []bool{false, true} {
-		t.Run(fmt.Sprintf("during admission=%t", duringAdmission), func(t *testing.T) {
+	const merged = `{"state":"MERGED"}`
+	for _, tc := range []struct {
+		name, initial  string
+		admit, settled bool
+	}{
+		{name: "already merged", initial: merged},
+		{name: "merge during admission after checks pass", admit: true, settled: true,
+			initial: `{"state":"OPEN","baseRefName":"main","headRefName":"task","headRefOid":"current","statusCheckRollup":[{"name":"CI","conclusion":"SUCCESS"}]}`},
+		{name: "merge during admission after conflict detection", admit: true,
+			initial: `{"state":"OPEN","baseRefName":"main","headRefName":"task","headRefOid":"current","mergeable":"CONFLICTING","statusCheckRollup":[{"name":"CI","status":"IN_PROGRESS"}]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			runtime, err := agentruntime.Resolve("codex", "")
 			if err != nil {
@@ -459,22 +469,19 @@ func TestRunReturnsSuccessWhenResumedChecksFindPRMerged(t *testing.T) {
 			for _, cmd := range preflightCommandsWithRuntime(runtime) {
 				runner.exps = append(runner.exps, expectedRun{cmd: cmd})
 			}
-			const merged = `{"state":"MERGED"}`
-			initial := merged
-			if duringAdmission {
-				initial = `{"state":"OPEN","baseRefName":"main","headRefName":"task","headRefOid":"current","statusCheckRollup":[{"name":"CI","conclusion":"SUCCESS"}]}`
-			}
 			runner.exps = append(runner.exps, expectedRun{cmd: authCommand()},
-				expectedRun{cmd: prStateViewCommand("", url, "statusCheckRollup", "id", "mergeable"), res: execx.Result{Stdout: initial}})
-			if duringAdmission {
+				expectedRun{cmd: prStateViewCommand("", url, "statusCheckRollup", "id", "mergeable"), res: execx.Result{Stdout: tc.initial}})
+			if tc.settled {
 				dispatch := workflowDispatchRunsCommand("", "task")
 				dispatch.Args = append(dispatch.Args, "--repo", "acme/repo", "--commit", "current")
 				runner.exps = append(runner.exps,
 					expectedRun{cmd: requiredStatusChecksCommand("", "acme/repo", "main"), res: execx.Result{Stdout: `{"contexts":[]}`}},
 					expectedRun{cmd: ghCommand("", "api", "--paginate", "repos/acme/repo/rules/branches/main?per_page=100"), res: execx.Result{Stdout: "[]"}},
 					expectedRun{cmd: dispatch, res: execx.Result{Stdout: "[]"}},
-					expectedRun{cmd: prStateViewCommand("", url), res: execx.Result{Stdout: merged}},
 				)
+			}
+			if tc.admit {
+				runner.exps = append(runner.exps, expectedRun{cmd: prStateViewCommand("", url), res: execx.Result{Stdout: merged}})
 			}
 			h := New(runner)
 			h.IssueChecksPRURL = url
@@ -483,7 +490,7 @@ func TestRunReturnsSuccessWhenResumedChecksFindPRMerged(t *testing.T) {
 			h.Workspace.WriteFile = func(string, []byte, os.FileMode) error { return nil }
 			held := false
 			h.AcquireWorkspace = func(context.Context) error {
-				if !duringAdmission || held {
+				if !tc.admit || held {
 					t.Fatal("unexpected workspace admission")
 				}
 				held = true
@@ -494,6 +501,15 @@ func TestRunReturnsSuccessWhenResumedChecksFindPRMerged(t *testing.T) {
 					t.Fatal("unexpected workspace release")
 				}
 				held = false
+			}
+			h.OnStep = func(step string) {
+				if step == "merge_conflict" && !held {
+					t.Fatalf("reported %q before workspace admission", step)
+				}
+			}
+			h.Sleep = func(context.Context, time.Duration) error {
+				t.Fatal("unexpected wait for checks on a conflicting or merged PR")
+				return nil
 			}
 			result := h.Run(t.Context(), sampleConfig())
 			if result.ExitCode != ExitSuccess || result.Err != nil || result.PRURL != url || held ||
