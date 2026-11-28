@@ -941,9 +941,11 @@ func TestWorkflowReviewCooldownRetainsActivationAndRechecksHeadAfterRestart(t *t
 			}
 			tick(t, e)
 			var transitions []string
+			var timing strings.Builder
 			restarted := &Engine{Store: e.Store, StatePath: e.StatePath, Enabled: e.Enabled, Allowed: e.Allowed,
 				Now: e.Now, Fetch: e.Fetch, Submit: e.Submit, Status: e.Status, InspectPR: e.InspectPR, FinishReview: e.FinishReview,
-				Logf: func(format string, args ...any) { transitions = append(transitions, fmt.Sprintf(format, args...)) }}
+				Logf:      func(format string, args ...any) { transitions = append(transitions, fmt.Sprintf(format, args...)) },
+				TimingLog: func(format string, args ...any) { fmt.Fprintf(&timing, format+"\n", args...) }}
 			tick(t, restarted)
 			pending, err := restarted.load()
 			if err != nil || len(pending.Runs) != 1 {
@@ -967,6 +969,17 @@ func TestWorkflowReviewCooldownRetainsActivationAndRechecksHeadAfterRestart(t *t
 				}
 				if len(transitions) != 1 || !strings.HasSuffix(transitions[0], "status=succeeded reason=succeeded duration_ms=123000") {
 					t.Fatalf("completion timing omitted deferred writeback: %v", transitions)
+				}
+				spans, err := tasktiming.Read(t.Context(), strings.NewReader(timing.String()), "task")
+				if err != nil || len(spans) < 2 {
+					t.Fatalf("missing writeback timing or terminal total: %+v, err = %v\n%s", spans, err, timing.String())
+				}
+				review, total := spans[len(spans)-2], spans[len(spans)-1]
+				if review.Stage != tasktiming.Review || review.EndedAt == nil || !review.EndedAt.Equal(now) ||
+					review.WallMS == nil || *review.WallMS != 3000 ||
+					total.Stage != tasktiming.WorkflowTotal || total.EndedAt == nil || !total.EndedAt.Equal(now) ||
+					total.WallMS == nil || *total.WallMS != 123000 {
+					t.Fatalf("terminal total disagrees with coordinator completion:\n%s", timing.String())
 				}
 			} else if writes != 1 || len(state.Runs) != 1 || state.Runs[0].ID != waiting.ID ||
 				state.Runs[0].Status != awaitingReview || !strings.Contains(state.Runs[0].Reason, "Head changed") {

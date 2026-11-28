@@ -20,7 +20,9 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
+	"github.com/Molten-Bot/agent_00/internal/githubutil"
 	"github.com/Molten-Bot/agent_00/internal/slug"
+	"github.com/Molten-Bot/agent_00/internal/tasktiming"
 	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
 
@@ -6525,6 +6527,39 @@ func TestMarkPullRequestReadyForReviewRequiresReceipt(t *testing.T) {
 	repo := repoWorkspace{Dir: "/repo", PRURL: "https://github.com/acme/repo/pull/9"}
 	if err := h.markPullRequestReadyForReview(t.Context(), repo); err == nil {
 		t.Fatal("released pull request without review receipt")
+	}
+}
+
+func TestMarkPullRequestReadyForReviewTimesBlockedGate(t *testing.T) {
+	t.Parallel()
+	const prURL = "https://github.com/acme/repo/pull/9"
+	repo := repoWorkspace{Dir: "/repo", PRURL: prURL, ReviewReceipt: &githubutil.ReviewReceipt{
+		PRURL: prURL, Head: "reviewed-head", Run: "review-run", Pass: 1, ReviewID: 42,
+		Marker: "<!-- review -->", URL: prURL + "#pullrequestreview-42",
+		Result: json.RawMessage(`{"status":"clean","mergeReady":true}`),
+	}}
+	start := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
+	now := start
+	h := New(sessionRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		want := ghCommand(repo.Dir, "pr", "view", "9", "--repo", "acme/repo", "--json", "state,headRefOid,reviewDecision")
+		if !commandsEqual(want, cmd) {
+			t.Fatalf("unexpected command: %v", cmd.Args)
+		}
+		now = now.Add(4 * time.Second)
+		return execx.Result{Stdout: `{"state":"OPEN","headRefOid":"reviewed-head","reviewDecision":"CHANGES_REQUESTED"}`}, nil
+	}))
+	var log strings.Builder
+	ctx := tasktiming.WithRecorder(t.Context(), "task", "attempt", func() time.Time { return now },
+		func(format string, args ...any) { fmt.Fprintf(&log, format+"\n", args...) })
+	if err := h.markPullRequestReadyForReview(ctx, repo); !errors.Is(err, githubutil.ErrReviewChangesRequested) {
+		t.Fatalf("ready transition error = %v, want changes requested", err)
+	}
+	spans, err := tasktiming.Read(t.Context(), strings.NewReader(log.String()), "task")
+	if err != nil || len(spans) != 1 || spans[0].Stage != tasktiming.Ready ||
+		spans[0].StartedAt == nil || !spans[0].StartedAt.Equal(start) ||
+		spans[0].EndedAt == nil || !spans[0].EndedAt.Equal(now) ||
+		spans[0].WallMS == nil || *spans[0].WallMS != 4000 || spans[0].AgentMS != nil {
+		t.Fatalf("ready timing = %+v, err = %v\n%s", spans, err, log.String())
 	}
 }
 

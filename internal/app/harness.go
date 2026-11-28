@@ -5691,10 +5691,10 @@ func (h Harness) markPullRequestReadyForReview(ctx context.Context, repo repoWor
 	if repo.ReviewReceipt == nil {
 		return fmt.Errorf("waiting for a submitted clean review receipt")
 	}
+	defer tasktiming.Enter(ctx, tasktiming.Ready)()
 	if err := h.checkReviewGate(ctx, repo, *repo.ReviewReceipt, repo.ReviewSanitize); err != nil {
 		return err
 	}
-	defer tasktiming.Enter(ctx, tasktiming.Ready)()
 	h.logf("stage=review status=start action=mark_ready pr_url=%s", prURL)
 	cmd := prReadyCommand(repo.Dir, prURL)
 	if repo.ReviewSanitize {
