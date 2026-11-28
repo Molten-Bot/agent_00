@@ -82,9 +82,9 @@ test('issue task history shows each verification error and retry deadline once',
   });
   await page.goto(`${baseURL}/#current-work`);
   const card = page.locator('[data-task-id="issue-17"]:visible').first();
-  const summary = card.getByText('Attempt history (1)');
-  await summary.click();
-  const history = await card.locator('details').innerText();
+  const attemptHistory = card.locator('.task-issue-history details');
+  await attemptHistory.getByText('Attempt history (1)').click();
+  const history = await attemptHistory.innerText();
   assert.equal(history.split(failure).length - 1, 1);
   assert.equal(history.split('pr verification').length - 1, 1);
   assert.ok(history.includes(reviewDetail));
@@ -93,7 +93,7 @@ test('issue task history shows each verification error and retry deadline once',
   await card.locator('.task-output-toggle').click();
   const result = page.locator('#task-fullscreen-result');
   await result.getByText('Merged', { exact: true }).waitFor();
-  const consoleHistory = result.locator('details');
+  const consoleHistory = result.locator('.task-issue-history details');
   assert.equal(await consoleHistory.getAttribute('open'), null);
   await consoleHistory.locator('summary').click();
   assert.equal((await consoleHistory.innerText()).split(failure).length - 1, 1);
@@ -114,8 +114,9 @@ test('issue task history shows each verification error and retry deadline once',
   await page.evaluate(() => localStorage.setItem('hubui.taskStatusFilter', 'running'));
   await page.reload();
   const pending = page.locator('[data-task-id="issue-18"]:visible').first();
-  await pending.getByText('Attempt history (1)').click();
-  const pendingHistory = await pending.locator('details').innerText();
+  const pendingAttemptHistory = pending.locator('.task-issue-history details');
+  await pendingAttemptHistory.getByText('Attempt history (1)').click();
+  const pendingHistory = await pendingAttemptHistory.innerText();
   assert.equal(pendingHistory.split('Waiting for GitHub check verification.').length - 1, 1);
   assert.equal(pendingHistory.split('Retry after').length - 1, 1);
   assert.ok(pendingHistory.includes(await page.evaluate(when => new Date(when).toLocaleString(), retryAt)));

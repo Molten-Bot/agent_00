@@ -31,6 +31,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/library"
 	"github.com/Molten-Bot/agent_00/internal/slug"
 	"github.com/Molten-Bot/agent_00/internal/stringsx"
+	"github.com/Molten-Bot/agent_00/internal/tasktiming"
 	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
 
@@ -773,6 +774,13 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	var draftHandoffReported bool
 	h.logf("stage=%s status=start target=%s%s", agentStage, codexTargetLabel, initialAgentInvocation.logFieldsSuffix())
 	if !publicationPending {
+		stage := tasktiming.Implementation
+		if reviewRun {
+			stage = tasktiming.Review
+		} else if runCfg.Workflow != nil && runCfg.Workflow.RepairPRURL != "" {
+			stage = tasktiming.Repair
+		}
+		tasktiming.Set(ctx, stage)
 		h.step("agent")
 		initialHarness := h
 		initialPrompt := codexBasePrompt
@@ -807,6 +815,9 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		return h.fail(ExitCodex, agentStage, err, runDir)
 	}
 	h.logf("stage=%s status=ok elapsed_s=%d%s", agentStage, int(initialAgentInvocation.elapsed.Seconds()), initialAgentInvocation.logFieldsSuffix())
+	if !reviewRun {
+		tasktiming.Set(ctx, tasktiming.App)
+	}
 	// A PR may merge and delete its remote branch while the agent runs. Allow
 	// that case only after GitHub confirms the PR associated with the branch merged.
 	if err := h.validateEnforcedNonDefaultBranchesAfterAgent(ctx, repos); err != nil {
@@ -1111,6 +1122,7 @@ func (h Harness) finalizePullRequestReview(
 		return ExitPR, "review", fmt.Errorf("waiting for a submitted clean review receipt")
 	}
 	if repo.PRVerification != "" {
+		tasktiming.Set(ctx, tasktiming.Verification)
 		h.step("pr_verification")
 		evidence, err := h.waitForDraftVerificationEvidence(ctx, *repo)
 		if err == nil {
@@ -1159,6 +1171,7 @@ func (h Harness) finalizePullRequestReview(
 			return ExitPR, "review", err
 		}
 	}
+	tasktiming.Set(ctx, tasktiming.App)
 	if err := h.completeCleanReviewGate(ctx, cfg, repo, !cfg.Draft); err != nil {
 		if errors.Is(err, ErrReviewHeadChanged) {
 			repo.ReviewReceipt = nil
@@ -1204,6 +1217,7 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 	agentStage string,
 	multiRepo bool,
 ) (int, string, error) {
+	defer tasktiming.Enter(ctx, tasktiming.Publication)()
 	if repo == nil {
 		return ExitConfig, "config", fmt.Errorf("repo workspace is required")
 	}
@@ -1409,6 +1423,7 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 			return ExitPR, "pr", err
 		}
 	}
+	tasktiming.Set(ctx, tasktiming.Checks)
 	return h.checkPublishedPullRequest(ctx, cfg, repo, runtime, codexDir, codexOpts, codexBasePrompt, agentsPath, codexTargetLabel, agentStage, multiRepo)
 }
 
@@ -1422,6 +1437,7 @@ func (h Harness) checkPublishedPullRequest(
 	codexBasePrompt, agentsPath, codexTargetLabel, agentStage string,
 	multiRepo bool,
 ) (exitCode int, stage string, resultErr error) {
+	defer tasktiming.Enter(ctx, tasktiming.Checks)()
 	preserveIssueTitle := cfg.GitHubIssue != nil
 	var checkHead string
 	// A watch follows a PR number, so bracket its result with reads of the
@@ -1441,6 +1457,7 @@ func (h Harness) checkPublishedPullRequest(
 		}()
 	}
 	for attempt := 0; ; attempt++ {
+		tasktiming.Set(ctx, tasktiming.Checks)
 		if repo.IssueClaimBranch {
 			var err error
 			checkHead, err = h.currentHead(ctx, *repo)
@@ -1815,6 +1832,7 @@ func (h Harness) checkPublishedPullRequest(
 			)
 		}
 
+		tasktiming.Set(ctx, tasktiming.Repair)
 		if err := h.requireWorkspace(ctx); err != nil {
 			return ExitWorkspace, "workspace", err
 		}
@@ -2181,6 +2199,7 @@ func (h Harness) resolveBaseSyncConflictWithAgent(
 	mergeRes execx.Result,
 	attempt int,
 ) (int, string, error) {
+	defer tasktiming.Enter(ctx, tasktiming.Repair)()
 	if repo == nil {
 		return ExitConfig, "config", fmt.Errorf("repo workspace is required")
 	}
@@ -2283,6 +2302,7 @@ func (h Harness) resolveRemoteBranchSyncConflictWithAgent(
 	mergeRes execx.Result,
 	attempt int,
 ) (int, string, error) {
+	defer tasktiming.Enter(ctx, tasktiming.Repair)()
 	if repo == nil {
 		return ExitConfig, "config", fmt.Errorf("repo workspace is required")
 	}
@@ -3334,7 +3354,7 @@ func (h Harness) createPullRequestURL(
 					return "", err
 				}
 				h.logf("stage=pr status=waiting action=github_rate_limit retry_at=%s", rate.RetryAt.UTC().Format(time.RFC3339))
-				if waitErr := h.GitHubCooldown.Wait(ctx, rate.RetryAt); waitErr != nil {
+				if waitErr := waitForGitHubCooldown(ctx, h.GitHubCooldown, rate.RetryAt); waitErr != nil {
 					return "", errors.Join(err, waitErr)
 				}
 				if rate.Rejected {
@@ -4781,8 +4801,10 @@ func (h Harness) runFinalReviewCycle(
 	// FinalReviewPasses (either a clean confirmation or the exhausted-passes
 	// error); a redundant bound would leave an unreachable statement after
 	// the loop for Go's terminating-statement check to flag.
+	defer tasktiming.Enter(ctx, tasktiming.Review)()
 	firstPass := repo.ReviewRepairPass + 1
 	for pass := firstPass; ; pass++ {
+		tasktiming.Set(ctx, tasktiming.Review)
 		if err := h.requireWorkspace(ctx); err != nil {
 			return ExitWorkspace, "workspace", err
 		}
@@ -4964,6 +4986,7 @@ func (h Harness) runFinalReviewCycle(
 			return ExitSuccess, "review", fmt.Errorf("%w after exhausting %d fix pass(es); leaving pull request in draft for human review", errFinalReviewFindingsRemain, h.FinalReviewPasses)
 		}
 
+		tasktiming.Set(ctx, tasktiming.Repair)
 		h.step("review_fix")
 		h.logf(
 			"stage=review_fix status=start action=agent review_mode=%s pass=%d total=%d repo=%s repo_dir=%s pr_url=%s",
@@ -5631,7 +5654,7 @@ func (h Harness) autoMergeCleanReview(ctx context.Context, repo repoWorkspace, m
 			return err
 		}
 		h.logf("stage=review status=waiting action=github_rate_limit retry_at=%s", rate.RetryAt.UTC().Format(time.RFC3339))
-		if waitErr := h.GitHubCooldown.Wait(ctx, rate.RetryAt); waitErr != nil {
+		if waitErr := waitForGitHubCooldown(ctx, h.GitHubCooldown, rate.RetryAt); waitErr != nil {
 			return errors.Join(err, waitErr)
 		}
 	}
@@ -5668,6 +5691,7 @@ func (h Harness) markPullRequestReadyForReview(ctx context.Context, repo repoWor
 	if repo.ReviewReceipt == nil {
 		return fmt.Errorf("waiting for a submitted clean review receipt")
 	}
+	defer tasktiming.Enter(ctx, tasktiming.Ready)()
 	if err := h.checkReviewGate(ctx, repo, *repo.ReviewReceipt, repo.ReviewSanitize); err != nil {
 		return err
 	}
@@ -6176,11 +6200,15 @@ func (h Harness) runCommandUnchecked(ctx context.Context, phase string, cmd exec
 				stderrBuf.WriteByte('\n')
 			}
 		}
+		finishAgent := tasktiming.StartAgent(ctx)
 		res, err = streamRunner.RunStream(ctx, cmd, streamOnLine)
+		finishAgent()
 		res.Stdout = mergeStreamedOutput(res.Stdout, stdoutBuf.String())
 		res.Stderr = mergeStreamedOutput(res.Stderr, stderrBuf.String())
 	} else {
+		finishAgent := tasktiming.StartAgent(ctx)
 		res, err = h.Runner.Run(ctx, cmd)
+		finishAgent()
 		output := res
 		if includesHeaders || trace {
 			output.Stdout = ""
@@ -6234,7 +6262,7 @@ func (h Harness) runPRChecksWatch(ctx context.Context, cmd execx.Command, poll c
 		}
 		h.suspendWorkspace()
 		h.logf("stage=checks status=waiting action=github_rate_limit retry_at=%s", rate.RetryAt.UTC().Format(time.RFC3339))
-		if waitErr := h.GitHubCooldown.Wait(ctx, rate.RetryAt); waitErr != nil {
+		if waitErr := waitForGitHubCooldown(ctx, h.GitHubCooldown, rate.RetryAt); waitErr != nil {
 			return res, errors.Join(err, waitErr)
 		}
 	}
@@ -7440,7 +7468,7 @@ func (h Harness) runCodexWithHeartbeat(
 		defer func() { *invocation.elapsed = time.Since(start) }()
 	}
 	go func() {
-		runRes, runErr := h.runCommand(runCtx, agentStage, cmd)
+		runRes, runErr := h.runCommand(tasktiming.AgentCommand(runCtx), agentStage, cmd)
 		done <- codexRunResult{res: runRes, err: runErr}
 	}()
 

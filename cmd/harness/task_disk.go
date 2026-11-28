@@ -10,6 +10,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/app"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
+	"github.com/Molten-Bot/agent_00/internal/tasktiming"
 	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
 
@@ -175,6 +176,7 @@ func (l *taskWorkspaceLease) acquire(ctx context.Context) error {
 	if l.release != nil {
 		return nil
 	}
+	defer tasktiming.Enter(ctx, tasktiming.Queue)()
 	l.logf("task status=queued request_id=%s action=wait_for_workspace", l.requestID)
 	l.handle.SetRunning(false)
 	l.reportState("queued")

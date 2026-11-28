@@ -14,6 +14,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/githubutil"
 	"github.com/Molten-Bot/agent_00/internal/stringsx"
+	"github.com/Molten-Bot/agent_00/internal/tasktiming"
 )
 
 var errDraftChecksPending = fmt.Errorf("%w: %w: waiting for checks on the reviewed pull request head", ErrReviewPending, ErrChecksUnavailable)
@@ -112,6 +113,7 @@ type draftVerificationWait struct {
 // The coordinator gathers the reviewed head's evidence before starting the
 // credential-isolated verifier.
 func (h Harness) waitForDraftVerificationEvidence(ctx context.Context, repo repoWorkspace) (*draftVerificationEvidence, error) {
+	defer tasktiming.Enter(ctx, tasktiming.Checks)()
 	h.logf("stage=pr_verification status=start")
 	sleep := h.Sleep
 	if sleep == nil {

@@ -104,6 +104,7 @@ type Task struct {
 	AutoMerge         bool                   `json:"auto_merge,omitempty"`
 	Status            string                 `json:"status"`
 	StatusRevision    uint64                 `json:"status_revision"`
+	TimingRevision    uint64                 `json:"timing_revision,omitempty"`
 	StatusTransitions []TaskStatusTransition `json:"status_transitions,omitempty"`
 	Stage             string                 `json:"stage,omitempty"`
 	StageStatus       string                 `json:"stage_status,omitempty"`
@@ -130,6 +131,7 @@ type Task struct {
 	Controls          TaskControls           `json:"controls,omitempty"`
 	Logs              []TaskLog              `json:"logs"`
 
+	TimingAttempt        string   `json:"-"`
 	PublishedPRURLs      []string `json:"-"`
 	ReviewFindingsRemain bool     `json:"-"`
 	ReviewStarted        bool     `json:"-"`
@@ -326,6 +328,7 @@ type Broker struct {
 
 	nextEventID       int64
 	events            []Event
+	pendingTiming     []Event // timing received before its task exists
 	releases          []releaseState
 	tasks             map[string]*taskState
 	closedTasks       map[string]time.Time
@@ -379,6 +382,8 @@ type taskState struct {
 	BaseBranch        string
 	AutoMerge         bool
 	Status            string
+	TimingAttempt     string
+	TimingRevision    uint64
 	StatusRevision    uint64
 	StatusTransitions []TaskStatusTransition
 	Stage             string
@@ -521,13 +526,26 @@ func (b *Broker) IngestLog(line string) {
 	b.pruneExpiredTasksLocked(now)
 
 	b.nextEventID++
-	b.events = appendCappedEvent(b.events, b.maxEvents, Event{
+	event := Event{
 		ID:        b.nextEventID,
 		Time:      now.Format(time.RFC3339Nano),
 		Kind:      classifyEventKind(line),
 		RequestID: requestID,
 		Line:      line,
-	})
+	}
+	b.events = appendCappedEvent(b.events, b.maxEvents, event)
+
+	if strings.HasPrefix(line, "task_timing ") {
+		if t := b.tasks[requestID]; t != nil {
+			b.recordTaskTimingLocked(t, event, fields)
+			b.notifySubscribersLocked()
+		} else if requestID != "" && !b.isClosedTaskLocked(requestID, now) {
+			if _, forgotten := b.forgottenTasks[requestID]; !forgotten {
+				b.pendingTiming = appendCappedEvent(b.pendingTiming, defaultMaxEvents, event)
+			}
+		}
+		return
+	}
 
 	workflowEvent := strings.HasPrefix(line, "workflow event=")
 	if workflowEvent && requestID != "" && (fields["event"] == "submission" || fields["event"] == "transition") {
@@ -721,6 +739,8 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 			AutoMerge:         t.AutoMerge,
 			Status:            status,
 			StatusRevision:    t.StatusRevision,
+			TimingRevision:    t.TimingRevision,
+			TimingAttempt:     t.TimingAttempt,
 			StatusTransitions: slices.Clone(t.StatusTransitions),
 			Stage:             t.Stage,
 			StageStatus:       t.StageStatus,
@@ -845,6 +865,8 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 		AutoMerge:         t.AutoMerge,
 		Status:            status,
 		StatusRevision:    t.StatusRevision,
+		TimingRevision:    t.TimingRevision,
+		TimingAttempt:     t.TimingAttempt,
 		StatusTransitions: slices.Clone(t.StatusTransitions),
 		Stage:             t.Stage,
 		StageStatus:       t.StageStatus,
@@ -1078,7 +1100,7 @@ func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON [
 			StartedAt:         now,
 			UpdatedAt:         now,
 		}
-		b.tasks[requestID] = t
+		b.registerTaskLocked(t)
 		b.recordTaskAttemptLocked(b.taskAttemptRootLocked(requestID), requestID, "", t.Status, t.Error, t.Workflow, t.AgentHarness, t.Source, t.Repos, t.PRURL, now)
 		changed = true
 	}
@@ -2547,9 +2569,20 @@ func (b *Broker) ensureTaskLocked(requestID string, now time.Time) *taskState {
 		StartedAt:         now,
 		UpdatedAt:         now,
 	}
-	b.tasks[requestID] = t
+	b.registerTaskLocked(t)
 	b.recordTaskAttemptLocked(b.taskAttemptRootLocked(requestID), requestID, "", t.Status, t.Error, t.Workflow, t.AgentHarness, t.Source, t.Repos, t.PRURL, now)
 	return t
+}
+
+func (b *Broker) registerTaskLocked(t *taskState) {
+	b.tasks[t.RequestID] = t
+	b.pendingTiming = slices.DeleteFunc(b.pendingTiming, func(event Event) bool {
+		if event.RequestID != t.RequestID {
+			return false
+		}
+		b.recordTaskTimingLocked(t, event, parseKVFields(event.Line))
+		return true
+	})
 }
 
 func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[string]string, now time.Time) {
@@ -2580,7 +2613,7 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 
 	// Recovery reuses the task ID. Clear the previous terminal state before
 	// the new workflow activation starts polling the queued task.
-	if strings.HasPrefix(line, "task status=queued ") && fields["action"] == "resume_draft_verification" {
+	if strings.HasPrefix(line, "task status=queued ") && (fields["action"] == "resume_draft_verification" || fields["action"] == "retry_task") {
 		t.Status = "pending"
 		t.Stage, t.StageStatus = "task", "queued"
 		t.ExecutionState = "queued"
@@ -2850,6 +2883,14 @@ func isDuplicateTaskLifecycleLine(fields map[string]string) bool {
 
 func (b *Broker) appendTaskLogLocked(t *taskState, line TaskLog) {
 	t.Logs = appendCappedTaskLog(t.Logs, b.maxTaskLog, line)
+}
+
+func (b *Broker) recordTaskTimingLocked(t *taskState, event Event, fields map[string]string) {
+	t.TimingRevision++
+	if fields["stage"] == "queue" && fields["ended_at"] == "unknown" {
+		t.TimingAttempt = fields["attempt"]
+	}
+	b.appendTaskLogLocked(t, TaskLog{Time: event.Time, Stream: "meta", Text: event.Line})
 }
 
 // collapseAttemptsByRootLocked reduces one or more attempts for the same root

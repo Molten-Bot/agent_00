@@ -12669,6 +12669,87 @@
       }
     }
 
+    function renderTaskTiming(task, open) {
+      const requestIDs = new Set((task.issue_attempts || []).map(attempt => attempt.request_id).filter(Boolean));
+      requestIDs.add(task.request_id);
+      const labels = {
+        queue: "Queue wait",
+        app: "App processing",
+        implementation: "Implementation",
+        pr_publication: "PR publication",
+        ci_wait: "CI wait",
+        review: "Review",
+        repair: "Repair",
+        draft_verification: "Draft verification",
+        ready: "Mark ready",
+        merge: "Merge",
+        github_wait: "GitHub wait",
+        merge_wait: "Merge confirmation wait",
+        workflow_wait: "Workflow wait",
+        workflow_total: "Workflow total",
+      };
+      const details = document.createElement("details");
+      details.className = "task-stage-timing";
+      const summary = document.createElement("summary");
+      summary.textContent = "Stage timing";
+      const content = document.createElement("div");
+      content.setAttribute("aria-live", "polite");
+      details.append(summary, content);
+      details.open = open;
+      details.addEventListener("click", (event) => event.stopPropagation());
+
+      const duration = (ms) => Number.isFinite(ms) ? `${ms.toLocaleString()} ms` : "Unknown";
+      const time = (stamp) => {
+        const value = document.createElement(stamp ? "time" : "span");
+        if (stamp) value.dateTime = stamp;
+        value.textContent = stamp ? new Date(stamp).toLocaleString() : "Unknown";
+        if (stamp) value.title = stamp;
+        return value;
+      };
+      const load = async () => {
+        if (!details.open) return;
+        content.textContent = "Loading stage timing…";
+        try {
+          const histories = await Promise.all(Array.from(requestIDs, async (requestID) => {
+            const response = await fetch(`/api/tasks/${encodeURIComponent(requestID)}/timing`);
+            if (!response.ok) throw new Error("Could not load stage timing");
+            return response.json();
+          }));
+          const spans = histories.flat();
+          if (!spans.length) {
+            content.textContent = "Stage timing unavailable for this task.";
+            return;
+          }
+          content.replaceChildren();
+          const attempts = new Map();
+          for (const span of spans) {
+            let list = attempts.get(span.attempt);
+            if (!list) {
+              const heading = document.createElement("strong");
+              heading.textContent = `Attempt ${attempts.size + 1}`;
+              list = document.createElement("ul");
+              attempts.set(span.attempt, list);
+              content.append(heading, list);
+            }
+            const row = document.createElement("li");
+            const label = document.createElement("span");
+            label.textContent = `${labels[span.stage] || span.stage} · ${duration(span.wall_ms)}`;
+            if (span.agent_ms != null || ["implementation", "review", "repair", "draft_verification"].includes(span.stage)) {
+              label.append(` · Agent ${duration(span.agent_ms)}`);
+            }
+            const range = document.createElement("small");
+            range.append(time(span.started_at), " → ", time(span.ended_at));
+            row.append(label, range);
+            list.append(row);
+          }
+        } catch {
+          content.textContent = "Could not load stage timing.";
+        }
+      };
+      details.addEventListener("toggle", load);
+      return details;
+    }
+
     function renderIssueTaskHistory(task, open, showStatus, action) {
       if (!task.issue_attempts?.length) return null;
       const region = document.createElement("div");
@@ -12803,6 +12884,7 @@
             conceptSiteState: taskConceptSiteState(task),
             branch: formatTaskBranch(task),
             timing: taskTimingSignature(task),
+            stageTiming: isCompletedTask(task) ? task.timing_revision : undefined,
             imageCount: taskImages(task).length,
             prURL: String(task?.pr_url || "").trim(),
             liveAppURL: taskLiveAppURL(task),
@@ -12881,6 +12963,10 @@
       const openIssueTasks = new Set(Array.from(
         listNode.querySelectorAll(".task-issue-history details[open]"),
         (details) => details.closest(".task").dataset.taskId,
+      ));
+      const openTiming = new Set(Array.from(
+        listNode.querySelectorAll(".task-stage-timing[open]"),
+        (details) => details.closest(".task").dataset.requestId,
       ));
       listNode.replaceChildren();
 
@@ -13029,6 +13115,9 @@
         const requestID = taskRequestID(task);
         const collapsed = !promptOnly && allowCollapse && isMinimizedTask(task);
         const taskHistoryView = historyView && isCompletedTask(task);
+        const timing = taskHistoryView && !task.ui_only && requestID
+          ? renderTaskTiming(task, openTiming.has(requestID))
+          : null;
         const node = document.createElement("article");
         node.className = "task";
         node.classList.toggle("task-merged", normalizedTaskStatus(task?.status) === "merged");
@@ -13132,6 +13221,7 @@
           body.className = "task-body";
           body.appendChild(top);
           if (issueHistory) body.appendChild(issueHistory);
+          if (timing) body.appendChild(timing);
           if (compactState) {
             node.classList.add("task-compact-state-left");
             node.appendChild(compactState);
@@ -13379,6 +13469,7 @@
           node.appendChild(badge);
         }
         if (issueHistory) body.appendChild(issueHistory);
+        if (timing) body.appendChild(timing);
         node.appendChild(body);
         if (showTaskSideActions) {
           const sideActions = document.createElement("div");

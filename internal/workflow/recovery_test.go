@@ -12,6 +12,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/githubutil"
+	"github.com/Molten-Bot/agent_00/internal/tasktiming"
 )
 
 func TestOlderWorkflowJournalDoesNotTreatCleanFlagAsReceipt(t *testing.T) {
@@ -412,12 +413,17 @@ func TestIssueRecoveryReplacesPendingReviewBeforeTick(t *testing.T) {
 		t.Run(status, func(t *testing.T) {
 			w := definition("pending-review-retry")
 			e, _, _ := testEngine(t, w)
+			now := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
+			e.Now = func() time.Time { return now }
+			var log strings.Builder
+			e.TimingLog = func(format string, args ...any) { fmt.Fprintf(&log, format+"\n", args...) }
+			wait := tasktiming.Start("original", "wait", tasktiming.WorkflowWait, now.Add(-time.Second))
 			item := Item{Repository: w.Repository, Kind: "issue", Number: 1}
 			state, err := e.load()
 			if err != nil {
 				t.Fatal(err)
 			}
-			state.Runs = []Run{{ID: "original", Status: status, Workflow: w, Item: item,
+			state.Runs = []Run{{ID: "original", RequestID: "task", Status: status, Workflow: w, Item: item, TimingWait: &wait,
 				Outcome: &Outcome{Status: OutcomeReviewPending, PRURL: "https://github.com/acme/repo/pull/12"},
 			}}
 			if err := e.save(state); err != nil {
@@ -429,6 +435,10 @@ func TestIssueRecoveryReplacesPendingReviewBeforeTick(t *testing.T) {
 			runs, err := e.Runs()
 			if err != nil || len(runs) != 1 || runs[0].ID != "retry" || runs[0].RetryOf != "original" || runs[0].Status != "pending_issue" {
 				t.Fatalf("recovery did not replace the pending activation: %+v, %v", runs, err)
+			}
+			spans, err := tasktiming.Read(t.Context(), strings.NewReader(log.String()), "task")
+			if err != nil || len(spans) != 1 || spans[0].ID != wait.ID || spans[0].EndedAt == nil || !spans[0].EndedAt.Equal(now) {
+				t.Fatalf("prior review wait did not close on recovery: %+v, %v", spans, err)
 			}
 		})
 	}
@@ -931,9 +941,11 @@ func TestWorkflowReviewCooldownRetainsActivationAndRechecksHeadAfterRestart(t *t
 			}
 			tick(t, e)
 			var transitions []string
+			var timing strings.Builder
 			restarted := &Engine{Store: e.Store, StatePath: e.StatePath, Enabled: e.Enabled, Allowed: e.Allowed,
 				Now: e.Now, Fetch: e.Fetch, Submit: e.Submit, Status: e.Status, InspectPR: e.InspectPR, FinishReview: e.FinishReview,
-				Logf: func(format string, args ...any) { transitions = append(transitions, fmt.Sprintf(format, args...)) }}
+				Logf:      func(format string, args ...any) { transitions = append(transitions, fmt.Sprintf(format, args...)) },
+				TimingLog: func(format string, args ...any) { fmt.Fprintf(&timing, format+"\n", args...) }}
 			tick(t, restarted)
 			pending, err := restarted.load()
 			if err != nil || len(pending.Runs) != 1 {
@@ -957,6 +969,17 @@ func TestWorkflowReviewCooldownRetainsActivationAndRechecksHeadAfterRestart(t *t
 				}
 				if len(transitions) != 1 || !strings.HasSuffix(transitions[0], "status=succeeded reason=succeeded duration_ms=123000") {
 					t.Fatalf("completion timing omitted deferred writeback: %v", transitions)
+				}
+				spans, err := tasktiming.Read(t.Context(), strings.NewReader(timing.String()), "task")
+				if err != nil || len(spans) < 2 {
+					t.Fatalf("missing writeback timing or terminal total: %+v, err = %v\n%s", spans, err, timing.String())
+				}
+				review, total := spans[len(spans)-2], spans[len(spans)-1]
+				if review.Stage != tasktiming.Review || review.EndedAt == nil || !review.EndedAt.Equal(now) ||
+					review.WallMS == nil || *review.WallMS != 3000 ||
+					total.Stage != tasktiming.WorkflowTotal || total.EndedAt == nil || !total.EndedAt.Equal(now) ||
+					total.WallMS == nil || *total.WallMS != 123000 {
+					t.Fatalf("terminal total disagrees with coordinator completion:\n%s", timing.String())
 				}
 			} else if writes != 1 || len(state.Runs) != 1 || state.Runs[0].ID != waiting.ID ||
 				state.Runs[0].Status != awaitingReview || !strings.Contains(state.Runs[0].Reason, "Head changed") {

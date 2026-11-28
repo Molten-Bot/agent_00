@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -11,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
+	"github.com/Molten-Bot/agent_00/internal/tasktiming"
 	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
 
@@ -24,6 +26,7 @@ const (
 const (
 	logFileName           = failurefollowup.LogFileName
 	legacyTaskLogFileName = failurefollowup.LegacyTaskLogFileName
+	taskTimingLogFileName = "timing.log"
 	fallbackLogSubdir     = failurefollowup.FallbackLogSubdir
 )
 
@@ -135,7 +138,11 @@ func (m *taskLogMirror) WriteLine(line string) {
 	}
 
 	subdir := taskLogSubdirForLine(trimmed)
-	for _, fileName := range []string{logFileName, legacyTaskLogFileName} {
+	names := []string{logFileName, legacyTaskLogFileName}
+	if strings.HasPrefix(trimmed, "task_timing ") {
+		names = append(names, taskTimingLogFileName)
+	}
+	for _, fileName := range names {
 		taskFile, err := m.taskLogFileLocked(subdir, fileName)
 		if err != nil {
 			problems = append(problems, err)
@@ -308,4 +315,42 @@ func taskLogSubdirForLine(line string) string {
 		return subdir
 	}
 	return fallbackLogSubdir
+}
+
+// TaskTiming reads the same evidence displayed in the task log, including
+// prior attempts whose broker state has already expired or been restarted.
+func (m *taskLogMirror) TaskTiming(ctx context.Context, requestID string) ([]tasktiming.Span, error) {
+	dir, ok := taskLogDir(m.rootDir, requestID)
+	if !ok {
+		return nil, nil
+	}
+	file, err := os.Open(filepath.Join(dir, taskTimingLogFileName))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return tasktiming.Read(ctx, file, requestID)
+}
+
+// Cleanup after merge drops the transcript but keeps stage evidence available
+// for Studio history. Close cached handles before unlinking either transcript.
+func (m *taskLogMirror) removeTaskTranscripts(dir string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var errs []error
+	for _, name := range []string{logFileName, legacyTaskLogFileName} {
+		path := filepath.Join(dir, name)
+		if file := m.taskFiles[path]; file != nil {
+			errs = append(errs, file.Close())
+			delete(m.taskFiles, path)
+			m.taskFileOrder = slices.DeleteFunc(m.taskFileOrder, func(p string) bool { return p == path })
+		}
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }

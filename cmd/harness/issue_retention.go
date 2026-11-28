@@ -195,7 +195,7 @@ func retainIssueEvidence(ctx context.Context, claims *localruntime.IssueClaimSto
 			expireIssueArtifacts(ctx, filepath.Join(root, "review-receipts"), reviewClaims, now, &stats, nil))
 	}
 	if logRoot != "" {
-		problems = append(problems, expireIssueArtifacts(ctx, logRoot, logClaims, now, &stats, []string{logFileName, legacyTaskLogFileName}))
+		problems = append(problems, expireIssueArtifacts(ctx, logRoot, logClaims, now, &stats, []string{logFileName, legacyTaskLogFileName, taskTimingLogFileName}))
 	}
 	if len(bases) > 1 {
 		dir, err := openIssueArtifactRoot(filepath.Join(legacy, "logs"))
@@ -203,7 +203,7 @@ func retainIssueEvidence(ctx context.Context, claims *localruntime.IssueClaimSto
 			problems = append(problems, err)
 		} else if dir != nil {
 			dir.Close()
-			problems = append(problems, expireIssueArtifacts(ctx, filepath.Join(legacy, "logs", ".log"), logClaims, now, &stats, []string{logFileName, legacyTaskLogFileName}))
+			problems = append(problems, expireIssueArtifacts(ctx, filepath.Join(legacy, "logs", ".log"), logClaims, now, &stats, []string{logFileName, legacyTaskLogFileName, taskTimingLogFileName}))
 		}
 	}
 	return stats, errors.Join(problems...)

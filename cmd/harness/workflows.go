@@ -199,18 +199,20 @@ func configureWorkflows(ctx context.Context, cfg localruntime.InitConfig, runner
 			if t.RequestID != id {
 				continue
 			}
+			useArchive := archiveErr == nil &&
+				(archived.TimingAttempt == "" || t.TimingAttempt == "" || archived.TimingAttempt == t.TimingAttempt)
 			completedAt, _ := time.Parse(time.RFC3339Nano, t.UpdatedAt)
 			if archived.CompletedAt.IsZero() {
 				archived.CompletedAt = completedAt
 			}
 			switch t.Status {
 			case "completed", "no_changes", "merged":
-				if archiveErr == nil {
+				if useArchive {
 					return archived
 				}
-				return workflow.Outcome{Status: "succeeded", PRURL: t.PRURL, CompletedAt: completedAt}
+				return workflow.Outcome{Status: "succeeded", PRURL: t.PRURL, CompletedAt: completedAt, TimingAttempt: t.TimingAttempt}
 			case "error", "invalid", "stopped", "duplicate":
-				if archiveErr == nil {
+				if useArchive {
 					if archived.Status == workflow.OutcomeReviewPending {
 						return archived
 					}
@@ -220,7 +222,7 @@ func configureWorkflows(ctx context.Context, cfg localruntime.InitConfig, runner
 					}
 					return archived
 				}
-				return workflow.Outcome{Status: "failed", PRURL: t.PRURL, Reason: t.Error, CompletedAt: completedAt}
+				return workflow.Outcome{Status: "failed", PRURL: t.PRURL, Reason: t.Error, CompletedAt: completedAt, TimingAttempt: t.TimingAttempt}
 			}
 			return workflow.Outcome{Status: "running"}
 		}
@@ -279,7 +281,12 @@ func parseWorkflowOrSelection(body []byte) (config.Config, error) {
 	return localruntime.ParseRunConfigJSON(body)
 }
 
-type reviewResumeTaskKey struct{}
+type sameTaskRetryKey struct{}
+
+type sameTaskRetry struct {
+	requestID string
+	resumePR  bool
+}
 
 func resumePublishedTask(task web.Task, cfg *config.Config) bool {
 	retryable := task.Status == "error" || task.Status == "stopped" || (task.Status == "completed" && task.ReviewFindingsRemain)

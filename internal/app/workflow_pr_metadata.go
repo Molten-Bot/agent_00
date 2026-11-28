@@ -10,6 +10,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/githubutil"
+	"github.com/Molten-Bot/agent_00/internal/tasktiming"
 )
 
 var ErrWorkflowPRMetadata = errors.New("workflow PR metadata update failed")
@@ -24,6 +25,7 @@ func (h Harness) applyWorkflowPRMetadata(ctx context.Context, repo repoWorkspace
 	if policy == nil || (policy.PRAssignee == "" && len(policy.PRLabels) == 0) {
 		return nil
 	}
+	defer tasktiming.Enter(ctx, tasktiming.Publication)()
 	repository := githubutil.PullRequestRepository(repo.PRURL)
 	if !config.ValidGitHubRepository(repository) {
 		return fmt.Errorf("%w: invalid pull request URL %q", ErrWorkflowPRMetadata, repo.PRURL)

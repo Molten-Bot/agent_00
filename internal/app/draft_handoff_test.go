@@ -18,6 +18,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/githubutil"
+	"github.com/Molten-Bot/agent_00/internal/tasktiming"
 	"github.com/Molten-Bot/agent_00/internal/workflow"
 	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
@@ -333,6 +334,8 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 					return slices.Contains(credentialKeys, key)
 				})
 			}
+			now := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
+			var timing strings.Builder
 			runner := issueBranchRunner(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
 				if len(cmd.Args) > 1 && cmd.Name == "gh" && cmd.Args[0] == "api" && cmd.Args[1] == "--include" {
 					cmd.Args = append([]string{"api"}, cmd.Args[2:]...)
@@ -370,6 +373,10 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 					}
 					return res, err
 				case "codex":
+					if cmd.Stdin != "" {
+						now = now.Add(2 * time.Second)
+					}
+
 					switch {
 					case args == "--help":
 						return execx.Result{}, nil
@@ -780,6 +787,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 				}
 			}
 			h.Sleep = func(_ context.Context, delay time.Duration) error {
+				now = now.Add(delay)
 				waits++
 				if tc.timeoutSnapshot != "" {
 					if workspaceHeld || waits != 1 {
@@ -876,7 +884,39 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 					DefaultApplied: true, PolicyHash: activation.Workflow.ExecutionPolicyHash(),
 					ReviewCycles: policy.ReviewCycles, ReviewAgent: policy.ReviewAgent}
 			}
-			result := h.Run(t.Context(), cfg)
+			timingCtx := tasktiming.WithRecorder(t.Context(), "task", "attempt", func() time.Time { return now },
+				func(format string, args ...any) { fmt.Fprintf(&timing, format+"\n", args...) })
+			tasktiming.Set(timingCtx, tasktiming.App)
+			result := h.Run(timingCtx, cfg)
+			tasktiming.Set(timingCtx, "")
+			if tc.repair && tc.wantExit == ExitSuccess && tc.mergedAtReview == "" {
+				spans, err := tasktiming.Read(t.Context(), strings.NewReader(timing.String()), "task")
+				if err != nil {
+					t.Fatal(err)
+				}
+				order := []tasktiming.Stage{tasktiming.Implementation, tasktiming.Publication, tasktiming.Checks,
+					tasktiming.Review, tasktiming.Repair, tasktiming.Publication, tasktiming.Checks, tasktiming.Review,
+					tasktiming.Verification, tasktiming.Checks, tasktiming.Verification, tasktiming.Ready}
+				next := 0
+				var ciMS, agentMS int64
+				for _, span := range spans {
+					if next < len(order) && span.Stage == order[next] {
+						next++
+					}
+					if span.Stage == tasktiming.Checks {
+						if span.AgentMS != nil {
+							t.Fatalf("CI wait counted as agent execution:\n%s", timing.String())
+						}
+						ciMS += *span.WallMS
+					}
+					if span.AgentMS != nil {
+						agentMS += *span.AgentMS
+					}
+				}
+				if next != len(order) || ciMS < 1000 || agentMS != 10000 {
+					t.Fatalf("timing: stage sequence matched %d/%d, CI %d ms, agent %d ms\n%s", next, len(order), ciMS, agentMS, timing.String())
+				}
+			}
 			if result.ExitCode != tc.wantExit {
 				t.Fatalf("issue run exit = %d, want %d, repair head reads = %d: %v", result.ExitCode, tc.wantExit, repairHeadReads, result.Err)
 			}

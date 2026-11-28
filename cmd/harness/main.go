@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -31,6 +32,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/multiplex"
 	"github.com/Molten-Bot/agent_00/internal/stringsx"
+	"github.com/Molten-Bot/agent_00/internal/tasktiming"
 	"github.com/Molten-Bot/agent_00/internal/web"
 	"github.com/Molten-Bot/agent_00/internal/workflow"
 	"github.com/Molten-Bot/agent_00/internal/workspace"
@@ -483,9 +485,9 @@ func runServer(args []string) int {
 		if repairWork != nil {
 			requestID = repairWork.record.RequestID
 		}
-		resumeRequestID, _ := reqCtx.Value(reviewResumeTaskKey{}).(string)
-		if resumeRequestID != "" {
-			requestID = resumeRequestID
+		retry, _ := reqCtx.Value(sameTaskRetryKey{}).(sameTaskRetry)
+		if retry.requestID != "" {
+			requestID = retry.requestID
 		}
 		if dedupeKey != "" {
 			if accepted, state, duplicateOf := localSubmitDeduper.Begin(dedupeKey, requestID, allowCompletedDuplicate); !accepted {
@@ -500,13 +502,25 @@ func runServer(args []string) int {
 		}
 		runCtx, cancelRun := context.WithCancelCause(ctx)
 		taskHandle := localTaskController.Register(requestID, cancelRun)
-		if resumeRequestID != "" || (issueWork != nil && (issueWork.record.Outcome == localruntime.IssueChecksPending ||
+		attempt := rand.Text()
+		acceptedAt := time.Now()
+		runCtx = tasktiming.WithRecorder(runCtx, requestID, attempt, time.Now, daemonLogger)
+		if retry.resumePR || (issueWork != nil && (issueWork.record.Outcome == localruntime.IssueChecksPending ||
 			(runCfg.GitHubIssue.Claim.Attempt > 1 && requestID != "issue-"+issueWork.record.ID))) {
 			daemonLogger("task status=queued request_id=%s action=resume_draft_verification", requestID)
+		} else if retry.requestID != "" {
+			daemonLogger("task status=queued request_id=%s action=retry_task", requestID)
 		}
 		if runConfigJSON, ok := marshalRunConfigJSON(runCfg); ok {
 			monitorBroker.RecordTaskRunConfigWithSource(requestID, runConfigJSON, taskStartSourceForSubmission(source, runCfg))
 		}
+
+		if runCfg.Workflow != nil && !runCfg.Workflow.IsDefaultExecution() && !runCfg.Workflow.DetachedReview && workflowEngine != nil {
+			if err := workflowEngine.AcceptTimingAttempt(runCfg.Workflow.EventID, requestID, attempt, acceptedAt); err != nil {
+				daemonLogger("workflow status=warn action=record_timing_attempt err=%q", err)
+			}
+		}
+		tasktiming.Accepted(runCtx, acceptedAt)
 
 		go func(
 			requestID string,
@@ -555,6 +569,7 @@ func runServer(args []string) int {
 			}
 			// Release task controls before the issue worker releases its lock for recovery.
 			defer localTaskController.Complete(requestID)
+			defer tasktiming.Set(runCtx, "")
 			if dedupeKey != "" {
 				defer func() {
 					localSubmitDeduper.Done(dedupeKey, requestID, dedupeFinalStateForSubmission(source, finalState))
@@ -675,6 +690,7 @@ func runServer(args []string) int {
 					return
 				}
 
+				tasktiming.Set(runCtx, tasktiming.App)
 				signingSnapshot := admission.SigningSnapshot
 				release := admission.Release
 				if repairWork != nil {
@@ -751,6 +767,7 @@ func runServer(args []string) int {
 					if errors.Is(outcome.Result.Err, os.ErrPermission) {
 						diskRequest.PermissionDeniedRoot = workspaceRoot
 					}
+					tasktiming.Set(runCtx, tasktiming.Queue)
 					forceRetry = canRetryWorkspace && forceAcquire
 					if !canRetryWorkspace {
 						delay := time.Duration(max(250, cfg.Scheduler.SampleIntervalMS)) * time.Millisecond
@@ -759,6 +776,7 @@ func runServer(args []string) int {
 					continue
 				}
 
+				tasktiming.Set(runCtx, "")
 				reviewOutcome := workflow.Outcome{
 					Status: "succeeded", PRURL: outcome.Result.PRURL, Reason: "Task completed", CompletedAt: time.Now().UTC(),
 					ReviewReceipt: outcome.Result.ReviewReceipt, ReviewInterrupted: outcome.Result.ReviewInterrupted,
@@ -787,6 +805,8 @@ func runServer(args []string) int {
 					}
 				}
 
+				reviewOutcome.TimingAttempt = attempt
+				reviewOutcome.TimingAcceptedAt = acceptedAt.UTC()
 				reviewArchiveErr := archiveTaskReviewOutcome(filepath.Dir(cfg.RuntimeConfigPath), requestID, runCfg.Review != nil, reviewOutcome)
 				if reviewArchiveErr != nil {
 					daemonLogger("task status=warn action=save_review_outcome request_id=%s err=%q", requestID, reviewArchiveErr)
@@ -845,7 +865,9 @@ func runServer(args []string) int {
 			daemonLogger("workflow status=error err=%q", err)
 			return app.ExitConfig
 		}
+		uiServer.LoadTaskTiming = persistentLogs.TaskTiming
 		workflowEngine = uiServer.Workflows
+		workflowEngine.TimingLog = daemonLogger
 		workflowEngine.MemoryPressure = memoryPressure
 		workflowEngine.IssueTaskStopped = func(eventID string) bool {
 			records, _ := issueClaims.List()
@@ -961,7 +983,13 @@ func runServer(args []string) int {
 			workspaceDir := ""
 			if ok {
 				workspaceDir = taskWorkspaceDirFromLogDir(logDir, requestID)
-				if err := os.RemoveAll(logDir); err != nil {
+				var removeErr error
+				if automatic {
+					removeErr = persistentLogs.removeTaskTranscripts(logDir)
+				} else {
+					removeErr = os.RemoveAll(logDir)
+				}
+				if err := removeErr; err != nil {
 					errs = append(errs, fmt.Errorf("remove task log dir %s: %w", logDir, err))
 				} else {
 					daemonLogger("task status=ok action=task_close_cleanup request_id=%s log_dir=%s", requestID, logDir)
@@ -1039,7 +1067,10 @@ func runServer(args []string) int {
 			}
 			recordLibraryUsage(runCfg)
 			task, _ := monitorBroker.Task(requestID)
-			if resumePublishedTask(task, &runCfg) {
+			resumePR := resumePublishedTask(task, &runCfg)
+			retryCapturedTask := runCfg.Workflow != nil && runCfg.GitHubIssue == nil &&
+				(task.Status == "error" || task.Status == "stopped")
+			if resumePR || retryCapturedTask {
 				reviewResumeMu.Lock()
 				defer reviewResumeMu.Unlock()
 				if _, err := localTaskController.handleFor(requestID); err == nil {
@@ -1049,7 +1080,7 @@ func runServer(args []string) int {
 				if !ok || current.StatusRevision != task.StatusRevision {
 					return "", fmt.Errorf("task changed before retry; refresh its status")
 				}
-				reqCtx = context.WithValue(reqCtx, reviewResumeTaskKey{}, requestID)
+				reqCtx = context.WithValue(reqCtx, sameTaskRetryKey{}, sameTaskRetry{requestID: requestID, resumePR: resumePR})
 			}
 			return retryWorkflowTask(reqCtx, workflowEngine, task, runCfg, func(retryCfg config.Config) (string, error) {
 				return enqueueLocalRun(reqCtx, retryCfg, rerunSource, force)
@@ -1302,6 +1333,16 @@ func (r runtimeLogRouter) Printf(format string, args ...any) {
 func (r runtimeLogRouter) Log(line string) {
 	line = strings.TrimSpace(line)
 	if line == "" {
+		return
+	}
+
+	if strings.HasPrefix(line, "task_timing ") {
+		if r.logger != nil {
+			r.logger.Capture(line)
+		}
+		if r.broker != nil {
+			r.broker.IngestLog(line)
+		}
 		return
 	}
 
@@ -1607,6 +1648,7 @@ func runLocalTask(
 	}
 
 	res := h.Run(ctx, runCfg)
+	tasktiming.Set(ctx, tasktiming.App)
 	issueWork, issue := ctx.Value(issueExecutionContextKey{}).(*issueExecution)
 	if ctx.Err() == nil && !issue && res.ExitCode == app.ExitWorkspace && res.WorkspaceDir == "" &&
 		(canRetryWorkspace || workspace.IsDiskFull(res.Err)) {

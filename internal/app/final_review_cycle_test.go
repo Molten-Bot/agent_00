@@ -17,6 +17,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/tasktiming"
 	"github.com/Molten-Bot/agent_00/internal/workflow"
 )
 
@@ -158,7 +159,15 @@ func TestRunFinalReviewCycleStopsAfterCleanPass(t *testing.T) {
 func testRunFinalReviewCycleStopsAfterCleanPass(t *testing.T, passes int) {
 	t.Helper()
 	runner := &cleanReviewCycleRunner{t: t}
-	h := New(runner)
+	now := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
+	h := New(sessionRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+		elapsed := time.Second
+		if cmd.Name == "codex" {
+			elapsed = 5 * time.Second
+		}
+		now = now.Add(elapsed)
+		return runner.Run(ctx, cmd)
+	}))
 	h.FinalReviewPasses = passes
 	var logs []string
 	h.Logf = func(format string, args ...any) {
@@ -179,8 +188,11 @@ func testRunFinalReviewCycleStopsAfterCleanPass(t *testing.T, passes int) {
 		Changed:    true,
 	}
 
+	var timing strings.Builder
+	ctx := tasktiming.WithRecorder(t.Context(), "task", "attempt", func() time.Time { return now },
+		func(format string, args ...any) { fmt.Fprintf(&timing, format+"\n", args...) })
 	exitCode, stage, err := h.runFinalReviewCycle(
-		context.Background(),
+		ctx,
 		config.Config{Prompt: "Implement the requested behavior. Post progress to the PR."},
 		repo,
 		agentruntime.Default(),
@@ -194,6 +206,11 @@ func testRunFinalReviewCycleStopsAfterCleanPass(t *testing.T, passes int) {
 	)
 	if err != nil || exitCode != ExitSuccess || stage != "" {
 		t.Fatalf("runFinalReviewCycle() = (%d, %q, %v), want success", exitCode, stage, err)
+	}
+	spans, timingErr := tasktiming.Read(t.Context(), strings.NewReader(timing.String()), "task")
+	if timingErr != nil || len(spans) != 1 || spans[0].Stage != tasktiming.Review || spans[0].AgentMS == nil ||
+		*spans[0].AgentMS != 5000 || spans[0].WallMS == nil || *spans[0].WallMS <= 5000 {
+		t.Fatalf("early clean exit timing = %+v, err = %v\n%s", spans, timingErr, timing.String())
 	}
 	if runner.reviews != 1 || runner.comments != 1 {
 		t.Fatalf("review/comment counts = %d/%d, want 1/1", runner.reviews, runner.comments)

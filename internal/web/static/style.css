@@ -2688,6 +2688,32 @@ select.prompt-control {
   cursor: pointer;
 }
 
+.task-stage-timing {
+  margin-top: 6px;
+  color: var(--text-soft);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.task-stage-timing summary {
+  cursor: pointer;
+}
+
+.task-stage-timing strong {
+  display: block;
+  margin-top: 6px;
+}
+
+.task-stage-timing ul {
+  margin: 2px 0;
+  padding-inline-start: 0.8rem;
+  list-style: none;
+}
+
+.task-stage-timing small {
+  display: block;
+}
+
 .task-issue-current {
   display: flex;
   flex-wrap: wrap;
