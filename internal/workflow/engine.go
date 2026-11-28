@@ -442,29 +442,26 @@ func (e *Engine) logRun(r Run, event string, finishedAt, mergedAt time.Time) {
 	startedAt, durationMS := "unknown", "unknown"
 	mergeField := ""
 	if !mergedAt.IsZero() {
-		finishedAt = mergedAt
 		mergeField = " merged_at=" + mergedAt.UTC().Format(time.RFC3339Nano)
-	} else if finishedAt.IsZero() {
-		finishedAt = r.UpdatedAt
 	}
+	var start time.Time
 	if r.StartedAt != nil && !r.StartedAt.IsZero() {
-		startedAt = r.StartedAt.UTC().Format(time.RFC3339Nano)
-		if terminal(r.Status) && (!mergedAt.IsZero() || !finishedAt.Before(*r.StartedAt)) {
-			durationMS = strconv.FormatInt(max(0, finishedAt.Sub(*r.StartedAt)).Milliseconds(), 10)
-		}
+		start = *r.StartedAt
+		startedAt = start.UTC().Format(time.RFC3339Nano)
 	}
 	if terminal(r.Status) {
 		if r.Status == "merged" && r.Reason != "Pull request merged" {
 			tasktiming.Start(r.timingAttempt(), "observed-merge-"+r.ID, tasktiming.Merge, time.Time{}).
 				End(mergedAt).Write(e.TimingLog, r.RequestID)
 		}
-		var start time.Time
-		if r.StartedAt != nil {
-			start = *r.StartedAt
-		}
 		total := tasktiming.Start(r.timingAttempt(), "total-"+r.ID, tasktiming.WorkflowTotal, start).End(finishedAt)
-		if ms, err := strconv.ParseInt(durationMS, 10, 64); err == nil {
-			total.WallMS = &ms
+		if !start.IsZero() && !mergedAt.IsZero() && mergedAt.Before(start) {
+			// GitHub may report a merge that predates this activation.
+			var zero int64
+			total.WallMS = &zero
+		}
+		if total.WallMS != nil {
+			durationMS = strconv.FormatInt(*total.WallMS, 10)
 		}
 		total.Write(e.TimingLog, r.RequestID)
 	}
@@ -813,14 +810,20 @@ func (e *Engine) finishSubmission(id, request string, submitErr error) error {
 		if submitErr == nil && request != "" && r.RetryOf != "" {
 			if prior := s.run(r.RetryOf); prior != nil && prior.RequestID == request && prior.Workflow.ID == r.Workflow.ID {
 				prior.Status, prior.Reason = "completed", "Superseded by same-task retry"
-				prior.closeTimingWait(e.TimingLog, r.UpdatedAt)
+				end := r.UpdatedAt
+				// Complete can save the new outcome before submission attaches its request ID.
+				if o := r.Outcome; prior.TimingWait != nil && o != nil && o.TimingAttempt != "" &&
+					o.TimingAttempt != prior.TimingWait.Attempt && !o.TimingAcceptedAt.IsZero() {
+					end = o.TimingAcceptedAt
+				}
+				prior.closeTimingWait(e.TimingLog, end)
 			}
 		}
 		result = *r
 		return nil
 	})
 	if err == nil {
-		e.logRun(result, "submission", time.Time{}, time.Time{})
+		e.logRun(result, "submission", result.UpdatedAt, time.Time{})
 	}
 	return err
 }
@@ -901,12 +904,14 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 				}
 			}
 		}
+		if !mergedAt.IsZero() {
+			finishedAt = mergedAt
+		} else if terminal(r.Status) && finishedAt.IsZero() {
+			finishedAt = r.UpdatedAt
+		}
 		waitEnd := actionStarted
 		if waitEnd.IsZero() {
 			waitEnd = finishedAt
-			if !mergedAt.IsZero() {
-				waitEnd = mergedAt
-			}
 		}
 		closedWait, openedWait := e.updateTimingWait(&r, waitEnd)
 		if err := commit(); err != nil {
@@ -1532,6 +1537,7 @@ func (e *Engine) ObserveIssueMerge(id, requestID, prURL string, mergedAt time.Ti
 	}
 	defer e.tickMu.Unlock()
 	var merged Run
+	var finishedAt time.Time
 	err := e.transaction(func(s *State) error {
 		r := s.run(id)
 		if r == nil || e.submitting[id] || r.Status == "merged" || (r.RequestID != "" && r.RequestID != requestID) ||
@@ -1552,16 +1558,16 @@ func (e *Engine) ObserveIssueMerge(id, requestID, prURL string, mergedAt time.Ti
 		}
 		r.Status, r.Reason, r.PRURL = "merged", reason, prURL
 		r.RequestID, r.UpdatedAt, r.GitHubRetryAt = requestID, e.now(), time.Time{}
-		end := mergedAt
-		if end.IsZero() {
-			end = r.UpdatedAt
+		finishedAt = mergedAt
+		if finishedAt.IsZero() {
+			finishedAt = r.UpdatedAt
 		}
-		r.closeTimingWait(e.TimingLog, end)
+		r.closeTimingWait(e.TimingLog, finishedAt)
 		merged = *r
 		return nil
 	})
 	if err == nil && merged.ID != "" {
-		e.logRun(merged, "transition", time.Time{}, mergedAt)
+		e.logRun(merged, "transition", finishedAt, mergedAt)
 	}
 	return err
 }
