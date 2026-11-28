@@ -201,6 +201,20 @@ func TestBrokerShowsCheckWaitOnExistingTask(t *testing.T) {
 	}
 }
 
+func TestBrokerShowsMergeConflictInsteadOfEarlierCheckError(t *testing.T) {
+	t.Parallel()
+	b := NewBroker()
+	const id = "issue-conflict-repair"
+	const url = "https://github.com/acme/repo/pull/42"
+	b.IngestLog("task status=start request_id=" + id + " explicit_terminal=true")
+	b.IngestLog(`task request_id=` + id + ` stage=checks status=warn err="pull request head changed or is still propagating"`)
+	b.IngestLog("task request_id=" + id + " stage=merge_conflict status=start action=detect pr_url=" + url)
+	task, ok := b.Task(id)
+	if !ok || task.Status != "running" || task.Stage != "merge_conflict" || task.StageStatus != "start" || task.Error != "" || task.PRURL != url {
+		t.Fatalf("conflict repair did not supersede the earlier check error: %+v", task)
+	}
+}
+
 func TestBrokerShowsWorkspaceReadmissionOnSameTaskAndStage(t *testing.T) {
 	t.Parallel()
 	b := NewBroker()

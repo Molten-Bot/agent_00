@@ -68,9 +68,10 @@ func checkPollDelay(expected, elapsed time.Duration) time.Duration {
 }
 
 type checkPoll struct {
-	stage, key string
-	started    time.Time
-	waited     bool
+	stage, key          string
+	started             time.Time
+	waited              bool
+	refreshMergeability func(context.Context) error
 }
 
 func newCheckPoll(stage, prURL string) checkPoll {
@@ -159,17 +160,18 @@ func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) (merged
 	}()
 	var policyBase string
 	var required []string
+	unknownMergeability := 0
 	for {
 		if timeout > 0 && (incompleteRollupHead.HeadRefOID != "" && !time.Now().Before(reconcileAt) ||
 			!time.Now().Before(resumeDeadline)) {
 			return false, ErrChecksUnavailable
 		}
-		res, err := h.runCheckQuery(ctx, "checks", prStateViewCommand("", prURL, "statusCheckRollup", "id"), checkQueryTimeout)
+		res, err := h.runCheckQuery(ctx, "checks", prStateViewCommand("", prURL, "statusCheckRollup", "id", "mergeable"), checkQueryTimeout)
 		if err != nil {
 			return false, commandErrorWithDetails("refresh resumed PR checks", err, res, maxGitErrorDetailChars)
 		}
 		var pr struct {
-			prStateView
+			prMergeability
 			StatusCheckRollup []githubutil.StatusCheck
 		}
 		if err := json.Unmarshal([]byte(res.Stdout), &pr); err != nil {
@@ -197,6 +199,25 @@ func (h Harness) waitForResumedChecks(ctx context.Context, prURL string) (merged
 			clear(observedPending)
 			observedHead = pr.HeadRefOID
 		}
+		switch pr.Mergeable {
+		case "CONFLICTING":
+			h.logf("stage=merge_conflict status=start action=detect pr_url=%s head=%s base_branch=%s", prURL, pr.HeadRefOID, pr.BaseRefName)
+			// Yield to workspace admission. The repair path reports progress
+			// after admission, when it can persist the step and start repair.
+			return false, nil
+		case "UNKNOWN":
+			incompleteRollupHead = prStateView{}
+			ctx = resumeCtx
+			unknownMergeability++
+			if unknownMergeability >= maxMergeabilityChecks || timeout == 0 {
+				return false, fmt.Errorf("%w: pull request mergeability is unknown", ErrChecksUnavailable)
+			}
+			if err := h.Sleep(ctx, mergeabilityRetryDelay); err != nil {
+				return false, err
+			}
+			continue
+		}
+		unknownMergeability = 0
 		visible := make(map[string]bool, len(pr.StatusCheckRollup))
 		var names []string
 		for _, check := range pr.StatusCheckRollup {

@@ -659,7 +659,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 						}
 						return execx.Result{Stdout: "CI\tpass\n"}, nil
 					case strings.HasPrefix(args, "pr view "):
-						if tc.timeoutSnapshot != "" && slices.Contains(cmd.Args, "state,mergeable,baseRefName,headRefName") {
+						if tc.timeoutSnapshot != "" && commandsEqual(cmd, prMergeabilityCommand(cmd.Dir, prURL)) {
 							timeoutMergeabilityRead = timeoutSnapshots > 0
 						}
 						head := api.head
@@ -673,7 +673,7 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 								head = headBeforeRepair
 							}
 						}
-						if slices.Contains(cmd.Args, "state,mergeable,baseRefName,headRefName") &&
+						if commandsEqual(cmd, prMergeabilityCommand(cmd.Dir, prURL)) &&
 							(tc.mergedAtReview == "before" || (tc.mergedAtReview == "after" && api.posts > 0)) {
 							state = "MERGED"
 						}

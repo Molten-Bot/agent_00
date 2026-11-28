@@ -2785,6 +2785,9 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 				t.Error = ""
 			}
 		}
+		if fields["stage"] == "merge_conflict" && fields["action"] == "detect" {
+			t.Error, t.Warning = "", ""
+		}
 		if fields["stage"] == "review" && fields["action"] == "receipt" {
 			t.ReviewURL = fields["review_url"]
 		}

@@ -187,6 +187,7 @@ type repoWorkspace struct {
 	CreateWorkBranch            bool
 	ResumeWorkflowPR            bool
 	ResumeHead                  string
+	MergeConflictRepairs        int
 	IssueClaimBranch            bool
 	Changed                     bool
 	BranchCollisionSuffix       string
@@ -885,8 +886,13 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 			if strings.TrimSpace(repos[i].PRURL) == "" {
 				continue
 			}
-			if code, stage, err := h.ensurePullRequestMergeable(ctx, runCfg, &repos[i], runtime, codexDir, codexOpts, codexBasePrompt, agentsPath, codexTargetLabel, agentStage); err != nil {
+			if code, stage, err := h.ensurePullRequestMergeable(ctx, runCfg, &repos[i], runtime, codexDir, codexOpts, codexBasePrompt, agentsPath, codexTargetLabel, agentStage, "", false); err != nil {
 				return code, stage, err
+			}
+			if repos[i].MergeConflictRepairs > 0 {
+				if code, stage, err := h.checkPublishedPullRequest(ctx, runCfg, &repos[i], runtime, codexDir, codexOpts, codexBasePrompt, agentsPath, codexTargetLabel, agentStage, len(repos) > 1); err != nil {
+					return code, stage, err
+				}
 			}
 			if repos[i].ReviewRequired {
 				if code, stage, err := h.finalizePullRequestReview(ctx, runCfg, &repos[i], runtime, codexDir, codexOpts, codexBasePrompt, agentsPath, codexTargetLabel, agentStage, len(repos) > 1); err != nil {
@@ -1028,9 +1034,19 @@ func (h Harness) finishPublishedPullRequest(
 	codexBasePrompt, agentsPath, codexTargetLabel, agentStage string,
 	multiRepo bool,
 ) (int, string, error) {
-	// Check after publishing/CI and before review, including reused PR branches.
-	if exitCode, stage, err := h.ensurePullRequestMergeable(ctx, cfg, repo, runtime, codexDir, codexOpts, codexBasePrompt, agentsPath, codexTargetLabel, agentStage); err != nil {
-		return exitCode, stage, err
+	// A conflict can first appear as CI finishes. If the gate repairs it,
+	// verify checks on the new head before starting review.
+	for {
+		repairs := repo.MergeConflictRepairs
+		if exitCode, stage, err := h.ensurePullRequestMergeable(ctx, cfg, repo, runtime, codexDir, codexOpts, codexBasePrompt, agentsPath, codexTargetLabel, agentStage, "", false); err != nil || repo.PRAlreadyMerged {
+			return exitCode, stage, err
+		}
+		if repo.MergeConflictRepairs == repairs {
+			break
+		}
+		if exitCode, stage, err := h.checkPublishedPullRequest(ctx, cfg, repo, runtime, codexDir, codexOpts, codexBasePrompt, agentsPath, codexTargetLabel, agentStage, multiRepo); err != nil || repo.PRAlreadyMerged {
+			return exitCode, stage, err
+		}
 	}
 	return h.finalizePullRequestReview(ctx, cfg, repo, runtime, codexDir, codexOpts, codexBasePrompt, agentsPath, codexTargetLabel, agentStage, multiRepo)
 }
@@ -1055,6 +1071,8 @@ func (h Harness) finalizePullRequestReview(
 		repo.ReviewedPatch.remove()
 		repo.ReviewedPatch = nil
 	}()
+reviewCurrentHead:
+	draftConflictObserved := false
 	exitCode, stage, err := h.runFinalReviewCycle(
 		ctx, cfg, repo, runtime, codexDir, codexOpts, codexBasePrompt,
 		agentsPath, codexTargetLabel, agentStage, multiRepo,
@@ -1074,13 +1092,22 @@ func (h Harness) finalizePullRequestReview(
 	} else if err != nil {
 		return exitCode, stage, err
 	}
+verifyReviewedMergeability:
 	// The base can advance while reviews and repairs run. Never release a
 	// conflicting PR or report a successful draft handoff without checking again.
-	if exitCode, stage, err := h.ensurePullRequestMergeable(ctx, cfg, repo, runtime, codexDir, codexOpts, codexBasePrompt, agentsPath, codexTargetLabel, agentStage); err != nil {
+	repairs := repo.MergeConflictRepairs
+	if exitCode, stage, err := h.ensurePullRequestMergeable(ctx, cfg, repo, runtime, codexDir, codexOpts, codexBasePrompt, agentsPath, codexTargetLabel, agentStage, "", false); err != nil || repo.PRAlreadyMerged {
 		return exitCode, stage, err
 	}
-	if repo.PRAlreadyMerged {
-		return ExitSuccess, "", nil
+	if repo.MergeConflictRepairs != repairs {
+		if exitCode, stage, err := h.checkPublishedPullRequest(ctx, cfg, repo, runtime, codexDir, codexOpts, codexBasePrompt, agentsPath, codexTargetLabel, agentStage, multiRepo); err != nil || repo.PRAlreadyMerged {
+			return exitCode, stage, err
+		}
+		goto reviewCurrentHead
+	}
+	if draftConflictObserved {
+		repo.ReviewReceipt = nil
+		return ExitPR, "pr_verification", fmt.Errorf("%w: mergeability changed during draft verification", ErrChecksUnavailable)
 	}
 	if repo.CreateWorkBranch || repo.ResumeWorkflowPR {
 		hasNetDiff, diffErr := h.repoHasEffectivePullRequestDiff(ctx, *repo)
@@ -1135,6 +1162,10 @@ func (h Harness) finalizePullRequestReview(
 			// Read the live rollup again after verification. Becoming ready can
 			// start new required checks without changing the reviewed head.
 			_, err = h.waitForDraftVerificationEvidence(ctx, *repo)
+		}
+		if errors.Is(err, errPRMergeConflict) {
+			draftConflictObserved = true
+			goto verifyReviewedMergeability
 		}
 		if errors.Is(err, githubutil.ErrReviewInterrupted) {
 			h.logf("stage=pr_verification status=ok action=observe_merge pr_url=%s", repo.PRURL)
@@ -1422,13 +1453,16 @@ func (h Harness) checkPublishedPullRequest(
 	codexBasePrompt, agentsPath, codexTargetLabel, agentStage string,
 	multiRepo bool,
 ) (exitCode int, stage string, resultErr error) {
+	if repo.PRAlreadyMerged {
+		return ExitSuccess, "", nil
+	}
 	preserveIssueTitle := cfg.GitHubIssue != nil
 	var checkHead string
 	// A watch follows a PR number, so bracket its result with reads of the
 	// published commit. Review only starts once checks are tied to that head.
 	if repo.IssueClaimBranch {
 		defer func() {
-			if resultErr == nil {
+			if resultErr == nil && !repo.PRAlreadyMerged {
 				if err := h.confirmCurrentRequiredChecks(ctx, *repo, checkHead); err != nil {
 					exitCode, stage, resultErr = ExitPR, "checks", err
 				}
@@ -1440,7 +1474,18 @@ func (h Harness) checkPublishedPullRequest(
 			}
 		}()
 	}
-	for attempt := 0; ; attempt++ {
+	attempt := 0
+	conflictDetected := false
+checkHeadAttempt:
+	for {
+		if conflictDetected {
+			// Repair the live PR before looking for CI on the earlier head.
+			conflictDetected = false
+			if code, stage, err := h.ensurePullRequestMergeable(ctx, cfg, repo, runtime, codexDir, codexOpts, codexBasePrompt, agentsPath, codexTargetLabel, agentStage, "", true); err != nil || repo.PRAlreadyMerged {
+				return code, stage, err
+			}
+		}
+		conflictRepairs := repo.MergeConflictRepairs
 		if repo.IssueClaimBranch {
 			var err error
 			checkHead, err = h.currentHead(ctx, *repo)
@@ -1454,16 +1499,20 @@ func (h Harness) checkPublishedPullRequest(
 					if err != nil {
 						return ExitPR, "checks", err
 					}
-				} else {
-					progress := reviewRepairProgress{PRURL: repo.PRURL, Head: checkHead, Pass: repo.ReviewRepairPass, Policy: policy}
-					if err := saveReviewJournal(h.reviewRepairProgressPath(*repo), progress); err != nil {
-						return ExitPR, "checks", fmt.Errorf("save published review repair: %w", err)
-					}
+				} else if err := h.savePublishedReviewRepair(*repo, checkHead, policy); err != nil {
+					return ExitPR, "checks", err
 				}
 			}
 			if err := h.waitForPublishedCheckHead(ctx, *repo, checkHead); err != nil {
 				return ExitPR, "checks", err
 			}
+		}
+		if code, stage, err := h.ensurePullRequestMergeable(ctx, cfg, repo, runtime, codexDir, codexOpts, codexBasePrompt, agentsPath, codexTargetLabel, agentStage, checkHead, true); err != nil || repo.PRAlreadyMerged {
+			return code, stage, err
+		}
+		if repo.IssueClaimBranch && repo.MergeConflictRepairs > conflictRepairs {
+			// Refresh the local head and its review-fix journal before watching CI.
+			continue
 		}
 		remainingTitlePropagationRetries := 0
 	checkPR:
@@ -1475,8 +1524,12 @@ func (h Harness) checkPublishedPullRequest(
 		noReportBudget := maxPRChecksNoReportRetries * prChecksNoReportRetryDelay
 		// Check propagation and execution share one timing sample for this head.
 		poll := newCheckPoll("checks", repo.PRURL)
+		poll.refreshMergeability = func(ctx context.Context) error {
+			return h.checkForPRConflict(ctx, *repo, checkHead)
+		}
 		for noReportRetry := 0; ; noReportRetry++ {
 			confirmedFailure := false
+			h.step("checks")
 			h.logf("stage=checks status=start repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
 			checkRes, checkErr = h.runPRChecksWatch(ctx, prChecksCommand(repo.Dir, repo.PRURL), poll)
 			if errors.Is(checkErr, ErrChecksUnavailable) || ctx.Err() != nil {
@@ -1531,7 +1584,7 @@ func (h Harness) checkPublishedPullRequest(
 						requiredErr,
 					)
 				}
-				checkRes, checkErr = h.runPRChecksWatch(ctx, prChecksAnyCommand(repo.Dir, repo.PRURL), poll)
+				checkRes, checkErr = h.runPRChecksWatch(ctx, prChecksCommand(repo.Dir, repo.PRURL), poll)
 				if errors.Is(checkErr, ErrChecksUnavailable) || ctx.Err() != nil {
 					return ExitPR, "checks", checkErr
 				}
@@ -1549,6 +1602,14 @@ func (h Harness) checkPublishedPullRequest(
 					)
 					return ExitSuccess, "", nil
 				}
+			}
+			if errors.Is(checkErr, errPRMergeConflict) {
+				conflictDetected = true
+				continue checkHeadAttempt
+			}
+			if errors.Is(checkErr, githubutil.ErrReviewInterrupted) {
+				h.recordObservedMerge(repo)
+				return ExitSuccess, "", nil
 			}
 			if errors.Is(checkErr, errPRChecksWatchTimeout) {
 				h.logf(
@@ -1659,10 +1720,7 @@ func (h Harness) checkPublishedPullRequest(
 					return ExitPR, "pr", recreateErr
 				}
 				if recreated {
-					noReportRetry = -1
-					noReportBudget = maxPRChecksNoReportRetries * prChecksNoReportRetryDelay
-					poll = newCheckPoll("checks", repo.PRURL)
-					continue
+					continue checkHeadAttempt
 				}
 			}
 			if noChecksReported && noReportRetry == 0 && h.IssueChecksPRURL == "" {
@@ -1782,6 +1840,17 @@ func (h Harness) checkPublishedPullRequest(
 				return ExitPR, "checks", err
 			}
 			noReportBudget -= delay
+			if err := poll.refreshMergeability(ctx); err != nil {
+				if errors.Is(err, errPRMergeConflict) {
+					conflictDetected = true
+					continue checkHeadAttempt
+				}
+				if errors.Is(err, githubutil.ErrReviewInterrupted) {
+					h.recordObservedMerge(repo)
+					return ExitSuccess, "", nil
+				}
+				return ExitPR, "checks", err
+			}
 		}
 
 		if repo.IssueClaimBranch {
@@ -1914,6 +1983,7 @@ func (h Harness) checkPublishedPullRequest(
 					repo.URL,
 					repo.RelDir,
 				)
+				attempt++
 				continue
 			}
 			if !isNothingToCommitResult(commitRes, commitErr) {
@@ -1942,6 +2012,7 @@ func (h Harness) checkPublishedPullRequest(
 			return exitCode, stage, err
 		}
 		h.logf("stage=git status=ok action=repair_commit attempt=%d repo=%s repo_dir=%s", attempt+1, repo.URL, repo.RelDir)
+		attempt++
 	}
 }
 
@@ -6247,17 +6318,9 @@ func (h Harness) watchPRChecks(ctx context.Context, cmd execx.Command, poll chec
 		watchCtx, cancel = context.WithTimeoutCause(ctx, timeout, errPRChecksWatchTimeout)
 		defer cancel()
 	}
-	var res execx.Result
-	var err error
-	if h.CheckTimings != nil || h.GitHubCooldown.TracksRequests() {
-		// Give each check read its own permit so gh cannot keep polling
-		// internally after another client has observed a cooldown.
-		cmd.Args = cmd.Args[:3]
-		res, err = h.pollPRChecks(watchCtx, cmd, poll)
-	} else {
-		h.suspendWorkspace()
-		res, err = h.runCheckQuery(watchCtx, "checks", cmd, 0)
-	}
+	// Poll in the harness to check for conflicts and apply the shared cooldown
+	// between check reads.
+	res, err := h.pollPRChecks(watchCtx, cmd, poll)
 	if errors.Is(context.Cause(watchCtx), errPRChecksWatchTimeout) {
 		return res, errPRChecksWatchTimeout
 	}
@@ -6270,7 +6333,7 @@ func (h Harness) pollPRChecks(ctx context.Context, cmd execx.Command, poll check
 		sleep = sleepWithContext
 	}
 	var lastPending execx.Result
-	for {
+	for firstPoll := true; ; firstPoll = false {
 		res, err := h.runCheckQuery(ctx, "checks", cmd, checkQueryTimeout)
 		if errors.Is(context.Cause(ctx), errPRChecksWatchTimeout) && lastPending.Stdout != "" {
 			return lastPending, err
@@ -6283,6 +6346,13 @@ func (h Harness) pollPRChecks(ctx context.Context, cmd execx.Command, poll check
 			}
 			return res, err
 		}
+		// The base or head can change between the preflight probe and the
+		// first check result. Recheck before yielding to the polling delay.
+		if firstPoll && poll.refreshMergeability != nil {
+			if err := poll.refreshMergeability(ctx); err != nil {
+				return res, err
+			}
+		}
 		lastPending = res
 		poll.waited = true
 		h.suspendWorkspace()
@@ -6290,6 +6360,11 @@ func (h Harness) pollPRChecks(ctx context.Context, cmd execx.Command, poll check
 		poll.report(h, "wait_for_github_checks", "", snapshot.Pending, time.Now(), delay)
 		if err := sleep(ctx, delay); err != nil {
 			return res, err
+		}
+		if poll.refreshMergeability != nil {
+			if err := poll.refreshMergeability(ctx); err != nil {
+				return res, err
+			}
 		}
 	}
 }
@@ -9914,19 +9989,7 @@ func ghRepoForkCommand(repoDir, repo string) execx.Command {
 }
 
 func prChecksCommand(repoDir, prURL string) execx.Command {
-	return ghCommand(repoDir,
-		"pr", "checks", githubutil.PullRequestSelector(prURL),
-		"--watch",
-		"--interval", fmt.Sprintf("%d", prChecksWatchIntervalSeconds),
-	)
-}
-
-func prChecksAnyCommand(repoDir, prURL string) execx.Command {
-	return ghCommand(repoDir,
-		"pr", "checks", githubutil.PullRequestSelector(prURL),
-		"--watch",
-		"--interval", fmt.Sprintf("%d", prChecksWatchIntervalSeconds),
-	)
+	return prChecksTextCommand(repoDir, prURL, false)
 }
 
 func prChecksJSONCommand(repoDir, prURL string, requiredOnly bool) execx.Command {

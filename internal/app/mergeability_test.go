@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -40,7 +42,7 @@ func TestMergeabilityVerification(t *testing.T) {
 				return execx.Result{Stdout: tc.state}, nil
 			}))
 			h.Sleep = func(context.Context, time.Duration) error { return nil }
-			code, _, err := h.ensurePullRequestMergeable(context.Background(), config.Config{}, repo, agentruntime.Default(), repo.Dir, codexRunOptions{}, "", "", "repo", "codex")
+			code, _, err := h.ensurePullRequestMergeable(context.Background(), config.Config{}, repo, agentruntime.Default(), repo.Dir, codexRunOptions{}, "", "", "repo", "codex", "", false)
 			if (err != nil) != tc.wantErr || (code != ExitSuccess) != tc.wantErr || checks != tc.checks {
 				t.Fatalf("code=%d err=%v checks=%d", code, err, checks)
 			}
@@ -68,7 +70,7 @@ func TestMergeabilityRepairsExistingBranchBeforeReviewAndAtCompletion(t *testing
 						state = "CONFLICTING"
 						conflict = true
 					}
-					return execx.Result{Stdout: fmt.Sprintf(`{"state":"OPEN","mergeable":%q,"baseRefName":"main","headRefName":"feature"}`, state)}, nil
+					return execx.Result{Stdout: fmt.Sprintf(`{"state":"OPEN","mergeable":%q,"baseRefName":"main","headRefName":"feature","headRefOid":"head-sha"}`, state)}, nil
 				}
 				if cmd.Name == "git" && len(cmd.Args) > 0 {
 					if !admitted {
@@ -143,6 +145,166 @@ func TestMergeabilityRepairsExistingBranchBeforeReviewAndAtCompletion(t *testing
 			if phase == "reviews disabled" && clean.reviews != 0 {
 				t.Fatal("unexpected review")
 			}
+			if phase == "after review" && (clean.checks != 2 || clean.reviews != 2 || clean.released != 1) {
+				t.Fatalf("late repair: checks=%d reviews=%d ready writes=%d", clean.checks, clean.reviews, clean.released)
+			}
 		})
+	}
+}
+
+// Exercise a real merge and push while GitHub check responses stay pending on
+// the original head.
+func TestPublishedChecksRepairConflictWhilePending(t *testing.T) {
+	t.Parallel()
+	t.Run("conflict on first checks query", func(t *testing.T) {
+		t.Parallel()
+		testPublishedChecksRepairConflictWhilePending(t, true)
+	})
+	t.Run("conflict during poll interval", func(t *testing.T) {
+		t.Parallel()
+		testPublishedChecksRepairConflictWhilePending(t, false)
+	})
+}
+
+func testPublishedChecksRepairConflictWhilePending(t *testing.T, conflictOnFirstQuery bool) {
+	t.Helper()
+	ctx := t.Context()
+	remote, checkout, baseCheckout := t.TempDir(), t.TempDir(), t.TempDir()
+	gitRunner := execx.OSRunner{}
+	git := func(dir string, args ...string) string {
+		t.Helper()
+		res, err := gitRunner.Run(ctx, gitCommand(dir, args...))
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s\n%s", args, err, res.Stdout, res.Stderr)
+		}
+		return strings.TrimSpace(res.Stdout)
+	}
+	writeFixture := func(dir, value string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, "fixture.txt"), []byte(value+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git(remote, "init", "--bare", "--initial-branch=main")
+	git(checkout, "init", "--initial-branch=main")
+	git(checkout, "config", "user.name", "Test")
+	git(checkout, "config", "user.email", "test@example.com")
+	git(checkout, "config", "commit.gpgsign", "false")
+	git(checkout, "remote", "add", "origin", remote)
+	writeFixture(checkout, "original")
+	git(checkout, "add", "fixture.txt")
+	git(checkout, "commit", "-m", "Initial fixture")
+	git(checkout, "push", "origin", "main")
+	git(baseCheckout, "clone", remote, ".")
+	git(baseCheckout, "config", "user.name", "Test")
+	git(baseCheckout, "config", "user.email", "test@example.com")
+	git(baseCheckout, "config", "commit.gpgsign", "false")
+	git(checkout, "switch", "-c", "feature")
+	writeFixture(checkout, "feature edit")
+	git(checkout, "commit", "-am", "Feature edit")
+	git(checkout, "push", "origin", "feature")
+	original := git(remote, "rev-parse", "feature")
+	advanceBase := func() {
+		writeFixture(baseCheckout, "base edit")
+		git(baseCheckout, "commit", "-am", "Advance base")
+		git(baseCheckout, "push", "origin", "main")
+	}
+	wantSleeps := 1
+	if conflictOnFirstQuery {
+		wantSleeps = 0
+	}
+
+	const url = "https://github.com/example/repo/pull/42"
+	repo := repoWorkspace{Dir: checkout, RelDir: "repo", Branch: "feature", BaseBranch: "main", PRURL: url, RequireExistingPR: true}
+	admitted := true
+	var checks, repairs, sleeps, repairSteps int
+	var logs []string
+	h := New(sessionRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+		switch {
+		case commandsEqual(cmd, prMergeabilityCommand(checkout, url)):
+			published := git(remote, "rev-parse", "feature")
+			mergeable := "MERGEABLE"
+			if res, err := gitRunner.Run(ctx, gitCommand(remote, "merge-tree", "--write-tree", "main", published)); err != nil {
+				if !strings.Contains(res.Stdout, "CONFLICT") {
+					t.Fatalf("compute mergeability: %v\n%s\n%s", err, res.Stdout, res.Stderr)
+				}
+				mergeable = "CONFLICTING"
+			}
+			return execx.Result{Stdout: fmt.Sprintf(`{"state":"OPEN","mergeable":%q,"baseRefName":"main","headRefName":"feature","headRefOid":%q}`, mergeable, published)}, nil
+		case commandsEqual(cmd, prChecksCommand(checkout, url)):
+			checks++
+			published := git(remote, "rev-parse", "feature")
+			if checks == 1 && published == original {
+				if conflictOnFirstQuery {
+					advanceBase()
+				}
+				return execx.Result{Stdout: "CI\tpending\n"}, pendingCheckExit{}
+			}
+			if checks != 2 || published == original || repairs != 1 {
+				t.Fatalf("checked unrepaired head or restarted unexpectedly: head=%s checks=%d repairs=%d", published, checks, repairs)
+			}
+			git(remote, "merge-base", "--is-ancestor", "main", published)
+			git(remote, "merge-base", "--is-ancestor", original, published)
+			if got := git(remote, "show", published+":fixture.txt"); got != "base edit and feature edit" {
+				t.Fatalf("published fixture = %q", got)
+			}
+			return execx.Result{Stdout: "CI\tpass\n"}, nil
+		case cmd.Name == "git" && admitted:
+			return gitRunner.Run(ctx, cmd)
+		case cmd.Name == "codex" && admitted && strings.Contains(cmd.Stdin, "Base-branch sync conflict remediation"):
+			repairs++
+			if checks != 1 || sleeps != wantSleeps {
+				t.Fatalf("repair did not replace pending checks: checks=%d sleeps=%d", checks, sleeps)
+			}
+			writeFixture(checkout, "base edit and feature edit")
+			return execx.Result{Stdout: conflictResolutionConfirmation}, nil
+		default:
+			t.Fatalf("unexpected command or missing admission: %s %v", cmd.Name, cmd.Args)
+			return execx.Result{}, nil
+		}
+	}))
+	h.Logf = func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }
+	h.OnStep = func(step string) {
+		if step == "merge_conflict" {
+			if !admitted || repairs != 0 {
+				t.Fatalf("reported conflict repair outside admission or after agent start: admitted=%t repairs=%d", admitted, repairs)
+			}
+			repairSteps++
+		}
+	}
+	h.AcquireWorkspace = func(context.Context) error { admitted = true; return nil }
+	h.ReleaseWorkspace = func() { admitted = false }
+	h.Sleep = func(context.Context, time.Duration) error {
+		sleeps++
+		if admitted || sleeps > wantSleeps {
+			t.Fatalf("unexpected wait during repair: admitted=%t sleeps=%d", admitted, sleeps)
+		}
+		advanceBase()
+		return nil
+	}
+	cfg, runtime := config.Config{}, agentruntime.Default()
+	if code, stage, err := h.checkPublishedPullRequest(ctx, cfg, &repo, runtime, checkout, codexRunOptions{}, "", "", "repo", "codex", false); err != nil || code != ExitSuccess {
+		t.Fatalf("checks failed at %s with code %d: %v", stage, code, err)
+	}
+	if code, stage, err := h.finishPublishedPullRequest(ctx, cfg, &repo, runtime, checkout, codexRunOptions{}, "", "", "repo", "codex", false); err != nil || code != ExitSuccess {
+		t.Fatalf("final mergeability gate failed at %s with code %d: %v", stage, code, err)
+	}
+	if repo.PRURL != url || repo.MergeConflictRepairs != 1 || checks != 2 || repairs != 1 || repairSteps != 1 {
+		t.Fatalf("PR=%s conflict repairs=%d checks=%d agents=%d repair steps=%d", repo.PRURL, repo.MergeConflictRepairs, checks, repairs, repairSteps)
+	}
+	published := git(remote, "rev-parse", "feature")
+	var events []string
+	for _, line := range logs {
+		switch {
+		case strings.Contains(line, "stage=merge_conflict status=start action=detect") && strings.Contains(line, "head="+original):
+			events = append(events, "detect")
+		case strings.Contains(line, "stage=codex status=start") && strings.Contains(line, "mode=base_sync_conflict"):
+			events = append(events, "repair")
+		case strings.Contains(line, "stage=merge_conflict status=ok action=publish_repair") && strings.Contains(line, "head="+published):
+			events = append(events, "publish")
+		}
+	}
+	if !slices.Equal(events, []string{"detect", "repair", "publish"}) {
+		t.Fatalf("repair events = %v", events)
 	}
 }
