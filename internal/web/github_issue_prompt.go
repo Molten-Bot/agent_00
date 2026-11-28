@@ -17,7 +17,6 @@ func setGitHubIssuePrompt(run *config.Config, issue GitHubIssue) {
 	if metadata.URL == "" {
 		metadata.URL = fmt.Sprintf("https://github.com/%s/issues/%d", metadata.Repository, metadata.Number)
 	}
-	run.GitHubIssue = &metadata
 	if metadata.Title != "" {
 		run.PRTitle = metadata.Title
 	}
@@ -28,6 +27,8 @@ func setGitHubIssuePrompt(run *config.Config, issue GitHubIssue) {
 	// Refresh references along with the authoritative issue snapshot on retry.
 	run.Assets = githubassets.Discover(sources)
 
+	metadata.Priority = ""
+	run.GitHubIssue = &metadata
 	var prompt strings.Builder
 	fmt.Fprintf(&prompt, "Complete GitHub issue %s#%d: %s\n\n", metadata.Repository, metadata.Number, metadata.Title)
 	fmt.Fprintf(&prompt, "Issue URL: %s\nState: %s\n", metadata.URL, issue.State)
@@ -39,6 +40,7 @@ func setGitHubIssuePrompt(run *config.Config, issue GitHubIssue) {
 		for _, label := range issue.Labels {
 			labels = append(labels, label.Name)
 		}
+		metadata.Priority = config.GitHubIssuePriority(labels)
 		fmt.Fprintf(&prompt, "Labels: %s\n", strings.Join(labels, ", "))
 	}
 	if len(issue.Assignees) > 0 {

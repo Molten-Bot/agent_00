@@ -117,7 +117,7 @@ func TestWorkflowRunConfigPolicies(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			w := workflow.Definition{ID: "one", Name: "Workflow", Repository: "acme/repo", ReviewCycles: 3, Task: workflow.Task{Complexity: "advanced", Kind: kind, Instructions: "Do the work", IssueLinkMode: "close", PRAssignee: "maintainer", PRLabels: []string{"tracking"}}}
 			w.ReviewAgent = config.ReviewAgentConfig{Complexity: "easy", Instructions: "Check for regressions"}
-			i := workflow.Item{Number: 12, Kind: "issue", URL: "https://github.com/acme/repo/issues/12", Title: "A task", HeadBranch: "feature"}
+			i := workflow.Item{Number: 12, Kind: "issue", URL: "https://github.com/acme/repo/issues/12", Title: "A task", HeadBranch: "feature", Labels: []string{"priority:P1"}}
 			if kind != "implement" {
 				i.Kind = "pr"
 				i.URL = "https://github.com/acme/repo/pull/12"
@@ -131,6 +131,9 @@ func TestWorkflowRunConfigPolicies(t *testing.T) {
 			}
 			if c.Workflow.PRAssignee != w.Task.PRAssignee || !slices.Equal(c.Workflow.PRLabels, w.Task.PRLabels) {
 				t.Fatalf("lost PR routing policy: %+v", c.Workflow)
+			}
+			if kind == "implement" && (c.GitHubIssue == nil || c.GitHubIssue.Priority != "P1") {
+				t.Fatalf("lost workflow issue priority: %+v", c.GitHubIssue)
 			}
 			if kind == "review" && (c.Review == nil || c.Review.AutoMerge || c.Review.Writeback != "summary-comment") {
 				t.Fatal("review must report outcome before merge", c)

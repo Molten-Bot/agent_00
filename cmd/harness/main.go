@@ -563,6 +563,12 @@ func runServer(args []string) int {
 
 			diskKey := localruntime.TaskDiskKey(runCfg.RepoList())
 			diskRequest := localTaskDiskRequest(runCtx, diskHistory, diskKey)
+			switch runCfg.GitHubIssuePriority() {
+			case "P0":
+				diskRequest.Priority = 2
+			case "P1":
+				diskRequest.Priority = 1
+			}
 			diskRequest.CleanupOnCompletion = issueWork == nil && repairWork == nil
 			if issueWork != nil {
 				logIssueWorkspaceStorage(diskRequest.ExistingDir, requestID, daemonLogger)
@@ -1520,10 +1526,15 @@ func runLocalTask(
 
 	h := app.New(runner)
 	h.Workspace = taskWorkspace
-	if lease, ok := ctx.Value(taskWorkspaceLeaseKey{}).(*taskWorkspaceLease); ok {
+	lease, _ := ctx.Value(taskWorkspaceLeaseKey{}).(*taskWorkspaceLease)
+	if lease != nil {
 		h.CheckTimings = lease.timings
-		h.ReleaseWorkspace = lease.suspend
+		h.ReleaseWorkspace = func() { lease.yield("waiting_for_github") }
 		h.AcquireWorkspace = lease.acquire
+		h.OnCodexSessionWait = func() func() {
+			lease.yield("waiting_for_codex_session")
+			return func() {}
+		}
 		h.OnWorkspace = func(dir string) {
 			lease.disk.ExistingDir = dir
 			lease.disk.Workspace.Root = filepath.Dir(dir)
@@ -1573,6 +1584,15 @@ func runLocalTask(
 		var finish func()
 		ctx, finish = issueWork.configure(ctx, &h)
 		defer finish()
+	}
+	if lease != nil {
+		lease.onState = h.OnTaskState
+		h.OnTaskState = lease.reportState
+		if lease.release == nil {
+			lease.yield("waiting_for_github")
+		} else {
+			lease.reportState("running")
+		}
 	}
 	if recordDiskUsage != nil && candidateWorkspace != "" {
 		// A retained workspace can contain tool state from earlier attempts.

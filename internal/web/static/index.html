@@ -1390,7 +1390,7 @@
       const hasSeparateMergedPR = Boolean(mergedPRURL && mergedPRURL !== taskCardPullRequestURL(task));
       const badge = document.createElement(hasSeparateMergedPR ? "a" : "span");
       badge.className = `badge badge-icon ${statusClass(status)}`;
-      const label = hasSeparateMergedPR ? `Merged pull request: ${mergedPRURL}` : `Status: ${taskStatusLabel(status)}.`;
+      const label = hasSeparateMergedPR ? `Merged pull request: ${mergedPRURL}` : `Status: ${taskExecutionStateLabel(task) || taskStatusLabel(status)}.`;
       if (hasSeparateMergedPR) {
         badge.href = mergedPRURL;
         badge.target = "_blank";
@@ -1496,12 +1496,14 @@
         return renderTaskStatusBadge(task);
       }
 
-      const statusLabel = taskStatusLabel(status);
+      const executionLabel = taskExecutionStateLabel(task);
+      const statusLabel = executionLabel || taskStatusLabel(status);
       const badge = document.createElement("span");
       badge.className = `task-current-state badge-icon ${statusClass(status)}`;
       badge.classList.toggle("is-running", status === "running" || status === "active");
       badge.dataset.progressStep = String(step.id || "");
       badge.title = `${step.label}: ${step.detail}`;
+      if (executionLabel) badge.title += ` · ${executionLabel}`;
       badge.setAttribute("aria-label", `Current task stage: ${step.label}. Status: ${statusLabel}.`);
       appendTaskStepIcon(badge, step, task, {
         iconClass: "task-current-state-icon",
@@ -8043,6 +8045,8 @@
       if (status === "duplicate") return "Duplicate";
       if (status === "stopped") return "Stopped";
       if (status === "paused") return "Paused";
+      const executionLabel = taskExecutionStateLabel(task);
+      if (executionLabel) return executionLabel;
       if (status === "pending") return "Queued";
 
       if (status === "running" || status === "active") {
@@ -8527,6 +8531,7 @@
         taskPullRequestURL(task),
         String(task?.stage || "").trim(),
         String(task?.stage_status || "").trim(),
+        String(task?.execution_state || ""),
         String(task?.updated_at || "").trim(),
         String(logs.length),
         String(lastLog?.time || ""),
@@ -12225,9 +12230,10 @@
       const taskStatus = normalizedTaskStatus(task?.status);
       progress.classList.toggle("is-running", taskStatus === "running" || taskStatus === "active");
 
-      const waitingForWorkspace = taskStatus === "pending" && task.stage_status === "waiting_workspace";
+      const waitingForCodex = taskStatus === "pending" && task.execution_state === "waiting_for_codex_session";
+      const waitingForWorkspace = taskStatus === "pending" && task.stage_status === "waiting_workspace" && !waitingForCodex;
       const waitingStage = ["checks", "review_checks", "pr_verification"].includes(task.stage);
-      const waitingForGitHub = waitingStage && task.stage_status === "waiting" &&
+      const waitingForGitHub = !waitingForCodex && waitingStage && task.stage_status === "waiting" &&
         (taskStatus === "running" || taskStatus === "pending");
       const wait = waitingForGitHub && task.logs?.findLast(log => {
         if (log.stream !== "meta" || parseTaskProgressField(log.text, "stage") !== task.stage) return false;
@@ -12295,9 +12301,11 @@
 
       track.append(line, steps);
       progress.append(track);
-      if (waitingForWorkspace || waitingForGitHub) {
+      const executionLabel = taskExecutionStateLabel(task);
+      if (executionLabel || waitingForWorkspace || waitingForGitHub) {
         const detail = document.createElement("div");
-        detail.className = "task-progress-wait";
+        detail.className = "task-progress-status";
+        detail.classList.toggle("task-progress-wait", waitingForWorkspace || waitingForGitHub || taskStatus === "pending");
         if (waitingForWorkspace) {
           const queue = task.logs?.findLast(log => log.stream === "meta" &&
             (parseTaskProgressField(log.text, "action") === "wait_for_workspace" ||
@@ -12306,7 +12314,7 @@
           detail.textContent = reason === "disk_space" ? "Waiting for workspace disk space" :
             reason === "host_memory_pressure" ? "Waiting for available memory to resume workspace work" :
             "Waiting to resume local workspace work";
-        } else {
+        } else if (waitingForGitHub) {
           const head = wait && parseTaskProgressField(wait.text, "reviewed_head");
           const refreshed = wait && parseTaskProgressField(wait.text, "last_github_refresh");
           detail.textContent = [
@@ -12316,6 +12324,8 @@
             head && `Reviewed head: ${head}`,
             refreshed && `Last GitHub refresh: ${refreshed}`,
           ].filter(Boolean).join(" · ");
+        } else {
+          detail.textContent = executionLabel;
         }
         progress.append(detail);
       }
@@ -12652,8 +12662,24 @@
       return stop;
     }
 
+    function taskExecutionStateLabel(task) {
+      const status = normalizedTaskStatus(task?.status);
+      if (status === "pending" && task.execution_state === "waiting_for_codex_session") {
+        return "Waiting for Codex session";
+      }
+      if (status === "pending" && task.execution_state === "waiting_for_github") {
+        return "Waiting for GitHub";
+      }
+      if (status === "running" && task.execution_state === "running_agent") {
+        return "Agent running";
+      }
+      return "";
+    }
+
     function issueTaskStatusLabel(task) {
       if (normalizedTaskStatus(task.status) === "merged") return "Merged";
+      const executionLabel = taskExecutionStateLabel(task);
+      if (executionLabel) return executionLabel;
       switch (task.issue_state) {
         case "retry_wait": return "Waiting to retry";
         case "checks_pending": return "Waiting for GitHub checks";
@@ -12794,6 +12820,7 @@
             workflowName: task.workflow_name,
             workflowID: task.workflow_id,
             issueState: task.issue_state,
+            executionState: task.execution_state,
             issuePRRecoveryBlocker: task.issue_pr_recovery_blocker,
             issuePlanningStatus: task.issue_planning_status,
             issueAttempts: task.issue_attempts,
@@ -13049,8 +13076,9 @@
           (renderTaskPullRequestAction(task, "View pull request") || renderTaskIssueAction(task, "View issue"));
         const taskStatus = normalizedTaskStatus(task.status);
         const showIssueProgress = issueTask && !collapsed && !promptOnly &&
-          task.issue_state === "running" &&
-          (taskStatus === "running" || (taskStatus === "pending" && task.stage_status === "waiting_workspace"));
+          (["running", "running_agent", "waiting_for_codex_session", "waiting_for_github"].includes(task.issue_state) ||
+            (task.issue_state === "queued" && task.stage && task.stage !== "task")) &&
+          (taskStatus === "running" || taskStatus === "pending");
         const progress = !collapsed && !promptOnly && (!issueTask || showIssueProgress) ? renderTaskProgress(task) : null;
         const issueHistory = renderIssueTaskHistory(task, openIssueTasks.has(task.task_id), !progress, issuePrimaryAction);
         const showIssueLink = !issuePrimaryAction || Boolean(taskCardPullRequestURL(task));
@@ -13908,6 +13936,7 @@
         selected.warning || "",
         selected.error,
         selected.issue_state,
+        selected.execution_state,
         selected.issue_attempts,
         selected.retry_at,
         selected.workflow_id,

@@ -202,12 +202,18 @@ func (s Server) withIssueTaskRecords(snapshot Snapshot, records []localruntime.I
 				task.Status = latest.Outcome
 			case latest.Outcome == "interrupted":
 				task.Status = "error"
-			case latest.State == "running":
+			case latest.State == "running" || latest.State == "running_agent":
 				task.Status = "running"
 			default:
 				task.Status = "queued"
 			}
 			task.Stage = latest.Step
+			if !isCompletedTaskStatus(task.Status) {
+				switch latest.State {
+				case "running", "running_agent", "queued", "waiting_for_codex_session", "waiting_for_github":
+					task.ExecutionState = latest.State
+				}
+			}
 			task.StartedAt = formatTimeOrEmpty(latest.StartedAt)
 		}
 		if latest.UpdatedAt.After(parseTimeOrZero(task.UpdatedAt)) {
@@ -264,6 +270,7 @@ func (s Server) withIssueTaskRecords(snapshot Snapshot, records []localruntime.I
 		if merged {
 			task.Status, task.IssueState, task.RetryAt = "merged", localruntime.IssueStateMerged, ""
 			task.Stage, task.StageStatus, task.ExitCode = "finalize", "merged", 0
+			task.ExecutionState = ""
 			task.CanRerun, task.Controls = false, TaskControls{}
 			task.Error, task.ReviewGate, task.Warning = "", "", ""
 			task.IssuePRRecoveryBlocker = ""

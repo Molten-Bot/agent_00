@@ -318,7 +318,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		return err
 	}
 	if lock == nil {
-		// A continuation owns the worker lock while waiting for disk admission.
+		// A continuation can own the worker lock while its worker slot is yielded.
 		// Check its known PR, but leave cleanup to the lock owner and a later pass.
 		if record.RequestID == "" {
 			return nil
@@ -327,7 +327,9 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 			s.cancelMergedIssueWorker(record.RequestID)
 			return nil
 		}
-		if record.State != "queued" {
+		switch record.State {
+		case "queued", "waiting_for_codex_session", "waiting_for_github":
+		default:
 			return nil
 		}
 		knownPR, err := s.resolveIssuePR(record)

@@ -221,6 +221,7 @@ type agentInvocationLogMetadata struct {
 	Repo    string
 	RepoDir string
 	Target  string
+	elapsed *time.Duration
 }
 
 // Harness executes the clone -> codex -> PR workflow.
@@ -279,6 +280,9 @@ type Harness struct {
 	// Suspend scheduler admission while only GitHub evidence is needed.
 	ReleaseWorkspace func()
 	AcquireWorkspace func(context.Context) error
+	// Codex model discovery and execution share the same admission boundary.
+	OnCodexSessionWait func() func()
+	OnTaskState        func(string)
 	// PRChecksWatchTimeout bounds checks and draft verification polling when positive.
 	// Zero uses the default timeout. Negative disables the watch timeout and skips draft polling.
 	PRChecksWatchTimeout time.Duration
@@ -769,7 +773,6 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	var agentRes execx.Result
 	var draftHandoffReported bool
 	h.logf("stage=%s status=start target=%s%s", agentStage, codexTargetLabel, initialAgentInvocation.logFieldsSuffix())
-	codexStart := time.Now()
 	if !publicationPending {
 		h.step("agent")
 		initialHarness := h
@@ -804,7 +807,7 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	if err != nil {
 		return h.fail(ExitCodex, agentStage, err, runDir)
 	}
-	h.logf("stage=%s status=ok elapsed_s=%d%s", agentStage, int(time.Since(codexStart).Seconds()), initialAgentInvocation.logFieldsSuffix())
+	h.logf("stage=%s status=ok elapsed_s=%d%s", agentStage, int(initialAgentInvocation.elapsed.Seconds()), initialAgentInvocation.logFieldsSuffix())
 	// A PR may merge and delete its remote branch while the agent runs. Allow
 	// that case only after GitHub confirms the PR associated with the branch merged.
 	if err := h.validateEnforcedNonDefaultBranchesAfterAgent(ctx, repos); err != nil {
@@ -1904,7 +1907,6 @@ checkHeadAttempt:
 			repo.RelDir,
 			remediationInvocation.logFieldsSuffix(),
 		)
-		codexStart := time.Now()
 		agentRes, err := h.runCodexCapture(ctx, runtime, codexDir, repairPrompt, codexOpts, agentsPath, cfg.ResponseMode, remediationInvocation)
 		if err != nil {
 			return ExitCodex, agentStage, err
@@ -1912,7 +1914,7 @@ checkHeadAttempt:
 		h.logf(
 			"stage=%s status=ok elapsed_s=%d mode=remediation attempt=%d repo=%s repo_dir=%s%s",
 			agentStage,
-			int(time.Since(codexStart).Seconds()),
+			int(remediationInvocation.elapsed.Seconds()),
 			attempt+1,
 			repo.URL,
 			repo.RelDir,
@@ -2272,7 +2274,6 @@ func (h Harness) resolveBaseSyncConflictWithAgent(
 		repo.RelDir,
 		invocation.logFieldsSuffix(),
 	)
-	agentStart := time.Now()
 	agentRes, agentErr := h.runCodexCapture(ctx, runtime, codexDir, prompt, codexOpts, agentsPath, responseMode, invocation)
 	resolutionConfirmed := conflictResolutionConfirmed(agentRes)
 	if agentErr != nil {
@@ -2290,7 +2291,7 @@ func (h Harness) resolveBaseSyncConflictWithAgent(
 	h.logf(
 		"stage=%s status=ok elapsed_s=%d mode=base_sync_conflict attempt=%d repo=%s repo_dir=%s%s",
 		agentStage,
-		int(time.Since(agentStart).Seconds()),
+		int(invocation.elapsed.Seconds()),
 		attempt,
 		repo.URL,
 		repo.RelDir,
@@ -2375,7 +2376,6 @@ func (h Harness) resolveRemoteBranchSyncConflictWithAgent(
 		repo.RelDir,
 		invocation.logFieldsSuffix(),
 	)
-	agentStart := time.Now()
 	agentRes, agentErr := h.runCodexCapture(ctx, runtime, codexDir, prompt, codexOpts, agentsPath, responseMode, invocation)
 	resolutionConfirmed := conflictResolutionConfirmed(agentRes)
 	if agentErr != nil {
@@ -2393,7 +2393,7 @@ func (h Harness) resolveRemoteBranchSyncConflictWithAgent(
 	h.logf(
 		"stage=%s status=ok elapsed_s=%d mode=remote_branch_sync_conflict attempt=%d repo=%s repo_dir=%s%s",
 		agentStage,
-		int(time.Since(agentStart).Seconds()),
+		int(invocation.elapsed.Seconds()),
 		attempt,
 		repo.URL,
 		repo.RelDir,
@@ -7178,6 +7178,7 @@ func newAgentInvocationLogMetadata(
 		Repo:    stringsx.FirstNonEmpty(strings.TrimSpace(repo), strings.TrimSpace(repoDir)),
 		RepoDir: strings.TrimSpace(repoDir),
 		Target:  strings.TrimSpace(target),
+		elapsed: new(time.Duration),
 	}
 }
 
@@ -7412,12 +7413,30 @@ func promptPathForCodex(targetDir, path string) string {
 
 func (h Harness) lazyTaskModel(ctx context.Context, runtime agentruntime.Runtime, dir string, opts codexRunOptions, complexity, stage, action string) func() (agentruntime.ModelSelection, error) {
 	return sync.OnceValues(func() (agentruntime.ModelSelection, error) {
+		opts.AcquireCodexSession = h.acquireCodexSession
 		selection, err := runtime.ResolveModel(ctx, h.Runner, dir, opts, complexity)
 		if err != nil {
 			return selection, fmt.Errorf("resolve %s task complexity: %w", complexity, err)
 		}
 		h.logf("stage=%s status=ok action=%s complexity=%s model=%q cli_version=%q resolution=%s reasoning_effort=%q", stage, action, complexity, selection.Model, selection.Version, selection.Source, selection.Effort)
 		return selection, nil
+	})
+}
+
+func (h Harness) acquireCodexSession(ctx context.Context, home string) (*agentruntime.CodexSession, error) {
+	if h.OnCodexSessionWait == nil || h.AcquireWorkspace == nil {
+		return agentruntime.AcquireCodexSession(ctx, home)
+	}
+	resume := func() {}
+	defer func() { resume() }()
+	return agentruntime.AcquireCodexSessionWithAdmission(ctx, home, func() {
+		resume = h.OnCodexSessionWait()
+	}, func(ctx context.Context) error {
+		defer func() {
+			resume()
+			resume = func() {}
+		}()
+		return h.requireWorkspace(ctx)
 	})
 }
 
@@ -7445,8 +7464,10 @@ func (h Harness) runCodexWithHeartbeat(
 		if err != nil {
 			return execx.Result{}, err
 		}
-		h.logf("stage=codex status=waiting action=acquire_auth_session%s", invocation.logFieldsSuffix())
-		release, err := agentruntime.AcquireCodexSession(ctx, home)
+		if h.OnCodexSessionWait == nil {
+			h.logf("stage=codex status=waiting action=acquire_auth_session%s", invocation.logFieldsSuffix())
+		}
+		release, err := h.acquireCodexSession(ctx, home)
 		if err != nil {
 			return execx.Result{}, err
 		}
@@ -7472,17 +7493,25 @@ func (h Harness) runCodexWithHeartbeat(
 		runCtx = timeoutCtx
 	}
 
+	if h.OnTaskState != nil {
+		h.OnTaskState("running_agent")
+		defer h.OnTaskState("running")
+	}
+
 	type codexRunResult struct {
 		res execx.Result
 		err error
 	}
 	done := make(chan codexRunResult, 1)
+	start := time.Now()
+	if invocation.elapsed != nil {
+		defer func() { *invocation.elapsed = time.Since(start) }()
+	}
 	go func() {
 		runRes, runErr := h.runCommand(runCtx, agentStage, cmd)
 		done <- codexRunResult{res: runRes, err: runErr}
 	}()
 
-	start := time.Now()
 	heartbeatInterval := h.AgentHeartbeatInterval
 	if heartbeatInterval <= 0 {
 		heartbeatInterval = 15 * time.Second

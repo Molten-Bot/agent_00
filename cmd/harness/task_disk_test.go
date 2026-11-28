@@ -13,6 +13,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/app"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
+	"github.com/Molten-Bot/agent_00/internal/web"
 	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
 
@@ -100,25 +101,53 @@ func TestTaskWorkspaceLeaseReleasesAndReadmitsAfterRemoteWait(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
+	store, record := lifecycleRecord(t)
+	issue := issueExecution{store: store, record: record, policy: (localruntime.IssueRecoveryConfig{}).Defaults()}
+	h := app.Harness{}
+	ctx, finish := issue.configure(ctx, &h)
+	defer finish()
+	h.OnStep("review")
+	broker := web.NewBroker()
+	assertState := func(state, status string) {
+		t.Helper()
+		claim, err := store.Load(record.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if claim.State != state || claim.Step != "review" {
+			t.Fatalf("claim state/step = %q/%q, want %q/review", claim.State, claim.Step, state)
+		}
+		task, ok := broker.Task(record.RequestID)
+		if !ok || task.Status != status || task.ExecutionState != state {
+			t.Fatalf("broker task found = %v, status/state = %q/%q, want %q/%q", ok, task.Status, task.ExecutionState, status, state)
+		}
+	}
+
 	const unit = workspace.MinimumFreeBytes
 	var free atomic.Uint64
 	free.Store(unit)
 	logs := make(chan string, 16)
-	logf := func(format string, args ...any) { logs <- fmt.Sprintf(format, args...) }
+	logf := func(format string, args ...any) {
+		line := fmt.Sprintf(format, args...)
+		broker.IngestLog(line)
+		logs <- line
+	}
 	scheduler := localruntime.NewAdaptiveScheduler(localruntime.SchedulerConfig{MaxParallel: 1}, logf,
 		localruntime.WithSchedulerDiskSpace(func(string) (string, uint64, uint64, error) {
 			return "disk", free.Load(), 4 * unit, nil
 		}))
 	disk := localruntime.TaskDiskRequest{Workspace: workspace.Manager{Root: t.TempDir()}}
-	_, release, err := scheduler.AcquireWorkspace(ctx, "retained-task", disk, false)
+	_, release, err := scheduler.AcquireWorkspace(ctx, record.RequestID, disk, false)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("initial admission: %v (context cause: %v)", err, context.Cause(ctx))
 	}
 	lease := taskWorkspaceLease{
-		scheduler: scheduler, requestID: "retained-task", disk: disk,
-		handle: &localTaskHandle{running: true}, logf: logf, release: release,
+		scheduler: scheduler, requestID: record.RequestID, disk: disk,
+		handle: &localTaskHandle{running: true}, logf: logf, release: release, onState: h.OnTaskState,
 	}
-	lease.suspend()
+	lease.reportState("running")
+	lease.yield("waiting_for_codex_session")
+	assertState("waiting_for_codex_session", "pending")
 
 	_, releaseOther, err := scheduler.AcquireWorkspace(ctx, "other-task", disk, false)
 	if err != nil {
@@ -132,9 +161,10 @@ func TestTaskWorkspaceLeaseReleasesAndReadmitsAfterRemoteWait(t *testing.T) {
 	for {
 		select {
 		case line := <-logs:
-			if !strings.Contains(line, "request_id=retained-task") || !strings.Contains(line, "reason=disk_space") {
+			if !strings.Contains(line, "request_id="+record.RequestID) || !strings.Contains(line, "reason=disk_space") {
 				continue
 			}
+			assertState("queued", "pending")
 			free.Store(unit)
 			scheduler.RecheckQueue()
 		case err := <-done:
@@ -145,6 +175,7 @@ func TestTaskWorkspaceLeaseReleasesAndReadmitsAfterRemoteWait(t *testing.T) {
 			if free.Load() != unit || lease.release == nil {
 				t.Fatal("retained task resumed without passing disk admission")
 			}
+			assertState("running", "running")
 			return
 		case <-ctx.Done():
 			t.Fatal("retained task did not resume")
