@@ -110,7 +110,7 @@ func (e *Engine) dispatch(w Definition, execution *ExecutionPolicy, item Item, r
 	if err != nil {
 		return "", err
 	}
-	e.logRun(run, "dispatch", time.Time{})
+	e.logRun(run, "dispatch", time.Time{}, time.Time{})
 	var request string
 	var submitErr error
 	if IsInputEvent(w.Trigger.Event) && retryOf == "" && !e.StillEnabled(w) {

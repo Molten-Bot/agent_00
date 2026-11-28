@@ -134,16 +134,27 @@ func TestFailedWorkflowTimingUsesCompletionAndKeepsUnknownStart(t *testing.T) {
 	t.Parallel()
 	start := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
 	for _, restoreWithoutStart := range []bool{false, true} {
-		run := Run{ID: "activation", RequestID: "task", Status: "failed", UpdatedAt: start.Add(time.Hour),
-			StartedAt: &start, Outcome: &Outcome{CompletedAt: start.Add(4 * time.Second)}}
+		w := definition("delivery")
+		engine, _, _ := testEngine(t, w)
+		engine.Now = func() time.Time { return start.Add(time.Hour) }
+		run := Run{ID: "activation", RequestID: "task", Status: "running", Workflow: w,
+			StartedAt: &start, Outcome: &Outcome{Status: "failed", CompletedAt: start.Add(4 * time.Second)}}
 		if restoreWithoutStart {
 			run.StartedAt = nil
 		}
 		var log strings.Builder
-		engine := Engine{TimingLog: func(format string, args ...any) { fmt.Fprintf(&log, format+"\n", args...) }}
-		engine.logRun(run, "transition", time.Time{})
+		engine.TimingLog = func(format string, args ...any) { fmt.Fprintf(&log, format+"\n", args...) }
+		state, err := engine.load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		state.Runs = []Run{run}
+		if err := engine.save(state); err != nil {
+			t.Fatal(err)
+		}
+		tick(t, engine)
 		totals, err := tasktiming.Read(t.Context(), strings.NewReader(log.String()), "task")
-		if err != nil || len(totals) != 1 || !run.Outcome.CompletedAt.Equal(*totals[0].EndedAt) {
+		if err != nil || len(totals) != 1 || totals[0].EndedAt == nil || !run.Outcome.CompletedAt.Equal(*totals[0].EndedAt) {
 			t.Fatalf("failure timing = %+v, err = %v\n%s", totals, err, log.String())
 		}
 		if restoreWithoutStart {
@@ -153,6 +164,92 @@ func TestFailedWorkflowTimingUsesCompletionAndKeepsUnknownStart(t *testing.T) {
 		} else if totals[0].WallMS == nil || *totals[0].WallMS != 4000 {
 			t.Fatalf("failed duration did not use completion:\n%s", log.String())
 		}
+	}
+}
+
+func TestWorkflowTotalIncludesWaitBeforePullRequestCloses(t *testing.T) {
+	t.Parallel()
+	w := definition("delivery")
+	w.Merge.Enabled = true
+	e, _, _ := testEngine(t, w)
+	start := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
+	now := start.Add(10 * time.Second)
+	e.Now = func() time.Time { return now }
+	var timing, aggregate strings.Builder
+	e.TimingLog = func(format string, args ...any) { fmt.Fprintf(&timing, format+"\n", args...) }
+	e.Logf = func(format string, args ...any) { fmt.Fprintf(&aggregate, format+"\n", args...) }
+	open := true
+	e.InspectPR = func(context.Context, string, string) (Item, error) { return Item{Open: open}, nil }
+	state, err := e.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Runs = []Run{{ID: "activation", RequestID: "task", Status: "running", Workflow: w,
+		Item: Item{Kind: "pr", Repository: w.Repository}, StartedAt: &start, Outcome: &Outcome{
+			Status: "succeeded", CompletedAt: now, PRURL: "https://github.com/acme/repo/pull/7",
+		}}}
+	if err := e.save(state); err != nil {
+		t.Fatal(err)
+	}
+	tick(t, e)
+	now = start.Add(time.Minute)
+	open = false
+	tick(t, e)
+	spans, err := tasktiming.Read(t.Context(), strings.NewReader(timing.String()), "task")
+	if err != nil || len(spans) != 2 || spans[0].Stage != tasktiming.Checks || spans[1].Stage != tasktiming.WorkflowTotal ||
+		spans[0].EndedAt == nil || !spans[0].EndedAt.Equal(now) || spans[1].EndedAt == nil || !spans[1].EndedAt.Equal(now) ||
+		spans[1].WallMS == nil || *spans[1].WallMS != 60000 ||
+		!strings.Contains(aggregate.String(), "status=completed reason=completed duration_ms=60000") {
+		t.Fatalf("terminal total and check wait disagree: %+v, err = %v\n%s\n%s", spans, err, timing.String(), aggregate.String())
+	}
+}
+
+func TestWorkflowRetryClosesWaitAtQueueAcceptance(t *testing.T) {
+	t.Parallel()
+	w := definition("delivery")
+	e, _, _ := testEngine(t, w)
+	const id, requestID = "activation", "task"
+	start := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
+	now := start
+	e.Now = func() time.Time { return now }
+	var log strings.Builder
+	e.TimingLog = func(format string, args ...any) { fmt.Fprintf(&log, format+"\n", args...) }
+	state, err := e.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wait := tasktiming.Start(id, "wait", tasktiming.Checks, start)
+	wait.Write(e.TimingLog, requestID)
+	state.Runs = []Run{{ID: id, RequestID: requestID, Status: OutcomeChecksPending, Workflow: w,
+		Outcome: &Outcome{Status: OutcomeChecksPending}, TimingWait: &wait}}
+	if err := e.save(state); err != nil {
+		t.Fatal(err)
+	}
+
+	now = start.Add(time.Minute)
+	acceptedAt := now
+	ctx := tasktiming.WithRecorder(t.Context(), requestID, "retry", e.now, e.TimingLog)
+	if err := e.AcceptTimingAttempt(id, requestID, "retry", acceptedAt); err != nil {
+		t.Fatal(err)
+	}
+	tasktiming.Accepted(ctx, acceptedAt)
+	tick(t, e)
+	spans, err := tasktiming.Read(t.Context(), strings.NewReader(log.String()), requestID)
+	if err != nil || len(spans) != 2 || spans[0].Attempt != id || spans[0].EndedAt == nil ||
+		!spans[0].EndedAt.Equal(acceptedAt) || spans[1].Stage != tasktiming.Queue || spans[1].Attempt != "retry" {
+		t.Fatalf("retry acceptance did not close previous wait: %+v, err = %v\n%s", spans, err, log.String())
+	}
+
+	now = now.Add(3 * time.Second)
+	tasktiming.Set(ctx, "")
+	if err := e.Complete(id, Outcome{Status: OutcomeChecksPending, TimingAttempt: "retry", TimingAcceptedAt: acceptedAt}); err != nil {
+		t.Fatal(err)
+	}
+	tick(t, e)
+	spans, err = tasktiming.Read(t.Context(), strings.NewReader(log.String()), requestID)
+	if err != nil || len(spans) != 3 || spans[2].Attempt != "retry" || spans[2].Stage != tasktiming.Checks ||
+		spans[2].StartedAt == nil || !spans[2].StartedAt.Equal(now) || spans[2].EndedAt != nil {
+		t.Fatalf("new wait did not join retry timeline: %+v, err = %v\n%s", spans, err, log.String())
 	}
 }
 
@@ -184,6 +281,10 @@ func TestSameTaskRetryKeepsTimingAndCapturedPolicy(t *testing.T) {
 		if retry.ID == "" || retry.ReviewPolicy().ReviewCycles != captured.ReviewCycles || !retry.StartedAt.Equal(start) {
 			t.Fatalf("retry lost original duration boundary or captured execution policy: %+v", retry)
 		}
+		if err := e.AcceptTimingAttempt(retry.ID, "task", "second-attempt", now); err != nil {
+			t.Fatal(err)
+		}
+		now = now.Add(time.Second)
 		return "task", nil
 	})
 	if err != nil || id != "task" {

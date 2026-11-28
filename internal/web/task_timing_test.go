@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"net/http/httptest"
 	"slices"
 	"strings"
@@ -57,10 +58,12 @@ func TestTaskTimingHistoryInBrowser(t *testing.T) {
 	requireBrowserTooling(t, "task timing history")
 	broker := NewBroker()
 	broker.IngestLog("task status=start request_id=delivery")
+	broker.IngestLog("task_timing request_id=delivery attempt=retry span=queue stage=queue started_at=2026-11-27T12:00:10Z ended_at=unknown wall_ms=unknown agent_ms=unknown")
 	broker.IngestLog("task status=completed request_id=delivery")
 	broker.IngestLog("workflow event=transition workflow_id=delivery request_id=delivery status=merged reason=merged duration_ms=60000")
 
 	const taskLog = `task_timing request_id=delivery-first attempt=first span=1 stage=implementation started_at=2026-11-27T12:00:00Z ended_at=2026-11-27T12:00:05Z wall_ms=5000 agent_ms=3000
+task_timing request_id=delivery attempt=first span=wait stage=workflow_wait started_at=2026-11-27T12:00:05Z ended_at=2026-11-27T12:00:10Z wall_ms=5000 agent_ms=unknown
 task_timing request_id=delivery attempt=retry span=1 stage=ci_wait started_at=2026-11-27T12:00:10Z ended_at=2026-11-27T12:00:30Z wall_ms=20000 agent_ms=unknown
 task_timing request_id=delivery attempt=retry span=2 stage=ready started_at=unknown ended_at=2026-11-27T12:00:38Z wall_ms=unknown agent_ms=unknown
 task_timing request_id=delivery attempt=retry span=3 stage=workflow_total started_at=2026-11-27T12:00:00Z ended_at=2026-11-27T12:01:00Z wall_ms=60000 agent_ms=unknown
@@ -89,9 +92,17 @@ task_timing request_id=delivery attempt=retry span=3 stage=workflow_total starte
 	if err != nil {
 		t.Fatal(err)
 	}
-	response.Body.Close()
+	defer response.Body.Close()
 	if response.StatusCode != 200 {
 		t.Fatalf("task timing API status = %d", response.StatusCode)
+	}
+	var spans []tasktiming.Span
+	if err := json.NewDecoder(response.Body).Decode(&spans); err != nil {
+		t.Fatal(err)
+	}
+	if len(spans) != 4 || spans[0].Attempt != "first" || spans[0].Stage != tasktiming.WorkflowWait ||
+		spans[0].WallMS == nil || *spans[0].WallMS != 5000 || spans[3].WallMS == nil || *spans[3].WallMS != 60000 {
+		t.Fatalf("task timing API omitted previous wait or terminal total: %+v", spans)
 	}
 	runBrowserSuite(t, testServer.URL, time.Minute, "task timing history", "tests/task_timing.cjs")
 }

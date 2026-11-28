@@ -33,6 +33,7 @@ test('Studio history displays timing from both attempts', async t => {
   await expect(timing.getByText('Attempt 1')).toBeVisible();
   await expect(timing.getByText('Attempt 2')).toBeVisible();
   await expect(timing.getByText('Implementation · 5,000 ms · Agent 3,000 ms')).toBeVisible();
+  await expect(timing.getByText('Workflow wait · 5,000 ms')).toBeVisible();
   await expect(timing.getByText('CI wait · 20,000 ms')).toBeVisible();
   await expect(timing.getByText('Mark ready · Unknown')).toBeVisible();
   await expect(timing.getByText('Workflow total · 60,000 ms')).toBeVisible();

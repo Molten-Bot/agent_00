@@ -515,6 +515,11 @@ func runServer(args []string) int {
 			monitorBroker.RecordTaskRunConfigWithSource(requestID, runConfigJSON, taskStartSourceForSubmission(source, runCfg))
 		}
 
+		if runCfg.Workflow != nil && !runCfg.Workflow.IsDefaultExecution() && !runCfg.Workflow.DetachedReview && workflowEngine != nil {
+			if err := workflowEngine.AcceptTimingAttempt(runCfg.Workflow.EventID, requestID, attempt, acceptedAt); err != nil {
+				daemonLogger("workflow status=warn action=record_timing_attempt err=%q", err)
+			}
+		}
 		tasktiming.Accepted(runCtx, acceptedAt)
 
 		go func(
