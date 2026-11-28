@@ -810,13 +810,12 @@ func (e *Engine) finishSubmission(id, request string, submitErr error) error {
 		if submitErr == nil && request != "" && r.RetryOf != "" {
 			if prior := s.run(r.RetryOf); prior != nil && prior.RequestID == request && prior.Workflow.ID == r.Workflow.ID {
 				prior.Status, prior.Reason = "completed", "Superseded by same-task retry"
-				end := r.UpdatedAt
-				// Complete can save the new outcome before submission attaches its request ID.
-				if o := r.Outcome; prior.TimingWait != nil && o != nil && o.TimingAttempt != "" &&
-					o.TimingAttempt != prior.TimingWait.Attempt && !o.TimingAcceptedAt.IsZero() {
-					end = o.TimingAcceptedAt
+				// Keep an outstanding wait when retiring the prior run. The
+				// worker can record its acceptance before or after submission returns.
+				r.TimingWait = prior.TimingWait
+				if end := r.timingWaitAcceptedAt(r.Outcome); !end.IsZero() {
+					r.closeTimingWait(e.TimingLog, end)
 				}
-				prior.closeTimingWait(e.TimingLog, end)
 			}
 		}
 		result = *r
@@ -1643,8 +1642,8 @@ func (e *Engine) Complete(id string, outcome Outcome) error {
 		if terminal(outcome.Status) && outcome.CompletedAt.IsZero() {
 			outcome.CompletedAt = e.now()
 		}
-		if r.TimingWait != nil && outcome.TimingAttempt != "" && outcome.TimingAttempt != r.TimingWait.Attempt && !outcome.TimingAcceptedAt.IsZero() {
-			r.closeTimingWait(e.TimingLog, outcome.TimingAcceptedAt)
+		if end := r.timingWaitAcceptedAt(&outcome); !end.IsZero() {
+			r.closeTimingWait(e.TimingLog, end)
 		}
 		r.Outcome = &outcome
 		return nil

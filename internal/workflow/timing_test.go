@@ -304,38 +304,64 @@ func TestSameTaskRetryKeepsTimingAndCapturedPolicy(t *testing.T) {
 
 func TestFastWorkflowRetryClosesPriorWaitAtAcceptance(t *testing.T) {
 	t.Parallel()
-	w := definition("delivery")
-	w.Merge.Enabled = true
-	e, _, _ := testEngine(t, w)
-	start := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
-	acceptedAt := start.Add(10 * time.Second)
-	now := acceptedAt
-	e.Now = func() time.Time { return now }
-	var log strings.Builder
-	e.TimingLog = func(format string, args ...any) { fmt.Fprintf(&log, format+"\n", args...) }
-	item := Item{Repository: w.Repository, Kind: "issue", Number: 7}
-	wait := tasktiming.Start("first-attempt", "wait", tasktiming.WorkflowWait, start)
-	state, err := e.load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	state.Runs = []Run{{ID: "first", RequestID: "task", Status: awaitingReview, Workflow: w, Item: item,
-		StartedAt: &start, TimingWait: &wait}}
-	if err := e.save(state); err != nil {
-		t.Fatal(err)
-	}
-	requestID, err := e.DispatchRetry(t.Context(), w.ID, w.ExecutionPolicyHash(), "first", item, nil, func(retry Run) (string, error) {
-		now = acceptedAt.Add(3 * time.Second)
-		err := e.Complete(retry.ID, Outcome{Status: "succeeded", TimingAttempt: "second-attempt", TimingAcceptedAt: acceptedAt})
-		now = now.Add(time.Second)
-		return "task", err
-	})
-	if err != nil || requestID != "task" {
-		t.Fatalf("retry = %q, %v", requestID, err)
-	}
-	spans, err := tasktiming.Read(t.Context(), strings.NewReader(log.String()), requestID)
-	if err != nil || len(spans) != 1 || spans[0].ID != wait.ID || spans[0].EndedAt == nil || !spans[0].EndedAt.Equal(acceptedAt) ||
-		spans[0].WallMS == nil || *spans[0].WallMS != 10000 {
-		t.Fatalf("prior wait did not close at retry acceptance: %+v, err = %v\n%s", spans, err, log.String())
+	for _, completeBeforeSubmission := range []bool{true, false} {
+		t.Run(fmt.Sprintf("completeBeforeSubmission=%t", completeBeforeSubmission), func(t *testing.T) {
+			w := definition("delivery")
+			w.Merge.Enabled = true
+			e, _, _ := testEngine(t, w)
+			start := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
+			acceptedAt := start.Add(10 * time.Second)
+			now := acceptedAt
+			e.Now = func() time.Time { return now }
+			var log strings.Builder
+			e.TimingLog = func(format string, args ...any) { fmt.Fprintf(&log, format+"\n", args...) }
+			item := Item{Repository: w.Repository, Kind: "issue", Number: 7}
+			wait := tasktiming.Start("first-attempt", "wait", tasktiming.WorkflowWait, start)
+			wait.Write(e.TimingLog, "task")
+			state, err := e.load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			state.Runs = []Run{{ID: "first", RequestID: "task", Status: awaitingReview, Workflow: w, Item: item,
+				StartedAt: &start, TimingWait: &wait}}
+			if err := e.save(state); err != nil {
+				t.Fatal(err)
+			}
+			var retryID string
+			complete := func() {
+				now = now.Add(time.Second)
+				if err := e.Complete(retryID, Outcome{Status: "succeeded", TimingAttempt: "second-attempt", TimingAcceptedAt: acceptedAt}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			requestID, err := e.DispatchRetry(t.Context(), w.ID, w.ExecutionPolicyHash(), "first", item, nil, func(retry Run) (string, error) {
+				retryID = retry.ID
+				if completeBeforeSubmission {
+					complete()
+				}
+				now = now.Add(time.Second)
+				return "task", nil
+			})
+			if err != nil || requestID != "task" {
+				t.Fatalf("retry = %q, %v", requestID, err)
+			}
+			if !completeBeforeSubmission {
+				now = now.Add(time.Second)
+				tick(t, e)
+				state, err := e.load()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if r := state.run(retryID); state.run("first") != nil || r == nil || r.TimingWait == nil || r.TimingWait.ID != wait.ID {
+					t.Fatalf("retry did not retain the prior wait across polling: %+v", state.Runs)
+				}
+				complete()
+			}
+			spans, err := tasktiming.Read(t.Context(), strings.NewReader(log.String()), requestID)
+			if err != nil || len(spans) != 1 || spans[0].ID != wait.ID || spans[0].Attempt != wait.Attempt ||
+				spans[0].EndedAt == nil || !spans[0].EndedAt.Equal(acceptedAt) || spans[0].WallMS == nil || *spans[0].WallMS != 10000 {
+				t.Fatalf("prior wait did not close at retry acceptance: %+v, err = %v\n%s", spans, err, log.String())
+			}
+		})
 	}
 }

@@ -48,12 +48,18 @@ func (e *Engine) updateTimingWait(r *Run, waitEnd time.Time) (closed, opened *ta
 	}
 	stage := r.waitStage()
 	prior := r.TimingWait
+	if prior != nil && r.RetryOf != "" && r.Status == "running" && r.Outcome == nil {
+		// A poll can see the retry before the worker provides its acceptance time.
+		return nil, nil
+	}
 	if prior != nil && prior.Stage == stage && prior.Attempt == r.timingAttempt() && waitEnd.IsZero() {
 		return nil, nil
 	}
 	if prior != nil {
 		end := r.UpdatedAt
-		if !waitEnd.IsZero() {
+		if acceptedAt := r.timingWaitAcceptedAt(r.Outcome); !acceptedAt.IsZero() {
+			end = acceptedAt
+		} else if !waitEnd.IsZero() {
 			end = waitEnd
 		}
 		span := prior.End(end)
@@ -65,6 +71,13 @@ func (e *Engine) updateTimingWait(r *Run, waitEnd time.Time) (closed, opened *ta
 		r.TimingWait, opened = &span, &span
 	}
 	return closed, opened
+}
+
+func (r Run) timingWaitAcceptedAt(outcome *Outcome) time.Time {
+	if r.TimingWait != nil && outcome != nil && outcome.TimingAttempt != "" && outcome.TimingAttempt != r.TimingWait.Attempt {
+		return outcome.TimingAcceptedAt
+	}
+	return time.Time{}
 }
 
 // AcceptTimingAttempt ends a coordinator wait when the same task resumes.
