@@ -430,14 +430,20 @@ test('Close survives overlapping tab retries and a deferred Removed redraw', asy
   const otherRemovedCard = removedTab.locator(otherCardSelector);
   await expect(otherRemovedCard).toBeVisible();
   await page.bringToFront();
-  await card.locator('.task-id').evaluate(label => {
-    window.getSelection().selectAllChildren(label);
-    document.getElementById('task-history-toggle').click();
-  });
-  await expect(filter).toHaveAttribute('data-filter', 'running');
-  await expect(card).toBeVisible();
   const alreadyDeleted = page.waitForResponse(response => response.url().endsWith('/api/tasks/finished/delete'));
-  await close.click();
+  // Keep the selected card, filter change, and delete in one browser turn.
+  // Once the selection clears, the deferred render can remove the card.
+  const deferredDelete = await card.locator('.task-id').evaluate(label => {
+    const task = label.closest('.task');
+    const list = task.closest('#task-list');
+    const toggle = document.getElementById('task-history-toggle');
+    window.getSelection().selectAllChildren(label);
+    toggle.click();
+    const deferred = task.isConnected && Boolean(list.dataset.pendingRenderSig);
+    if (deferred) task.querySelector('.task-close').click();
+    return { filter: toggle.dataset.filter, deferred, removed: !task.isConnected };
+  });
+  assert.deepEqual(deferredDelete, { filter: 'running', deferred: true, removed: true });
   await expect(card).toHaveCount(0);
   const hiddenAgain = await alreadyDeleted;
   assert.equal(hiddenAgain.status(), 404);
