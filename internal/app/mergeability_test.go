@@ -156,6 +156,18 @@ func TestMergeabilityRepairsExistingBranchBeforeReviewAndAtCompletion(t *testing
 // the original head.
 func TestPublishedChecksRepairConflictWhilePending(t *testing.T) {
 	t.Parallel()
+	t.Run("conflict on first checks query", func(t *testing.T) {
+		t.Parallel()
+		testPublishedChecksRepairConflictWhilePending(t, true)
+	})
+	t.Run("conflict during poll interval", func(t *testing.T) {
+		t.Parallel()
+		testPublishedChecksRepairConflictWhilePending(t, false)
+	})
+}
+
+func testPublishedChecksRepairConflictWhilePending(t *testing.T, conflictOnFirstQuery bool) {
+	t.Helper()
 	ctx := t.Context()
 	remote, checkout, baseCheckout := t.TempDir(), t.TempDir(), t.TempDir()
 	gitRunner := execx.OSRunner{}
@@ -192,6 +204,15 @@ func TestPublishedChecksRepairConflictWhilePending(t *testing.T) {
 	git(checkout, "commit", "-am", "Feature edit")
 	git(checkout, "push", "origin", "feature")
 	original := git(remote, "rev-parse", "feature")
+	advanceBase := func() {
+		writeFixture(baseCheckout, "base edit")
+		git(baseCheckout, "commit", "-am", "Advance base")
+		git(baseCheckout, "push", "origin", "main")
+	}
+	wantSleeps := 1
+	if conflictOnFirstQuery {
+		wantSleeps = 0
+	}
 
 	const url = "https://github.com/example/repo/pull/42"
 	repo := repoWorkspace{Dir: checkout, RelDir: "repo", Branch: "feature", BaseBranch: "main", PRURL: url, RequireExistingPR: true}
@@ -214,6 +235,9 @@ func TestPublishedChecksRepairConflictWhilePending(t *testing.T) {
 			checks++
 			published := git(remote, "rev-parse", "feature")
 			if checks == 1 && published == original {
+				if conflictOnFirstQuery {
+					advanceBase()
+				}
 				return execx.Result{Stdout: "CI\tpending\n"}, pendingCheckExit{}
 			}
 			if checks != 2 || published == original || repairs != 1 {
@@ -229,7 +253,7 @@ func TestPublishedChecksRepairConflictWhilePending(t *testing.T) {
 			return gitRunner.Run(ctx, cmd)
 		case cmd.Name == "codex" && admitted && strings.Contains(cmd.Stdin, "Base-branch sync conflict remediation"):
 			repairs++
-			if checks != 1 || sleeps != 1 {
+			if checks != 1 || sleeps != wantSleeps {
 				t.Fatalf("repair did not replace pending checks: checks=%d sleeps=%d", checks, sleeps)
 			}
 			writeFixture(checkout, "base edit and feature edit")
@@ -252,12 +276,10 @@ func TestPublishedChecksRepairConflictWhilePending(t *testing.T) {
 	h.ReleaseWorkspace = func() { admitted = false }
 	h.Sleep = func(context.Context, time.Duration) error {
 		sleeps++
-		if admitted || sleeps != 1 {
+		if admitted || sleeps > wantSleeps {
 			t.Fatalf("unexpected wait during repair: admitted=%t sleeps=%d", admitted, sleeps)
 		}
-		writeFixture(baseCheckout, "base edit")
-		git(baseCheckout, "commit", "-am", "Advance base")
-		git(baseCheckout, "push", "origin", "main")
+		advanceBase()
 		return nil
 	}
 	cfg, runtime := config.Config{}, agentruntime.Default()

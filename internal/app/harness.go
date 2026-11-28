@@ -6333,7 +6333,7 @@ func (h Harness) pollPRChecks(ctx context.Context, cmd execx.Command, poll check
 		sleep = sleepWithContext
 	}
 	var lastPending execx.Result
-	for {
+	for firstPoll := true; ; firstPoll = false {
 		res, err := h.runCheckQuery(ctx, "checks", cmd, checkQueryTimeout)
 		if errors.Is(context.Cause(ctx), errPRChecksWatchTimeout) && lastPending.Stdout != "" {
 			return lastPending, err
@@ -6345,6 +6345,13 @@ func (h Harness) pollPRChecks(ctx context.Context, cmd execx.Command, poll check
 				poll.finish(h, true)
 			}
 			return res, err
+		}
+		// The base or head can change between the preflight probe and the
+		// first check result. Recheck before yielding to the polling delay.
+		if firstPoll && poll.refreshMergeability != nil {
+			if err := poll.refreshMergeability(ctx); err != nil {
+				return res, err
+			}
 		}
 		lastPending = res
 		poll.waited = true
