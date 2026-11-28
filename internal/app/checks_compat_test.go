@@ -35,9 +35,11 @@ func TestChecksSnapshotOldGitHubCLI(t *testing.T) {
 						{cmd: prChecksTextCommand(repo.Dir, repo.PRURL, required), res: execx.Result{Stdout: tc.output}, err: tc.queryErr},
 					}}
 					h := New(fake)
-					query := h.latestChecksAreAllPassing
-					if reconcile {
-						query = h.reconcileChecksAfterFailure
+					query := h.reconcileChecksAfterFailure
+					if !reconcile {
+						query = func(ctx context.Context, repo repoWorkspace, requiredOnly bool) (bool, string, error) {
+							return h.latestChecksAreAllPassing(ctx, repo, requiredOnly)
+						}
 					}
 					passing, summary, err := query(context.Background(), repo, required)
 					if passing != tc.passing || (err != nil) != tc.wantErr {

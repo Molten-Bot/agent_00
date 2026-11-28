@@ -149,6 +149,7 @@ type taskWorkspaceLease struct {
 	logf      func(string, ...any)
 	timings   *app.CheckTimings
 	release   func()
+	onState   func(string)
 }
 
 func (l *taskWorkspaceLease) suspend() {
@@ -158,6 +159,19 @@ func (l *taskWorkspaceLease) suspend() {
 	}
 }
 
+func (l *taskWorkspaceLease) yield(state string) {
+	l.handle.SetRunning(false)
+	l.reportState(state)
+	l.suspend()
+}
+
+func (l *taskWorkspaceLease) reportState(state string) {
+	if l.onState != nil {
+		l.onState(state)
+	}
+	l.logf("task request_id=%s task_state=%s", l.requestID, state)
+}
+
 func (l *taskWorkspaceLease) acquire(ctx context.Context) error {
 	if l.release != nil {
 		return nil
@@ -165,6 +179,7 @@ func (l *taskWorkspaceLease) acquire(ctx context.Context) error {
 	defer tasktiming.Enter(ctx, tasktiming.Queue)()
 	l.logf("task status=queued request_id=%s action=wait_for_workspace", l.requestID)
 	l.handle.SetRunning(false)
+	l.reportState("queued")
 	disk := l.disk
 	if l.history != nil {
 		disk.RequiredBytes = localTaskDiskRequirement(l.history, l.diskKey, disk.ExistingDir)
@@ -193,18 +208,27 @@ func (l *taskWorkspaceLease) acquire(ctx context.Context) error {
 		l.release = release
 		l.handle.SetRunning(true)
 		l.logf("task status=admitted request_id=%s action=resume_workspace", l.requestID)
+		l.reportState("running")
 		return nil
 	}
 }
 
 func pauseWatchdogDuringAdmission(h *app.Harness, watchdog *localruntime.StepWatchdog) {
-	acquire := h.AcquireWorkspace
-	if acquire == nil {
-		return
+	if acquire := h.AcquireWorkspace; acquire != nil {
+		h.AcquireWorkspace = func(ctx context.Context) error {
+			resume := watchdog.Pause()
+			defer resume()
+			return acquire(ctx)
+		}
 	}
-	h.AcquireWorkspace = func(ctx context.Context) error {
-		resume := watchdog.Pause()
-		defer resume()
-		return acquire(ctx)
+	if wait := h.OnCodexSessionWait; wait != nil {
+		h.OnCodexSessionWait = func() func() {
+			resume := watchdog.Pause()
+			finishWait := wait()
+			return func() {
+				finishWait()
+				resume()
+			}
+		}
 	}
 }

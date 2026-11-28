@@ -221,6 +221,7 @@ type agentInvocationLogMetadata struct {
 	Repo    string
 	RepoDir string
 	Target  string
+	elapsed *time.Duration
 }
 
 // Harness executes the clone -> codex -> PR workflow.
@@ -279,6 +280,9 @@ type Harness struct {
 	// Suspend scheduler admission while only GitHub evidence is needed.
 	ReleaseWorkspace func()
 	AcquireWorkspace func(context.Context) error
+	// Codex model discovery and execution share the same admission boundary.
+	OnCodexSessionWait func() func()
+	OnTaskState        func(string)
 	// PRChecksWatchTimeout bounds checks and draft verification polling when positive.
 	// Zero uses the default timeout. Negative disables the watch timeout and skips draft polling.
 	PRChecksWatchTimeout time.Duration
@@ -769,7 +773,6 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	var agentRes execx.Result
 	var draftHandoffReported bool
 	h.logf("stage=%s status=start target=%s%s", agentStage, codexTargetLabel, initialAgentInvocation.logFieldsSuffix())
-	codexStart := time.Now()
 	if !publicationPending {
 		stage := tasktiming.Implementation
 		if reviewRun {
@@ -811,7 +814,7 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	if err != nil {
 		return h.fail(ExitCodex, agentStage, err, runDir)
 	}
-	h.logf("stage=%s status=ok elapsed_s=%d%s", agentStage, int(time.Since(codexStart).Seconds()), initialAgentInvocation.logFieldsSuffix())
+	h.logf("stage=%s status=ok elapsed_s=%d%s", agentStage, int(initialAgentInvocation.elapsed.Seconds()), initialAgentInvocation.logFieldsSuffix())
 	if !reviewRun {
 		tasktiming.Set(ctx, tasktiming.App)
 	}
@@ -1490,7 +1493,6 @@ func (h Harness) checkPublishedPullRequest(
 		// Check propagation and execution share one timing sample for this head.
 		poll := newCheckPoll("checks", repo.PRURL)
 		for noReportRetry := 0; ; noReportRetry++ {
-			requiredChecksOnly := false
 			confirmedFailure := false
 			h.logf("stage=checks status=start repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
 			checkRes, checkErr = h.runPRChecksWatch(ctx, prChecksCommand(repo.Dir, repo.PRURL), poll)
@@ -1511,42 +1513,7 @@ func (h Harness) checkPublishedPullRequest(
 				)
 				return ExitSuccess, "", nil
 			}
-			if errors.Is(checkErr, errPRChecksWatchTimeout) {
-				h.logf(
-					"stage=checks status=warn action=watch_timeout repo=%s repo_dir=%s pr_url=%s attempt=%d err=%q",
-					repo.URL,
-					repo.RelDir,
-					repo.PRURL,
-					attempt+1,
-					checkErr,
-				)
-				timedOutChecksPassing, timedOutChecksSummary, timedOutChecksErr := h.latestChecksAreAllPassing(ctx, *repo, true)
-				if timedOutChecksErr != nil {
-					h.logf(
-						"stage=checks status=warn action=watch_timeout_snapshot reason=query_failed repo=%s repo_dir=%s pr_url=%s attempt=%d err=%q",
-						repo.URL,
-						repo.RelDir,
-						repo.PRURL,
-						attempt+1,
-						timedOutChecksErr,
-					)
-					checkErr = fmt.Errorf("checks snapshot failed after watch timeout: %w", timedOutChecksErr)
-				} else {
-					if timedOutChecksSummary != "" {
-						checkSummary = timedOutChecksSummary
-					}
-					if timedOutChecksPassing {
-						h.logf("stage=checks status=ok reason=watch_timeout repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
-						return ExitSuccess, "", nil
-					}
-					checkErr = errors.New("checks failed after watch timeout")
-					confirmedFailure = true
-				}
-			}
-			if errors.Is(checkErr, ErrChecksUnavailable) {
-				return ExitPR, "checks", checkErr
-			}
-			if checkErr != nil && isNoRequiredChecksReported(checkRes, checkErr) {
+			if !errors.Is(checkErr, errPRChecksWatchTimeout) && isNoRequiredChecksReported(checkRes, checkErr) {
 				h.logf(
 					"stage=checks status=fallback reason=no_required_checks repo=%s repo_dir=%s pr_url=%s attempt=%d",
 					repo.URL,
@@ -1581,7 +1548,6 @@ func (h Harness) checkPublishedPullRequest(
 						requiredErr,
 					)
 				}
-				requiredChecksOnly = false
 				checkRes, checkErr = h.runPRChecksWatch(ctx, prChecksAnyCommand(repo.Dir, repo.PRURL), poll)
 				if errors.Is(checkErr, ErrChecksUnavailable) || ctx.Err() != nil {
 					return ExitPR, "checks", checkErr
@@ -1600,37 +1566,39 @@ func (h Harness) checkPublishedPullRequest(
 					)
 					return ExitSuccess, "", nil
 				}
-				if errors.Is(checkErr, errPRChecksWatchTimeout) {
+			}
+			if errors.Is(checkErr, errPRChecksWatchTimeout) {
+				h.logf(
+					"stage=checks status=warn action=watch_timeout repo=%s repo_dir=%s pr_url=%s attempt=%d err=%q",
+					repo.URL,
+					repo.RelDir,
+					repo.PRURL,
+					attempt+1,
+					checkErr,
+				)
+				// Both watches query all checks. Required policy is verified separately on the current head.
+				watched, _ := latestCheckSnapshotFromText(checkRes.Stdout)
+				timedOutChecksPassing, timedOutChecksSummary, timedOutChecksErr := h.latestChecksAreAllPassing(ctx, *repo, false, watched.Pending...)
+				if timedOutChecksErr != nil {
 					h.logf(
-						"stage=checks status=warn action=watch_timeout repo=%s repo_dir=%s pr_url=%s attempt=%d err=%q",
+						"stage=checks status=warn action=watch_timeout_snapshot reason=query_failed repo=%s repo_dir=%s pr_url=%s attempt=%d err=%q",
 						repo.URL,
 						repo.RelDir,
 						repo.PRURL,
 						attempt+1,
-						checkErr,
+						timedOutChecksErr,
 					)
-					timedOutChecksPassing, timedOutChecksSummary, timedOutChecksErr := h.latestChecksAreAllPassing(ctx, *repo, false)
-					if timedOutChecksErr != nil {
-						h.logf(
-							"stage=checks status=warn action=watch_timeout_snapshot reason=query_failed repo=%s repo_dir=%s pr_url=%s attempt=%d err=%q",
-							repo.URL,
-							repo.RelDir,
-							repo.PRURL,
-							attempt+1,
-							timedOutChecksErr,
-						)
-						checkErr = fmt.Errorf("checks snapshot failed after watch timeout: %w", timedOutChecksErr)
-					} else {
-						if timedOutChecksSummary != "" {
-							checkSummary = timedOutChecksSummary
-						}
-						if timedOutChecksPassing {
-							h.logf("stage=checks status=ok reason=watch_timeout repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
-							return ExitSuccess, "", nil
-						}
-						checkErr = errors.New("checks failed after watch timeout")
-						confirmedFailure = true
+					checkErr = fmt.Errorf("checks snapshot failed after watch timeout: %w", timedOutChecksErr)
+				} else {
+					if timedOutChecksSummary != "" {
+						checkSummary = timedOutChecksSummary
 					}
+					if timedOutChecksPassing {
+						h.logf("stage=checks status=ok reason=watch_timeout repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
+						return ExitSuccess, "", nil
+					}
+					checkErr = errors.New("checks failed after watch timeout")
+					confirmedFailure = true
 				}
 			}
 			if errors.Is(checkErr, ErrChecksUnavailable) {
@@ -1641,11 +1609,11 @@ func (h Harness) checkPublishedPullRequest(
 				return ExitSuccess, "", nil
 			}
 
-			if summary := summarizeCheckOutput(checkRes); summary != "" {
+			if summary := summarizeCheckOutput(checkRes); !confirmedFailure && summary != "" {
 				checkSummary = summary
 			}
-			if shouldReconcileChecksAfterFailure(checkRes, checkErr) {
-				if reconciled, latestSummary, reconcileErr := h.reconcileChecksAfterFailure(ctx, *repo, requiredChecksOnly); reconcileErr == nil {
+			if !confirmedFailure && shouldReconcileChecksAfterFailure(checkRes, checkErr) {
+				if reconciled, latestSummary, reconcileErr := h.reconcileChecksAfterFailure(ctx, *repo, false); reconcileErr == nil {
 					if latestSummary != "" {
 						checkSummary = latestSummary
 					}
@@ -1673,7 +1641,7 @@ func (h Harness) checkPublishedPullRequest(
 					)
 				}
 			}
-			noChecksReported := isNoChecksReported(checkRes, checkErr)
+			noChecksReported := !confirmedFailure && isNoChecksReported(checkRes, checkErr)
 			if noChecksReported && h.IssueChecksPRURL == repo.PRURL && repo.IssueClaimBranch {
 				bucket, summary, err := h.readWorkflowDispatchResult(ctx, *repo, checkHead)
 				if err != nil {
@@ -1888,7 +1856,6 @@ func (h Harness) checkPublishedPullRequest(
 			repo.RelDir,
 			remediationInvocation.logFieldsSuffix(),
 		)
-		codexStart := time.Now()
 		agentRes, err := h.runCodexCapture(ctx, runtime, codexDir, repairPrompt, codexOpts, agentsPath, cfg.ResponseMode, remediationInvocation)
 		if err != nil {
 			return ExitCodex, agentStage, err
@@ -1896,7 +1863,7 @@ func (h Harness) checkPublishedPullRequest(
 		h.logf(
 			"stage=%s status=ok elapsed_s=%d mode=remediation attempt=%d repo=%s repo_dir=%s%s",
 			agentStage,
-			int(time.Since(codexStart).Seconds()),
+			int(remediationInvocation.elapsed.Seconds()),
 			attempt+1,
 			repo.URL,
 			repo.RelDir,
@@ -2255,7 +2222,6 @@ func (h Harness) resolveBaseSyncConflictWithAgent(
 		repo.RelDir,
 		invocation.logFieldsSuffix(),
 	)
-	agentStart := time.Now()
 	agentRes, agentErr := h.runCodexCapture(ctx, runtime, codexDir, prompt, codexOpts, agentsPath, responseMode, invocation)
 	resolutionConfirmed := conflictResolutionConfirmed(agentRes)
 	if agentErr != nil {
@@ -2273,7 +2239,7 @@ func (h Harness) resolveBaseSyncConflictWithAgent(
 	h.logf(
 		"stage=%s status=ok elapsed_s=%d mode=base_sync_conflict attempt=%d repo=%s repo_dir=%s%s",
 		agentStage,
-		int(time.Since(agentStart).Seconds()),
+		int(invocation.elapsed.Seconds()),
 		attempt,
 		repo.URL,
 		repo.RelDir,
@@ -2359,7 +2325,6 @@ func (h Harness) resolveRemoteBranchSyncConflictWithAgent(
 		repo.RelDir,
 		invocation.logFieldsSuffix(),
 	)
-	agentStart := time.Now()
 	agentRes, agentErr := h.runCodexCapture(ctx, runtime, codexDir, prompt, codexOpts, agentsPath, responseMode, invocation)
 	resolutionConfirmed := conflictResolutionConfirmed(agentRes)
 	if agentErr != nil {
@@ -2377,7 +2342,7 @@ func (h Harness) resolveRemoteBranchSyncConflictWithAgent(
 	h.logf(
 		"stage=%s status=ok elapsed_s=%d mode=remote_branch_sync_conflict attempt=%d repo=%s repo_dir=%s%s",
 		agentStage,
-		int(time.Since(agentStart).Seconds()),
+		int(invocation.elapsed.Seconds()),
 		attempt,
 		repo.URL,
 		repo.RelDir,
@@ -6332,8 +6297,12 @@ func (h Harness) pollPRChecks(ctx context.Context, cmd execx.Command, poll check
 	if sleep == nil {
 		sleep = sleepWithContext
 	}
+	var lastPending execx.Result
 	for {
 		res, err := h.runCheckQuery(ctx, "checks", cmd, checkQueryTimeout)
+		if errors.Is(context.Cause(ctx), errPRChecksWatchTimeout) && lastPending.Stdout != "" {
+			return lastPending, err
+		}
 		snapshot, _ := latestCheckSnapshotFromText(res.Stdout)
 		// gh pr checks exits 8 while checks are still pending.
 		if !checkWatchPending(err) {
@@ -6342,6 +6311,7 @@ func (h Harness) pollPRChecks(ctx context.Context, cmd execx.Command, poll check
 			}
 			return res, err
 		}
+		lastPending = res
 		poll.waited = true
 		h.suspendWorkspace()
 		delay := poll.delay(h)
@@ -7168,6 +7138,7 @@ func newAgentInvocationLogMetadata(
 		Repo:    stringsx.FirstNonEmpty(strings.TrimSpace(repo), strings.TrimSpace(repoDir)),
 		RepoDir: strings.TrimSpace(repoDir),
 		Target:  strings.TrimSpace(target),
+		elapsed: new(time.Duration),
 	}
 }
 
@@ -7402,12 +7373,30 @@ func promptPathForCodex(targetDir, path string) string {
 
 func (h Harness) lazyTaskModel(ctx context.Context, runtime agentruntime.Runtime, dir string, opts codexRunOptions, complexity, stage, action string) func() (agentruntime.ModelSelection, error) {
 	return sync.OnceValues(func() (agentruntime.ModelSelection, error) {
+		opts.AcquireCodexSession = h.acquireCodexSession
 		selection, err := runtime.ResolveModel(ctx, h.Runner, dir, opts, complexity)
 		if err != nil {
 			return selection, fmt.Errorf("resolve %s task complexity: %w", complexity, err)
 		}
 		h.logf("stage=%s status=ok action=%s complexity=%s model=%q cli_version=%q resolution=%s reasoning_effort=%q", stage, action, complexity, selection.Model, selection.Version, selection.Source, selection.Effort)
 		return selection, nil
+	})
+}
+
+func (h Harness) acquireCodexSession(ctx context.Context, home string) (*agentruntime.CodexSession, error) {
+	if h.OnCodexSessionWait == nil || h.AcquireWorkspace == nil {
+		return agentruntime.AcquireCodexSession(ctx, home)
+	}
+	resume := func() {}
+	defer func() { resume() }()
+	return agentruntime.AcquireCodexSessionWithAdmission(ctx, home, func() {
+		resume = h.OnCodexSessionWait()
+	}, func(ctx context.Context) error {
+		defer func() {
+			resume()
+			resume = func() {}
+		}()
+		return h.requireWorkspace(ctx)
 	})
 }
 
@@ -7435,8 +7424,10 @@ func (h Harness) runCodexWithHeartbeat(
 		if err != nil {
 			return execx.Result{}, err
 		}
-		h.logf("stage=codex status=waiting action=acquire_auth_session%s", invocation.logFieldsSuffix())
-		release, err := agentruntime.AcquireCodexSession(ctx, home)
+		if h.OnCodexSessionWait == nil {
+			h.logf("stage=codex status=waiting action=acquire_auth_session%s", invocation.logFieldsSuffix())
+		}
+		release, err := h.acquireCodexSession(ctx, home)
 		if err != nil {
 			return execx.Result{}, err
 		}
@@ -7462,17 +7453,25 @@ func (h Harness) runCodexWithHeartbeat(
 		runCtx = timeoutCtx
 	}
 
+	if h.OnTaskState != nil {
+		h.OnTaskState("running_agent")
+		defer h.OnTaskState("running")
+	}
+
 	type codexRunResult struct {
 		res execx.Result
 		err error
 	}
 	done := make(chan codexRunResult, 1)
+	start := time.Now()
+	if invocation.elapsed != nil {
+		defer func() { *invocation.elapsed = time.Since(start) }()
+	}
 	go func() {
 		runRes, runErr := h.runCommand(tasktiming.AgentCommand(runCtx), agentStage, cmd)
 		done <- codexRunResult{res: runRes, err: runErr}
 	}()
 
-	start := time.Now()
 	heartbeatInterval := h.AgentHeartbeatInterval
 	if heartbeatInterval <= 0 {
 		heartbeatInterval = 15 * time.Second
@@ -10228,13 +10227,20 @@ func (h Harness) reconcileChecksAfterFailure(ctx context.Context, repo repoWorks
 	return !snapshot.HasFailures && snapshot.AllPassing, snapshot.Summary, nil
 }
 
-func (h Harness) latestChecksAreAllPassing(ctx context.Context, repo repoWorkspace, requiredOnly bool) (bool, string, error) {
+func (h Harness) latestChecksAreAllPassing(ctx context.Context, repo repoWorkspace, requiredOnly bool, observedPending ...string) (bool, string, error) {
 	snapshot, err := h.latestChecks(ctx, repo, requiredOnly)
 	if err != nil && !errors.Is(err, ErrChecksUnavailable) {
 		err = fmt.Errorf("%w: %w", ErrChecksUnavailable, err)
 	}
 	if err == nil && repo.IssueClaimBranch && !snapshot.AllPassing && !snapshot.HasFailures {
 		err = fmt.Errorf("%w: current check results are pending or missing", ErrChecksUnavailable)
+	}
+	if snapshot.AllPassing {
+		for _, name := range observedPending {
+			if !slices.Contains(snapshot.names, name) {
+				return false, snapshot.Summary, fmt.Errorf("%w: previously pending check %q is missing", ErrChecksUnavailable, name)
+			}
+		}
 	}
 	return snapshot.AllPassing, snapshot.Summary, err
 }
@@ -10270,6 +10276,7 @@ type latestChecksSnapshot struct {
 	HasFailures bool
 	Pending     []string
 	Summary     string
+	names       []string
 }
 
 func latestCheckSnapshot(raw string) (latestChecksSnapshot, error) {
@@ -10370,6 +10377,7 @@ func latestCheckSnapshotFromStates(latestByName map[string]latestCheckState) lat
 		HasFailures: hasFailures,
 		Pending:     pending,
 		Summary:     strings.Join(lines, "\n"),
+		names:       names,
 	}
 }
 

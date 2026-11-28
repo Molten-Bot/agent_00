@@ -154,6 +154,8 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 		checkAfterVerification bool
 		keepDraft              bool
 		watchOutages           int
+		timeoutSnapshot        string
+		wantCIRemediation      bool
 		evidenceOutage         bool
 		checkRollups           []string
 		checkRuns              string
@@ -186,6 +188,16 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 	}{
 		{name: "verify private draft from supplied evidence", answer: localSuccess, change: true, requiredChecks: `{"contexts":["CI"]}`},
 		{name: "verify standard handoff from supplied evidence", answer: "Draft handoff: " + draftHandoffStandard, change: true},
+		{name: "unprotected checks pass at watch timeout on the same draft", answer: localSuccess, change: true,
+			timeoutSnapshot: `[{"name":"CI","bucket":"pass"},{"name":"Browser","bucket":"pass"}]`},
+		{name: "unprotected checks fail at watch timeout", answer: localSuccess, change: true, wantExit: ExitPR, wantCIRemediation: true,
+			timeoutSnapshot: `[{"name":"CI","bucket":"pass"},{"name":"Browser","bucket":"fail"}]`},
+		{name: "unprotected checks stay pending at watch timeout", answer: localSuccess, change: true, wantExit: ExitPR,
+			timeoutSnapshot: `[{"name":"CI","bucket":"pass"},{"name":"Browser","bucket":"pending"}]`},
+		{name: "unprotected pending check disappears at watch timeout", answer: localSuccess, change: true, wantExit: ExitPR,
+			timeoutSnapshot: `[{"name":"CI","bucket":"pass"}]`},
+		{name: "unprotected checks are empty at watch timeout", answer: localSuccess, change: true, wantExit: ExitPR,
+			timeoutSnapshot: `[]`},
 		{name: "checks watch recovers within the same run", answer: localSuccess, change: true, watchOutages: 1},
 		{name: "checks resume on the published draft", answer: localSuccess, change: true, watchOutages: 3, wantExit: ExitPR},
 		{name: "draft evidence resumes with a fresh review on the new head", answer: localSuccess, change: true, evidenceOutage: true, wantExit: ExitPR},
@@ -297,7 +309,8 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			api := &reviewAPIStub{t: t}
 			wantRequirement, _ := draftHandoffRequest(tc.answer)
 			var implementations, creates, verifications, ready, evidenceReads, waits int
-			var watchReads, evidenceOutages int
+			var watchReads, timeoutSnapshots, ciRemediations, evidenceOutages int
+			var timeoutPolicyRead, timeoutHeadRead, timeoutMergeabilityRead bool
 			var draftRestorations, reviewerRuns, verificationPolicyReads int
 			var repairs, repairHeadReads, merges int
 			var headBeforeRepair string
@@ -442,11 +455,20 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 							draft = false
 						}
 						return execx.Result{Stdout: `{"status":"passed","evidence":"The live inventory lists work.txt, its patch shows the change, and CI and the clean review match the draft head."}`}, nil
+					case tc.timeoutSnapshot != "" && strings.Contains(cmd.Stdin, "Remediation round"):
+						ciRemediations++
+						if !strings.Contains(cmd.Stdin, "Browser\tfail") || !strings.Contains(cmd.Stdin, prURL) {
+							t.Fatalf("CI remediation lost the failing check or draft URL")
+						}
+						return execx.Result{Stdout: "No fix available."}, nil
 					case tc.repair && strings.Contains(cmd.Stdin, "Automated review repair pass"):
 						repairs++
 						return execx.Result{Stdout: "Fixed."}, os.WriteFile(filepath.Join(cmd.Dir, "work.txt"), []byte("implemented with repair\n"), 0o600)
 					case strings.Contains(cmd.Stdin, "Prepared pull-request review context"):
 						reviewerRuns++
+						if tc.timeoutSnapshot != "" && !(timeoutPolicyRead && timeoutHeadRead && timeoutMergeabilityRead) {
+							t.Fatal("review started before required policy, current head, and mergeability checks")
+						}
 						if !draft {
 							t.Error("review ran before draft publication")
 						}
@@ -574,6 +596,10 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 						draft = slices.Contains(cmd.Args, "--undo")
 						return execx.Result{}, nil
 					case args == "api repos/acme/repo/branches/main/protection/required_status_checks":
+						if tc.timeoutSnapshot != "" {
+							timeoutPolicyRead = timeoutSnapshots > 0
+							return execx.Result{Stderr: "Branch not protected"}, errors.New("exit status 1")
+						}
 						if tc.noCI {
 							return execx.Result{Stdout: `{"contexts":[]}`}, nil
 						}
@@ -594,6 +620,11 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 						}
 						return execx.Result{Stdout: "[]"}, nil
 					case strings.HasPrefix(args, "api graphql -f id=PR_id "):
+						if tc.timeoutSnapshot != "" {
+							timeoutHeadRead = timeoutSnapshots > 0
+							return execx.Result{Stdout: checkRollupPageJSON(branch, api.head, api.head,
+								`[{"name":"CI","conclusion":"SUCCESS"},{"name":"Browser","conclusion":"SUCCESS"}]`, false, "")}, nil
+						}
 						if tc.noCI {
 							return execx.Result{Stdout: checkRollupPageJSON(branch, api.head, api.head, "[]", false, "")}, nil
 						}
@@ -611,6 +642,21 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 					case slices.Equal(cmd.Args, append(workflowDispatchRunsCommand("", branch).Args, "--repo", "acme/repo", "--commit", api.head)):
 						return execx.Result{Stdout: "[]"}, nil
 					case strings.HasPrefix(args, "pr checks "):
+						if tc.timeoutSnapshot != "" {
+							if slices.Contains(cmd.Args, "--required") {
+								t.Error("all-checks timeout queried required checks only")
+								return execx.Result{Stderr: "no required checks reported"}, errors.New("exit status 1")
+							}
+							if slices.Contains(cmd.Args, "--json") {
+								timeoutSnapshots++
+								return execx.Result{Stdout: tc.timeoutSnapshot}, nil
+							}
+							watchReads++
+							if tc.wantCIRemediation && timeoutSnapshots > 0 {
+								return execx.Result{Stdout: "CI\tpass\nBrowser\tfail\n"}, errors.New("exit status 1")
+							}
+							return execx.Result{Stdout: "CI\tpass\nBrowser\tpending\n"}, pendingCheckExit{}
+						}
 						watchReads++
 						if tc.noCI {
 							return execx.Result{Stderr: "no required checks reported"}, errors.New("exit status 1")
@@ -620,6 +666,9 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 						}
 						return execx.Result{Stdout: "CI\tpass\n"}, nil
 					case strings.HasPrefix(args, "pr view "):
+						if tc.timeoutSnapshot != "" && slices.Contains(cmd.Args, "state,mergeable,baseRefName,headRefName") {
+							timeoutMergeabilityRead = timeoutSnapshots > 0
+						}
 						head := api.head
 						state := "OPEN"
 						if merged {
@@ -645,7 +694,9 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 						}
 						fileEvidence := ""
 						rollup := `[{"name":"CI","conclusion":"SUCCESS"}]`
-						if tc.noCI {
+						if tc.timeoutSnapshot != "" {
+							rollup = `[{"name":"CI","conclusion":"SUCCESS"},{"name":"Browser","conclusion":"SUCCESS"}]`
+						} else if tc.noCI {
 							rollup = "[]"
 						}
 						if strings.Contains(args, "statusCheckRollup") && strings.Contains(args, "changedFiles,files") {
@@ -738,6 +789,12 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			h.Sleep = func(_ context.Context, delay time.Duration) error {
 				now = now.Add(delay)
 				waits++
+				if tc.timeoutSnapshot != "" {
+					if workspaceHeld || waits != 1 {
+						t.Fatal("expected one released-workspace wait before timeout")
+					}
+					return errPRChecksWatchTimeout
+				}
 				if tc.earlyReady {
 					if !accepted || !draft || api.posts != 1 || reviewerRuns != 1 || ready != 0 || verifications != 0 {
 						t.Fatal("original claim must keep waiting in draft after one review without release or verification")
@@ -793,6 +850,11 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 			if tc.repair {
 				h.FinalReviewPasses = 1
 			}
+			if tc.timeoutSnapshot != "" {
+				cfg.Workflow = &config.WorkflowRunConfig{ID: "delivery", EventID: "delivery-event",
+					ReviewCycles: 1, ReviewAgent: config.ReviewAgentConfig{Complexity: "easy"}}
+			}
+
 			var delivery *workflow.Engine
 			var activation workflow.Run
 			var dispatches, mergeReceipts int
@@ -863,6 +925,29 @@ func TestClaimedIssueDraftHandoff(t *testing.T) {
 					t.Fatalf("unaccepted work was published or no-change result lost: %+v", result)
 				}
 				return
+			}
+			if tc.timeoutSnapshot != "" {
+				wantWatches, wantRemediations := 1, 0
+				if tc.wantCIRemediation {
+					wantRemediations = maxPRCheckRemediationAttempts
+					wantWatches += wantRemediations
+				}
+				if watchReads != wantWatches || ciRemediations != wantRemediations || waits != 1 || timeoutSnapshots != 1 || implementations != 1 || creates != 1 || result.PRURL != prURL || result.Branch != branch {
+					t.Fatalf("timeout did not reconcile in place: watches=%d waits=%d snapshots=%d implementations=%d creates=%d repairs=%d result=%+v",
+						watchReads, waits, timeoutSnapshots, implementations, creates, ciRemediations, result)
+				}
+				if tc.wantExit != ExitSuccess {
+					if errors.Is(result.Err, ErrChecksUnavailable) == tc.wantCIRemediation ||
+						(tc.wantCIRemediation && !strings.Contains(fmt.Sprint(result.Err), "remediation attempt(s)")) ||
+						reviewerRuns != 0 || api.posts != 0 || verifications != 0 || ready != 0 || !draft {
+						t.Fatalf("unsettled checks did not block review and readiness: %+v", result)
+					}
+					return
+				}
+				if result.ReviewReceipt == nil || result.ReviewReceipt.Policy.FixPasses != 1 ||
+					result.ReviewReceipt.Policy.Complexity != "easy" {
+					t.Fatalf("reconciled draft lost captured review policy: %+v", result)
+				}
 			}
 			keepReceipt := errors.Is(result.Err, errDraftChecksPending) || errors.Is(result.Err, errDraftRestoring)
 			if tc.wantExit != ExitSuccess && (!draft || ready != 0 || (result.ReviewReceipt != nil) != keepReceipt || result.PRVerificationPassed) {

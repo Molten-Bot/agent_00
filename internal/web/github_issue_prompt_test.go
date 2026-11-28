@@ -24,6 +24,7 @@ func TestIssueAdmissionBuildsFreshPrompt(t *testing.T) {
 			f.comments = strings.Replace(f.comments, "Second page clarification", "Second page clarification [spec](https://github.com/user-attachments/files/42/spec.pdf)", 1)
 			// Exercise URL fallback in both the prompt and persisted metadata.
 			f.issue.URL = ""
+			f.issue.Labels = append(f.issue.Labels, GitHubIssueLabel{Name: "priority:P1"}, GitHubIssueLabel{Name: "Priority:p0"})
 			s := automationServer(t, f)
 			if mode == "automatic" {
 				reconcileOrAdmitTestIssue(context.Background(), s)
@@ -31,6 +32,7 @@ func TestIssueAdmissionBuildsFreshPrompt(t *testing.T) {
 				run := issueRunConfig(GitHubRepo{FullName: "acme/repo"}, f.issue, config.GitHubIssueLinkClose)
 				run.Prompt = "Stale browser description"
 				run.GitHubIssue.Title = "Stale browser issue title"
+				run.GitHubIssue.Priority = "P1"
 				run.PRTitle = "Stale browser PR title"
 				run.Assets = []githubassets.Asset{{URL: "https://github.com/user-attachments/assets/stale", Name: "stale"}}
 				run.AgentHarness = "claude"
@@ -43,6 +45,9 @@ func TestIssueAdmissionBuildsFreshPrompt(t *testing.T) {
 				t.Fatalf("submissions=%d status=%+v", len(f.submissions), s.issueAutomation.status)
 			}
 			run := f.submissions[0]
+			if run.GitHubIssue.Priority != "P0" {
+				t.Fatalf("admitted issue priority = %q, want P0", run.GitHubIssue.Priority)
+			}
 			if run.GitHubIssue.Title != f.issue.Title || run.PRTitle != f.issue.Title {
 				t.Fatalf("issue title = %q, PR title = %q, want %q", run.GitHubIssue.Title, run.PRTitle, f.issue.Title)
 			}
